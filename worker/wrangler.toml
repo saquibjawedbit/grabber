@@ -1,0 +1,22 @@
+name = "grabber"
+main = "src/index.js"
+compatibility_date = "2026-01-01"
+
+[assets]
+directory = "public"
+binding = "ASSETS"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "grabber"
+database_id = "REPLACE_WITH_D1_DATABASE_ID"
+
+# Deadline nags, twice a day (point 6: most losses are inaction).
+[triggers]
+crons = ["30 3 * * *", "30 12 * * *"]
+
+# Secrets (set with `wrangler secret put <NAME>`):
+#   TELEGRAM_BOT_TOKEN   — same bot as the pipeline
+#   TELEGRAM_CHAT_ID     — your chat with the bot
+#   TG_WEBHOOK_SECRET    — random string, also passed to setWebhook
+#   DASH_TOKEN           — random string gating /api/* and the dashboard

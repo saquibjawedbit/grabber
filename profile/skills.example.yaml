@@ -1,0 +1,10 @@
+# phrase -> proficiency (0..1). Phrases are matched case-insensitively in postings.
+# Edge = Σ proficiency × idf(phrase). Rarity is MEASURED over the ingested corpus,
+# so listing a common skill is harmless — its IDF will be near zero anyway.
+chromium: 0.9
+browser extensions: 0.8
+django: 0.85
+react: 0.7
+web scraping: 0.8
+llm agents: 0.75
+computer vision: 0.5

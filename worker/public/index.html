@@ -1,0 +1,56 @@
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>grabber</title>
+<style>
+  :root { color-scheme: light dark; font-family: system-ui, sans-serif; }
+  body { max-width: 780px; margin: 2rem auto; padding: 0 1rem; line-height: 1.5; }
+  .card { border: 1px solid color-mix(in srgb, currentColor 20%, transparent); border-radius: 10px; padding: 1rem; margin: 0.8rem 0; }
+  .meta { opacity: 0.7; font-size: 0.85rem; }
+  .badge { display: inline-block; padding: 0.1rem 0.5rem; border-radius: 999px; font-size: 0.75rem;
+           background: color-mix(in srgb, currentColor 12%, transparent); margin-right: 0.4rem; }
+  details { margin-top: 0.6rem; } summary { cursor: pointer; }
+  pre { white-space: pre-wrap; font-family: inherit; background: color-mix(in srgb, currentColor 6%, transparent);
+        padding: 0.8rem; border-radius: 8px; overflow-x: auto; }
+  #stats { font-size: 0.9rem; opacity: 0.85; }
+  h1 { font-size: 1.4rem; }
+  a { color: inherit; }
+</style>
+<h1>🎯 grabber</h1>
+<div id="stats"></div>
+<div id="alerts">loading…</div>
+<script>
+  let token = localStorage.getItem("dash_token");
+  if (!token) { token = prompt("Dashboard token (DASH_TOKEN)"); localStorage.setItem("dash_token", token); }
+  const esc = s => (s || "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+
+  async function load() {
+    const [alerts, stats] = await Promise.all([
+      fetch("/api/alerts?t=" + encodeURIComponent(token)).then(r => r.json()),
+      fetch("/api/stats?t=" + encodeURIComponent(token)).then(r => r.json()),
+    ]);
+    if (alerts.error) { localStorage.removeItem("dash_token"); document.body.textContent = "Bad token — reload."; return; }
+
+    const rates = (stats.calibration || []).filter(c => c.rate != null)
+      .map(c => `${c.category}: ${Math.round(c.rate * 100)}% win rate (${c.n_won + c.n_rejected} decided)`).join(" · ");
+    document.getElementById("stats").textContent =
+      `${stats.corpus} postings in corpus${rates ? " · " + rates : " · no measured hit rates yet (guessing for a month)"}`;
+
+    document.getElementById("alerts").innerHTML = alerts.map(a => `
+      <div class="card" id="a${a.id}">
+        <b><a href="${esc(a.url)}" target="_blank">${esc(a.title)}</a></b>
+        <div class="meta">
+          <span class="badge">${esc(a.category)}</span>
+          <span class="badge">fit ${a.fit}</span>
+          <span class="badge">P(win) ${Math.round(a.p_convert * 100)}%</span>
+          ${a.deadline ? `<span class="badge">⏰ ${esc(String(a.deadline).slice(0, 10))}</span>` : ""}
+          ${(a.outcomes || "").split(",").filter(Boolean).map(o => `<span class="badge">${esc(o)}</span>`).join("")}
+          via ${esc(a.source)}
+        </div>
+        <div>${esc(a.reasons)}</div>
+        <div class="meta"><i>angle: ${esc(a.angle)}</i></div>
+        ${a.draft ? `<details><summary>📝 draft</summary><pre>${esc(a.draft)}</pre></details>` : ""}
+      </div>`).join("") || "No alerts yet.";
+    if (location.hash) document.querySelector(location.hash)?.scrollIntoView();
+  }
+  load();
+</script>
