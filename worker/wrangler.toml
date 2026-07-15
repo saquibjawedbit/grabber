@@ -6,6 +6,10 @@ compatibility_date = "2026-01-01"
 directory = "public"
 binding = "ASSETS"
 
+# Workers AI: powers the conversational agent (gpt-oss-120b, free neurons).
+[ai]
+binding = "AI"
+
 [[d1_databases]]
 binding = "DB"
 database_name = "grabber"

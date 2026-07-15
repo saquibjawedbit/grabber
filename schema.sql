@@ -69,6 +69,20 @@ CREATE TABLE IF NOT EXISTS calibration (
   updated_at TEXT NOT NULL
 );
 
+-- Phase 1 conversational agent: durable facts about the owner + rolling chat context.
+CREATE TABLE IF NOT EXISTS memories (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  fact       TEXT NOT NULL,
+  created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS chat_history (
+  id      INTEGER PRIMARY KEY AUTOINCREMENT,
+  role    TEXT NOT NULL,               -- user | assistant
+  content TEXT NOT NULL,
+  at      TEXT NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_postings_ingested ON postings(ingested_at);
 CREATE INDEX IF NOT EXISTS idx_alerts_posting ON alerts(posting_id);
 CREATE INDEX IF NOT EXISTS idx_outcomes_alert ON outcomes(alert_id);

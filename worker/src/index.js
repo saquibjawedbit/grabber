@@ -1,4 +1,7 @@
-// Grabber edge worker: Telegram webhook (taps -> labels), deadline nags, dashboard API.
+// Grabber edge worker: conversational agent, Telegram webhook (taps -> labels),
+// deadline nags, dashboard API.
+
+import { rememberExchange, runAgent } from "./agent.js";
 
 const TG = (env, method) => `https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/${method}`;
 
@@ -13,10 +16,13 @@ async function tg(env, method, body) {
 
 // ---------- Bot commands: the tracker you can talk to ----------
 
-const HELP = `What I track for you:
+const HELP = `Just talk to me — "any AI hackathons this week?", "what should I apply to?", "make that essay more technical", "remember I only want remote work".
+
+Commands if you prefer them:
 /stats — applications, win rates, corpus size
 /pending — alerted but not yet applied, by deadline
 /applied — everything you applied to, with status
+/memories — what I've saved about you
 /help — this message`;
 
 const esc = s => String(s ?? "").replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
@@ -92,30 +98,81 @@ async function cmdApplied(env) {
   return `✅ <b>Applied (${results.length} most recent)</b>\n\n${lines.join("\n")}`;
 }
 
+async function cmdMemories(env) {
+  const { results } = await env.DB.prepare(
+    "SELECT id, fact FROM memories ORDER BY id DESC LIMIT 30").all();
+  if (!results.length) return "Nothing saved yet. Tell me things worth remembering — preferences, skills, constraints.";
+  return `🧠 <b>What I know about you</b>\n\n${results.map(m => `• ${esc(m.fact)}`).join("\n")}`;
+}
+
+function isOwner(chatId, env) {
+  return String(chatId) === String(env.TELEGRAM_CHAT_ID);
+}
+
 async function handleCommand(text, chatId, env) {
   const cmd = text.split(/[\s@]/)[0].toLowerCase();
   let reply;
   if (cmd === "/start") reply = `Your chat_id is <code>${chatId}</code> — set it as TELEGRAM_CHAT_ID.\n\n${esc(HELP)}`;
+  else if (!isOwner(chatId, env)) reply = "I'm a personal agent working for one person, and it isn't you. 🙂";
   else if (cmd === "/help") reply = esc(HELP);
   else if (cmd === "/stats") reply = await cmdStats(env);
   else if (cmd === "/pending") reply = await cmdPending(env);
   else if (cmd === "/applied") reply = await cmdApplied(env);
+  else if (cmd === "/memories") reply = await cmdMemories(env);
   else reply = `Unknown command.\n\n${esc(HELP)}`;
   await tg(env, "sendMessage", {
     chat_id: chatId, text: reply, parse_mode: "HTML", disable_web_page_preview: true,
   });
 }
 
+// ---------- Conversational agent ----------
+
+async function converse(env, chatId, text, placeholderId) {
+  let reply;
+  try {
+    reply = await runAgent(env, text);
+  } catch (e) {
+    reply = `⚠️ I hit an error: ${String(e).slice(0, 200)}`;
+  }
+  const body = {
+    chat_id: chatId, text: reply, parse_mode: "HTML", disable_web_page_preview: true,
+  };
+  let r = placeholderId
+    ? await tg(env, "editMessageText", { ...body, message_id: placeholderId })
+    : await tg(env, "sendMessage", body);
+  if (!r.ok) {
+    // Usually the model emitted HTML-unsafe text — resend plain.
+    delete body.parse_mode;
+    r = placeholderId
+      ? await tg(env, "editMessageText", { ...body, message_id: placeholderId })
+      : await tg(env, "sendMessage", body);
+  }
+  if (r.ok && !reply.startsWith("⚠️")) await rememberExchange(env, text, reply);
+}
+
 // ---------- Telegram webhook: every tap is a label (point 4) ----------
 
-async function handleTelegram(request, env) {
+async function handleTelegram(request, env, ctx) {
   if (request.headers.get("X-Telegram-Bot-Api-Secret-Token") !== env.TG_WEBHOOK_SECRET) {
     return new Response("forbidden", { status: 403 });
   }
   const update = await request.json();
 
-  if (update.message?.text?.startsWith("/")) {
-    await handleCommand(update.message.text, update.message.chat.id, env);
+  const msg = update.message;
+  if (msg?.text?.startsWith("/")) {
+    await handleCommand(msg.text, msg.chat.id, env);
+    return new Response("ok");
+  }
+  if (msg?.text) {
+    if (!isOwner(msg.chat.id, env)) {
+      await tg(env, "sendMessage", {
+        chat_id: msg.chat.id, text: "I'm a personal agent working for one person, and it isn't you. 🙂",
+      });
+      return new Response("ok");
+    }
+    // Ack Telegram fast; think in the background, then edit the placeholder.
+    const sent = await tg(env, "sendMessage", { chat_id: msg.chat.id, text: "🤔 …" });
+    ctx.waitUntil(converse(env, msg.chat.id, msg.text, sent.result?.message_id));
     return new Response("ok");
   }
 
@@ -222,9 +279,18 @@ async function handleApi(url, env) {
 }
 
 export default {
-  async fetch(request, env) {
+  async fetch(request, env, ctx) {
     const url = new URL(request.url);
-    if (url.pathname === "/telegram" && request.method === "POST") return handleTelegram(request, env);
+    if (url.pathname === "/ai-debug" && url.searchParams.get("t") === env.DASH_TOKEN) {
+      try {
+        const res = await env.AI.run("@cf/openai/gpt-oss-120b",
+          { input: "Reply with exactly: BINDING OK", reasoning: { effort: "low" } });
+        return Response.json({ raw: res });
+      } catch (e) {
+        return Response.json({ error: String(e) });
+      }
+    }
+    if (url.pathname === "/telegram" && request.method === "POST") return handleTelegram(request, env, ctx);
     if (url.pathname.startsWith("/api/")) return handleApi(url, env);
     return env.ASSETS.fetch(request);
   },
