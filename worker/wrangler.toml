@@ -9,7 +9,7 @@ binding = "ASSETS"
 [[d1_databases]]
 binding = "DB"
 database_name = "grabber"
-database_id = "REPLACE_WITH_D1_DATABASE_ID"
+database_id = "f3e409f6-bac3-4606-8f3b-0737b57a5660"
 
 # Deadline nags, twice a day (point 6: most losses are inaction).
 [triggers]

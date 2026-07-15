@@ -9,7 +9,9 @@ D1_DB_ID = os.environ.get("D1_DB_ID", "")
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 
-# --- LLM (Gemini free tier primary, Groq free tier fallback) ---
+# --- LLM (NVIDIA NIM primary; Gemini / Groq free tiers as fallbacks) ---
+NVIDIA_API_KEY = os.environ.get("NVIDIA_API_KEY", "")
+NVIDIA_MODEL = os.environ.get("NVIDIA_MODEL", "meta/llama-3.3-70b-instruct")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
 GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
