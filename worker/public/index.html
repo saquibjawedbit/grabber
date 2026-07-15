@@ -1,56 +1,455 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>grabber</title>
+<title>grabber — brain</title>
 <style>
-  :root { color-scheme: light dark; font-family: system-ui, sans-serif; }
-  body { max-width: 780px; margin: 2rem auto; padding: 0 1rem; line-height: 1.5; }
-  .card { border: 1px solid color-mix(in srgb, currentColor 20%, transparent); border-radius: 10px; padding: 1rem; margin: 0.8rem 0; }
-  .meta { opacity: 0.7; font-size: 0.85rem; }
-  .badge { display: inline-block; padding: 0.1rem 0.5rem; border-radius: 999px; font-size: 0.75rem;
-           background: color-mix(in srgb, currentColor 12%, transparent); margin-right: 0.4rem; }
-  details { margin-top: 0.6rem; } summary { cursor: pointer; }
-  pre { white-space: pre-wrap; font-family: inherit; background: color-mix(in srgb, currentColor 6%, transparent);
-        padding: 0.8rem; border-radius: 8px; overflow-x: auto; }
-  #stats { font-size: 0.9rem; opacity: 0.85; }
-  h1 { font-size: 1.4rem; }
-  a { color: inherit; }
-</style>
-<h1>🎯 grabber</h1>
-<div id="stats"></div>
-<div id="alerts">loading…</div>
-<script>
-  let token = localStorage.getItem("dash_token");
-  if (!token) { token = prompt("Dashboard token (DASH_TOKEN)"); localStorage.setItem("dash_token", token); }
-  const esc = s => (s || "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
-
-  async function load() {
-    const [alerts, stats] = await Promise.all([
-      fetch("/api/alerts?t=" + encodeURIComponent(token)).then(r => r.json()),
-      fetch("/api/stats?t=" + encodeURIComponent(token)).then(r => r.json()),
-    ]);
-    if (alerts.error) { localStorage.removeItem("dash_token"); document.body.textContent = "Bad token — reload."; return; }
-
-    const rates = (stats.calibration || []).filter(c => c.rate != null)
-      .map(c => `${c.category}: ${Math.round(c.rate * 100)}% win rate (${c.n_won + c.n_rejected} decided)`).join(" · ");
-    document.getElementById("stats").textContent =
-      `${stats.corpus} postings in corpus${rates ? " · " + rates : " · no measured hit rates yet (guessing for a month)"}`;
-
-    document.getElementById("alerts").innerHTML = alerts.map(a => `
-      <div class="card" id="a${a.id}">
-        <b><a href="${esc(a.url)}" target="_blank">${esc(a.title)}</a></b>
-        <div class="meta">
-          <span class="badge">${esc(a.category)}</span>
-          <span class="badge">fit ${a.fit}</span>
-          <span class="badge">P(win) ${Math.round(a.p_convert * 100)}%</span>
-          ${a.deadline ? `<span class="badge">⏰ ${esc(String(a.deadline).slice(0, 10))}</span>` : ""}
-          ${(a.outcomes || "").split(",").filter(Boolean).map(o => `<span class="badge">${esc(o)}</span>`).join("")}
-          via ${esc(a.source)}
-        </div>
-        <div>${esc(a.reasons)}</div>
-        <div class="meta"><i>angle: ${esc(a.angle)}</i></div>
-        ${a.draft ? `<details><summary>📝 draft</summary><pre>${esc(a.draft)}</pre></details>` : ""}
-      </div>`).join("") || "No alerts yet.";
-    if (location.hash) document.querySelector(location.hash)?.scrollIntoView();
+  :root {
+    color-scheme: light;
+    --page:        #f9f9f7;
+    --surface:     #fcfcfb;
+    --ink:         #0b0b0b;
+    --ink-2:       #52514e;
+    --muted:       #898781;
+    --grid:        #e1e0d9;
+    --baseline:    #c3c2b7;
+    --border:      rgba(11,11,11,0.10);
+    --seq:         #2a78d6;           /* single-hue magnitude (bars) */
+    --critical:    #d03b3b;
+    --cat-identity:   #2a78d6;
+    --cat-preference: #008300;
+    --cat-skill:      #e87ba4;
+    --cat-goal:       #eda100;
+    --cat-project:    #1baf7a;
+    --cat-contact:    #eb6834;
+    --cat-fact:       #4a3aa7;
+    --cat-doc:        #898781;
   }
-  load();
+  @media (prefers-color-scheme: dark) {
+    :root {
+      color-scheme: dark;
+      --page:        #0d0d0d;
+      --surface:     #1a1a19;
+      --ink:         #ffffff;
+      --ink-2:       #c3c2b7;
+      --muted:       #898781;
+      --grid:        #2c2c2a;
+      --baseline:    #383835;
+      --border:      rgba(255,255,255,0.10);
+      --seq:         #3987e5;
+      --cat-identity:   #3987e5;
+      --cat-preference: #008300;
+      --cat-skill:      #d55181;
+      --cat-goal:       #c98500;
+      --cat-project:    #199e70;
+      --cat-contact:    #d95926;
+      --cat-fact:       #9085e9;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--page); color: var(--ink);
+    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    line-height: 1.5;
+  }
+  main { max-width: 1060px; margin: 0 auto; padding: 1.2rem 1rem 4rem; }
+  header { display: flex; align-items: baseline; gap: 0.8rem; flex-wrap: wrap; margin: 0.6rem 0 1rem; }
+  h1 { font-size: 1.25rem; margin: 0; }
+  h2 { font-size: 0.95rem; margin: 0 0 0.75rem; }
+  .sub { color: var(--muted); font-size: 0.85rem; font-weight: 400; }
+  .card {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 12px; padding: 1rem 1.1rem; margin: 0 0 1rem;
+  }
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 0.75rem; margin-bottom: 1rem; }
+  .tile { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 0.8rem 1rem; }
+  .tile .v { font-size: 1.7rem; font-weight: 650; letter-spacing: -0.02em; }
+  .tile .k { color: var(--ink-2); font-size: 0.8rem; }
+  .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; align-items: start; }
+  @media (max-width: 800px) { .cols { grid-template-columns: 1fr; } }
+  #graph { width: 100%; height: 430px; display: block; cursor: grab; touch-action: none; }
+  .legend { display: flex; flex-wrap: wrap; gap: 0.35rem 0.9rem; margin-top: 0.5rem; font-size: 0.78rem; color: var(--ink-2); }
+  .legend span::before {
+    content: ""; display: inline-block; width: 9px; height: 9px; border-radius: 50%;
+    background: var(--c); margin-right: 5px;
+  }
+  .mem { padding: 0.45rem 0; border-bottom: 1px solid var(--grid); font-size: 0.9rem; display: flex; gap: 0.6rem; }
+  .mem:last-child { border-bottom: 0; }
+  .chip {
+    flex: none; align-self: flex-start; margin-top: 0.15rem;
+    font-size: 0.68rem; color: var(--ink-2); border: 1px solid var(--border);
+    border-radius: 999px; padding: 0 0.5rem; white-space: nowrap;
+  }
+  .chip::before { content: ""; display: inline-block; width: 7px; height: 7px; border-radius: 50%;
+    background: var(--c); margin-right: 4px; }
+  .mem .id { color: var(--muted); font-size: 0.75rem; margin-left: 0.4rem; }
+  .rem { display: flex; gap: 0.7rem; padding: 0.5rem 0; border-bottom: 1px solid var(--grid); font-size: 0.9rem; align-items: baseline; }
+  .rem:last-child { border-bottom: 0; }
+  .rem .when { flex: none; width: 9.5rem; color: var(--ink-2); font-size: 0.8rem; font-variant-numeric: tabular-nums; }
+  .overdue { color: var(--critical); font-weight: 600; font-size: 0.78rem; }
+  .bar-row { display: grid; grid-template-columns: 8.5rem 1fr; gap: 0.6rem; align-items: center; margin: 6px 0; }
+  .bar-row .lbl { color: var(--ink-2); font-size: 0.8rem; text-align: right; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .bar-wrap { position: relative; height: 16px; }
+  .bar { position: absolute; left: 0; top: 1px; height: 14px; background: var(--seq); border-radius: 0 4px 4px 0; min-width: 2px; }
+  .bar-v { position: absolute; top: -1px; font-size: 0.75rem; color: var(--ink); font-variant-numeric: tabular-nums; }
+  .post { padding: 0.45rem 0; border-bottom: 1px solid var(--grid); font-size: 0.88rem; }
+  .post:last-child { border-bottom: 0; }
+  .post a { color: inherit; text-decoration: none; }
+  .post a:hover { text-decoration: underline; }
+  .meta { color: var(--muted); font-size: 0.76rem; }
+  .badge { display: inline-block; padding: 0 0.5rem; border-radius: 999px; font-size: 0.72rem;
+           border: 1px solid var(--border); color: var(--ink-2); margin-right: 0.35rem; }
+  .empty { color: var(--muted); font-size: 0.85rem; padding: 0.4rem 0; }
+  pre.summary { white-space: pre-wrap; font-family: inherit; font-size: 0.85rem; color: var(--ink-2); margin: 0; }
+  details { margin-top: 0.4rem; } summary { cursor: pointer; font-size: 0.8rem; color: var(--ink-2); }
+  pre.draft { white-space: pre-wrap; font-family: inherit; font-size: 0.82rem;
+    background: color-mix(in srgb, currentColor 6%, transparent); padding: 0.7rem; border-radius: 8px; }
+  #tip {
+    position: fixed; pointer-events: none; display: none; z-index: 10; max-width: 320px;
+    background: var(--surface); color: var(--ink); border: 1px solid var(--border);
+    border-radius: 8px; padding: 0.5rem 0.7rem; font-size: 0.8rem;
+    box-shadow: 0 4px 18px rgba(0,0,0,0.18);
+  }
+  #tip .t-cat { color: var(--muted); font-size: 0.72rem; }
+  #gate { max-width: 380px; margin: 4rem auto; text-align: center; padding: 0 1rem; }
+  #gate input { width: 100%; padding: 0.55rem 0.8rem; border-radius: 8px; border: 1px solid var(--baseline);
+    background: var(--surface); color: var(--ink); font-size: 0.95rem; }
+  #gate button { margin-top: 0.7rem; padding: 0.5rem 1.4rem; border-radius: 8px; border: 1px solid var(--border);
+    background: var(--seq); color: #fff; font-size: 0.9rem; cursor: pointer; }
+</style>
+
+<main id="app" hidden>
+  <header>
+    <h1>🧠 grabber — agent brain</h1>
+    <span class="sub" id="asof"></span>
+  </header>
+
+  <div class="tiles" id="tiles"></div>
+
+  <div class="card">
+    <h2>Knowledge graph</h2>
+    <canvas id="graph"></canvas>
+    <div class="legend" id="legend"></div>
+  </div>
+
+  <div class="cols">
+    <div>
+      <div class="card">
+        <h2>Memories</h2>
+        <div id="memories"></div>
+      </div>
+      <div class="card">
+        <h2>Profile documents</h2>
+        <div id="docs"></div>
+      </div>
+      <div class="card">
+        <h2>Conversation summary <span class="sub" id="sum-at"></span></h2>
+        <div id="summary"></div>
+      </div>
+    </div>
+    <div>
+      <div class="card">
+        <h2>Reminders</h2>
+        <div id="reminders"></div>
+      </div>
+      <div class="card">
+        <h2>Corpus by source</h2>
+        <div id="bysource"></div>
+      </div>
+      <div class="card">
+        <h2>Latest ingested</h2>
+        <div id="recent"></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Alerts sent</h2>
+    <div id="alerts"></div>
+  </div>
+</main>
+
+<div id="gate" hidden>
+  <h1>🧠 grabber</h1>
+  <p class="sub">Enter the dashboard token (DASH_TOKEN)</p>
+  <input id="tok" type="password" autocomplete="off">
+  <br><button id="go">Open</button>
+  <p class="sub" id="gate-err"></p>
+</div>
+
+<div id="tip"></div>
+
+<script>
+"use strict";
+const $ = id => document.getElementById(id);
+const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
+const CATS = ["identity", "preference", "skill", "goal", "project", "contact", "fact"];
+const catColor = c => getComputedStyle(document.documentElement)
+  .getPropertyValue(CATS.includes(c) ? `--cat-${c}` : "--cat-doc").trim();
+const IST = new Intl.DateTimeFormat("en-IN", { timeZone: "Asia/Kolkata", dateStyle: "medium", timeStyle: "short" });
+
+let token = localStorage.getItem("dash_token") || "";
+
+async function api(path) {
+  const r = await fetch(`${path}${path.includes("?") ? "&" : "?"}t=${encodeURIComponent(token)}`);
+  if (r.status === 403) throw new Error("token");
+  return r.json();
+}
+
+function gate(msg) {
+  $("app").hidden = true; $("gate").hidden = false;
+  $("gate-err").textContent = msg || "";
+  $("go").onclick = () => { token = $("tok").value.trim(); localStorage.setItem("dash_token", token); boot(); };
+  $("tok").onkeydown = e => { if (e.key === "Enter") $("go").onclick(); };
+}
+
+// ---------- tooltip ----------
+function tipShow(html, x, y) {
+  const t = $("tip"); t.innerHTML = html; t.style.display = "block";
+  t.style.left = Math.min(x + 14, innerWidth - t.offsetWidth - 8) + "px";
+  t.style.top = Math.min(y + 14, innerHeight - t.offsetHeight - 8) + "px";
+}
+function tipHide() { $("tip").style.display = "none"; }
+
+// ---------- sections ----------
+function renderTiles(t) {
+  const tiles = [
+    [t.corpus, "postings in corpus"],
+    [t.memories, "memories"],
+    [t.reminders, "open reminders"],
+    [t.alerted, "alerts sent"],
+    [t.applied, "applied"],
+    [t.won, "won"],
+  ];
+  $("tiles").innerHTML = tiles.map(([v, k]) =>
+    `<div class="tile"><div class="v">${v ?? 0}</div><div class="k">${k}</div></div>`).join("");
+}
+
+function renderMemories(mems) {
+  if (!mems.length) { $("memories").innerHTML = `<div class="empty">Nothing saved yet — tell the bot about yourself.</div>`; return; }
+  const order = c => { const i = CATS.indexOf(c); return i < 0 ? CATS.length : i; };
+  $("memories").innerHTML = [...mems].sort((a, b) => order(a.category) - order(b.category) || a.id - b.id)
+    .map(m => `<div class="mem"><span class="chip" style="--c:${catColor(m.category)}">${esc(m.category)}</span>
+      <span>${esc(m.fact)}<span class="id">#${m.id}</span></span></div>`).join("");
+}
+
+function renderDocs(docs) {
+  $("docs").innerHTML = docs.length
+    ? docs.map(d => `<div class="mem"><span class="chip" style="--c:${catColor("doc")}">${esc(d.key)}</span>
+        <span class="meta">${d.chars.toLocaleString()} chars · updated ${esc((d.updated_at || "").slice(0, 10))}</span></div>`).join("")
+    : `<div class="empty">No documents — send the bot your resume/bio as .md or .txt in Telegram.</div>`;
+}
+
+function renderSummary(s) {
+  $("summary").innerHTML = s?.text
+    ? `<pre class="summary">${esc(s.text)}</pre>`
+    : `<div class="empty">Builds automatically once chat history is long enough to compact.</div>`;
+  if (s?.updated_at) $("sum-at").textContent = "· updated " + s.updated_at.slice(0, 10);
+}
+
+function renderReminders(rems) {
+  if (!rems.length) { $("reminders").innerHTML = `<div class="empty">No open reminders. Ask the bot: “remind me Friday 6pm to…”.</div>`; return; }
+  const now = Date.now();
+  $("reminders").innerHTML = rems.map(r => {
+    const due = Date.parse(r.due_at);
+    const over = due < now && !r.notified;
+    return `<div class="rem"><span class="when">${IST.format(due)}</span>
+      <span>${esc(r.text)}${r.notified ? ` <span class="meta">· delivered</span>` : ""}
+      ${over ? ` <span class="overdue">⚠ overdue</span>` : ""}</span></div>`;
+  }).join("");
+}
+
+function renderBars(rows) {
+  if (!rows.length) { $("bysource").innerHTML = `<div class="empty">Corpus is empty.</div>`; return; }
+  const max = Math.max(...rows.map(r => r.n));
+  $("bysource").innerHTML = rows.map(r => {
+    const pct = Math.max(1.5, (r.n / max) * 82); // leave room for the value label
+    return `<div class="bar-row" data-n="${r.n}" data-s="${esc(r.source)}">
+      <span class="lbl">${esc(r.source)}</span>
+      <span class="bar-wrap"><span class="bar" style="width:${pct}%"></span>
+      <span class="bar-v" style="left:calc(${pct}% + 7px)">${r.n}</span></span></div>`;
+  }).join("");
+  $("bysource").querySelectorAll(".bar-row").forEach(el => {
+    el.onmousemove = e => tipShow(`<b>${esc(el.dataset.s)}</b><div class="t-cat">${el.dataset.n} postings</div>`, e.clientX, e.clientY);
+    el.onmouseleave = tipHide;
+  });
+}
+
+function renderRecent(posts) {
+  $("recent").innerHTML = posts.length ? posts.map(p => `
+    <div class="post"><a href="${esc(p.url)}" target="_blank" rel="noopener">${esc((p.title || "").slice(0, 90))}</a>
+      <div class="meta">${esc(p.source)}${p.deadline ? " · ⏰ " + esc(String(p.deadline).slice(0, 10)) : ""}</div></div>`).join("")
+    : `<div class="empty">Nothing ingested yet.</div>`;
+}
+
+function renderAlerts(alerts) {
+  if (!Array.isArray(alerts)) return;
+  $("alerts").innerHTML = alerts.length ? alerts.map(a => `
+    <div class="post"><a href="${esc(a.url)}" target="_blank" rel="noopener"><b>${esc(a.title)}</b></a>
+      <div class="meta">
+        <span class="badge">${esc(a.category)}</span>
+        <span class="badge">fit ${a.fit}</span>
+        <span class="badge">P(win) ${Math.round((a.p_convert || 0) * 100)}%</span>
+        ${a.deadline ? `<span class="badge">⏰ ${esc(String(a.deadline).slice(0, 10))}</span>` : ""}
+        ${(a.outcomes || "").split(",").filter(Boolean).map(o => `<span class="badge">${esc(o)}</span>`).join("")}
+        via ${esc(a.source)}
+      </div>
+      ${a.reasons ? `<div class="meta">${esc(a.reasons)}</div>` : ""}
+      ${a.angle ? `<div class="meta"><i>angle: ${esc(a.angle)}</i></div>` : ""}
+      ${a.draft ? `<details><summary>📝 draft</summary><pre class="draft">${esc(a.draft)}</pre></details>` : ""}
+    </div>`).join("")
+    : `<div class="empty">No alerts yet — ranking starts once the profile is seeded.</div>`;
+}
+
+// ---------- knowledge graph (canvas force layout) ----------
+function buildGraph(data) {
+  const nodes = [], links = [];
+  const add = n => (nodes.push(n), n);
+  const you = add({ id: "you", label: "You", type: "owner", r: 20 });
+  const hubs = {};
+  for (const m of data.memories) {
+    const c = CATS.includes(m.category) ? m.category : "fact";
+    if (!hubs[c]) {
+      hubs[c] = add({ id: "hub:" + c, label: c, type: "hub", cat: c, r: 11 });
+      links.push({ a: you, b: hubs[c], d: 130 });
+    }
+    const n = add({ id: "m" + m.id, label: m.fact, type: "memory", cat: c, r: 6.5, full: m });
+    links.push({ a: hubs[c], b: n, d: 75 });
+  }
+  for (const d of data.documents) {
+    const n = add({ id: "d:" + d.key, label: d.key, type: "doc", r: 8, full: d });
+    links.push({ a: you, b: n, d: 110 });
+  }
+  // cross-links between memories sharing distinctive words
+  const toks = n => new Set(n.full.fact.toLowerCase().match(/[a-z]{5,}/g) || []);
+  const mem = nodes.filter(n => n.type === "memory");
+  for (let i = 0; i < mem.length; i++) for (let j = i + 1; j < mem.length; j++) {
+    const shared = [...toks(mem[i])].filter(w => toks(mem[j]).has(w));
+    if (shared.length >= 2) links.push({ a: mem[i], b: mem[j], d: 70, weak: true });
+  }
+  return { nodes, links };
+}
+
+function runGraph(data) {
+  const canvas = $("graph"), dpr = devicePixelRatio || 1;
+  const W = canvas.clientWidth, H = 430;
+  canvas.width = W * dpr; canvas.height = H * dpr;
+  const ctx = canvas.getContext("2d");
+  ctx.scale(dpr, dpr);
+  const { nodes, links } = buildGraph(data);
+  const css = v => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+
+  nodes.forEach((n, i) => {
+    const a = (i / nodes.length) * Math.PI * 2;
+    n.x = W / 2 + Math.cos(a) * (n.type === "owner" ? 0 : 120);
+    n.y = H / 2 + Math.sin(a) * (n.type === "owner" ? 0 : 120);
+    n.vx = n.vy = 0;
+  });
+
+  let heat = 1, dragging = null, hover = null;
+
+  function tick() {
+    for (let i = 0; i < nodes.length; i++) for (let j = i + 1; j < nodes.length; j++) {
+      const a = nodes[i], b = nodes[j];
+      let dx = b.x - a.x, dy = b.y - a.y;
+      const d2 = dx * dx + dy * dy || 1, d = Math.sqrt(d2);
+      const f = Math.min(1800 / d2, 4);
+      dx /= d; dy /= d;
+      a.vx -= dx * f; a.vy -= dy * f; b.vx += dx * f; b.vy += dy * f;
+    }
+    for (const l of links) {
+      let dx = l.b.x - l.a.x, dy = l.b.y - l.a.y;
+      const d = Math.sqrt(dx * dx + dy * dy) || 1;
+      const f = (d - l.d) * (l.weak ? 0.008 : 0.03);
+      l.a.vx += (dx / d) * f; l.a.vy += (dy / d) * f;
+      l.b.vx -= (dx / d) * f; l.b.vy -= (dy / d) * f;
+    }
+    for (const n of nodes) {
+      n.vx += (W / 2 - n.x) * 0.006; n.vy += (H / 2 - n.y) * 0.006;
+      if (n === dragging) { n.vx = n.vy = 0; continue; }
+      n.vx = Math.max(-30, Math.min(30, n.vx * 0.86));
+      n.vy = Math.max(-30, Math.min(30, n.vy * 0.86));
+      n.x += n.vx * heat; n.y += n.vy * heat;
+      n.x = Math.max(n.r + 2, Math.min(W - n.r - 2, n.x));
+      n.y = Math.max(n.r + 16, Math.min(H - n.r - 18, n.y));
+    }
+    heat = Math.max(0.12, heat * 0.995);
+  }
+
+  function draw() {
+    ctx.clearRect(0, 0, W, H);
+    ctx.lineWidth = 1;
+    for (const l of links) {
+      ctx.strokeStyle = css("--grid");
+      ctx.globalAlpha = l.weak ? 0.55 : 1;
+      ctx.beginPath(); ctx.moveTo(l.a.x, l.a.y); ctx.lineTo(l.b.x, l.b.y); ctx.stroke();
+      ctx.globalAlpha = 1;
+    }
+    for (const n of nodes) {
+      ctx.beginPath(); ctx.arc(n.x, n.y, n.r, 0, Math.PI * 2);
+      ctx.fillStyle = n.type === "owner" ? css("--ink") : catColor(n.cat || (n.type === "doc" ? "doc" : "fact"));
+      ctx.fill();
+      ctx.lineWidth = 2; ctx.strokeStyle = css("--surface"); ctx.stroke(); // 2px surface ring
+      if (n === hover) { ctx.strokeStyle = css("--ink-2"); ctx.stroke(); }
+      ctx.fillStyle = n.type === "owner" ? css("--ink") : css("--ink-2");
+      ctx.font = (n.type === "owner" || n.type === "hub" ? "600 " : "") + "11px system-ui, sans-serif";
+      ctx.textAlign = "center";
+      const label = n.type === "memory"
+        ? (nodes.length <= 60 ? n.label.slice(0, 18) + (n.label.length > 18 ? "…" : "") : "")
+        : n.label;
+      if (label) ctx.fillText(label, n.x, n.y + n.r + 13);
+    }
+  }
+
+  (function loop() { tick(); draw(); requestAnimationFrame(loop); })();
+
+  const at = e => {
+    const r = canvas.getBoundingClientRect();
+    const x = e.clientX - r.left, y = e.clientY - r.top;
+    return nodes.findLast(n => (n.x - x) ** 2 + (n.y - y) ** 2 < (n.r + 6) ** 2);
+  };
+  canvas.onpointermove = e => {
+    if (dragging) {
+      const r = canvas.getBoundingClientRect();
+      dragging.x = e.clientX - r.left; dragging.y = e.clientY - r.top;
+      heat = Math.max(heat, 0.5);
+      return;
+    }
+    hover = at(e);
+    canvas.style.cursor = hover ? "pointer" : "grab";
+    if (hover?.type === "memory") {
+      tipShow(`<div class="t-cat">${esc(hover.cat)} · #${hover.full.id} · ${esc((hover.full.created_at || "").slice(0, 10))}</div>${esc(hover.full.fact)}`, e.clientX, e.clientY);
+    } else if (hover?.type === "doc") {
+      tipShow(`<div class="t-cat">profile document</div><b>${esc(hover.label)}</b> — ${hover.full.chars.toLocaleString()} chars`, e.clientX, e.clientY);
+    } else tipHide();
+  };
+  canvas.onpointerdown = e => { dragging = at(e); if (dragging) canvas.setPointerCapture(e.pointerId); };
+  canvas.onpointerup = () => { dragging = null; };
+  canvas.onpointerleave = () => { hover = null; tipHide(); };
+
+  $("legend").innerHTML =
+    `<span style="--c:${css("--ink")}">you</span>` +
+    CATS.map(c => `<span style="--c:${catColor(c)}">${c}</span>`).join("") +
+    `<span style="--c:${catColor("doc")}">document</span>`;
+}
+
+// ---------- boot ----------
+async function boot() {
+  try {
+    const [brain, alerts] = await Promise.all([api("/api/brain"), api("/api/alerts")]);
+    $("gate").hidden = true; $("app").hidden = false;
+    $("asof").textContent = "as of " + IST.format(new Date());
+    renderTiles(brain.totals);
+    renderMemories(brain.memories);
+    renderDocs(brain.documents);
+    renderSummary(brain.summary);
+    renderReminders(brain.reminders);
+    renderBars(brain.by_source);
+    renderRecent(brain.recent);
+    renderAlerts(alerts);
+    runGraph(brain);
+  } catch (e) {
+    localStorage.removeItem("dash_token");
+    gate(e.message === "token" && token ? "Wrong token — try again." : "");
+  }
+}
+token ? boot() : gate();
 </script>

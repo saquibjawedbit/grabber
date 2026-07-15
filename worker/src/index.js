@@ -343,6 +343,37 @@ async function handleApi(url, env) {
       ORDER BY a.sent_at DESC LIMIT 100`).all();
     return Response.json(results);
   }
+  if (url.pathname === "/api/brain") {
+    // Everything the dashboard shows: memory, reminders, profile, corpus shape.
+    const [mem, rem, docs, summary, bySource, totals, recent] = await Promise.all([
+      env.DB.prepare("SELECT id, category, fact, created_at FROM memories ORDER BY id DESC LIMIT 200").all(),
+      env.DB.prepare("SELECT id, text, due_at, notified FROM reminders WHERE done = 0 ORDER BY due_at LIMIT 50").all(),
+      env.DB.prepare("SELECT key, length(content) AS chars, updated_at FROM profile WHERE key != 'conversation_summary' ORDER BY key").all(),
+      env.DB.prepare("SELECT content, updated_at FROM profile WHERE key = 'conversation_summary'").first(),
+      env.DB.prepare("SELECT source, COUNT(*) AS n FROM postings GROUP BY source ORDER BY n DESC").all(),
+      env.DB.prepare(`
+        SELECT
+          (SELECT COUNT(*) FROM postings) AS corpus,
+          (SELECT COUNT(*) FROM memories) AS memories,
+          (SELECT COUNT(*) FROM reminders WHERE done = 0) AS reminders,
+          (SELECT COUNT(*) FROM alerts WHERE sent_at IS NOT NULL) AS alerted,
+          (SELECT COUNT(DISTINCT alert_id) FROM outcomes WHERE action = 'applied') AS applied,
+          (SELECT COUNT(DISTINCT alert_id) FROM outcomes WHERE action = 'won') AS won,
+          (SELECT COUNT(*) FROM chat_history) AS chat_rows`).first(),
+      env.DB.prepare(`
+        SELECT title, source, url, deadline, ingested_at FROM postings
+        ORDER BY ingested_at DESC LIMIT 12`).all(),
+    ]);
+    return Response.json({
+      memories: mem.results,
+      reminders: rem.results,
+      documents: docs.results,
+      summary: summary ? { text: summary.content, updated_at: summary.updated_at } : null,
+      by_source: bySource.results,
+      totals,
+      recent: recent.results,
+    });
+  }
   if (url.pathname === "/api/tool") {
     // Debug: run one agent tool directly. /api/tool?t=TOKEN&name=web_search&args={"query":"..."}
     const tool = TOOLS[url.searchParams.get("name")];
