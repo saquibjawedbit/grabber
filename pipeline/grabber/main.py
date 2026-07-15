@@ -26,8 +26,19 @@ def main() -> None:
     elif cmd == "research":
         if len(sys.argv) < 3:
             raise SystemExit("usage: python -m grabber.main research <job_id>")
+        from datetime import datetime, timezone
+
         from .research import runner
-        runner.run(db, int(sys.argv[2]))
+        job_id = int(sys.argv[2])
+        try:
+            runner.run(db, job_id)
+        except Exception as e:
+            # Never leave a job stuck in 'running' — the agent polls this state.
+            db.query(
+                "UPDATE research SET status = 'failed', error = ?, finished_at = ? WHERE id = ?",
+                (f"{type(e).__name__}: {e}"[:300], datetime.now(timezone.utc).isoformat(), job_id),
+            )
+            raise
     else:
         raise SystemExit(f"unknown command: {cmd} (use nightly | research)")
 

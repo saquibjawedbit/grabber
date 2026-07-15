@@ -27,6 +27,10 @@ DASH_URL = os.environ.get("DASH_URL", "").rstrip("/")
 RESEARCH_MAX_STEPS = int(os.environ.get("RESEARCH_MAX_STEPS", "22"))
 RESEARCH_MAX_FETCH = int(os.environ.get("RESEARCH_MAX_FETCH", "18"))
 
+# Google Programmable Search — optional; research falls back to DuckDuckGo without it.
+GOOGLE_CSE_KEY = os.environ.get("GOOGLE_CSE_KEY", "")
+GOOGLE_CSE_ID = os.environ.get("GOOGLE_CSE_ID", "")
+
 
 def require(*names: str) -> None:
     missing = [n for n in names if not globals().get(n)]

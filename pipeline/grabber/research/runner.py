@@ -128,32 +128,35 @@ def run(db: D1, job_id: int) -> None:
             transcript += "\n(Empty report. Keep working or write a real one.)"
             continue
 
-        if name == "search":
-            res = tools.search(str(args.get("query", "")))
-            result = json.dumps(res[:8])
-        elif name == "read":
-            url = str(args.get("url", ""))
-            if fetched >= config.RESEARCH_MAX_FETCH:
-                result = "[fetch budget spent — call done with what you have]"
-            elif not url.startswith("http"):
-                result = "[read needs a full http(s) url]"
-            else:
-                fetched += 1
-                print(f"    fetch {url[:110]}")
-                text = tools.read_url(url, render=bool(args.get("render")))
+        # A tool blowing up is data, not a reason to lose the whole job.
+        try:
+            if name == "search":
+                result = json.dumps(tools.search(str(args.get("query", "")))[:8])
+            elif name == "read":
+                url = str(args.get("url", ""))
+                if fetched >= config.RESEARCH_MAX_FETCH:
+                    result = "[fetch budget spent — call done with what you have]"
+                elif not url.startswith("http"):
+                    result = "[read needs a full http(s) url]"
+                else:
+                    fetched += 1
+                    print(f"    fetch {url[:110]}")
+                    result = tools.read_url(url, render=bool(args.get("render")))[:9000]
+                    if url not in sources:
+                        sources.append(url)
+            elif name == "search_videos":
+                result = json.dumps(tools.search_videos(str(args.get("query", ""))))
+            elif name == "watch":
+                url = str(args.get("url", ""))
+                print(f"    watch {url[:80]}")
+                result = tools.watch_video(url)[:9000]
                 if url not in sources:
                     sources.append(url)
-                result = text[:9000]
-        elif name == "search_videos":
-            result = json.dumps(tools.search_videos(str(args.get("query", ""))))
-        elif name == "watch":
-            url = str(args.get("url", ""))
-            print(f"    watch {url[:80]}")
-            result = tools.watch_video(url)[:9000]
-            if url not in sources:
-                sources.append(url)
-        else:
-            result = f"[unknown tool '{name}']"
+            else:
+                result = f"[unknown tool '{name}']"
+        except Exception as e:
+            print(f"research #{job_id}: tool {name} raised {type(e).__name__}")
+            result = f"[tool {name} failed: {type(e).__name__} — try another approach]"
 
         transcript += (f"\n\n--- You called {name}({json.dumps(args)[:200]}) ---\n"
                        f"UNTRUSTED SOURCE DATA:\n{result}\n--- end ---")
