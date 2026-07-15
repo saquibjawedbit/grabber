@@ -28,6 +28,9 @@ def run(db: D1, since_iso: str) -> list[dict]:
         r["term"][len("phrase:"):]: r["idf"]
         for r in db.query("SELECT term, idf FROM idf WHERE term LIKE 'phrase:%'")
     }
+    # Phase 2: owner memories contribute recall signal alongside skills — so the
+    # pipeline works from day one of conversation, before skills.yaml is seeded.
+    mem_idf = idf_mod.load_memory_terms(db)
 
     from ..sources.rss import feed_weights
     rss_weights = feed_weights()
@@ -36,9 +39,10 @@ def run(db: D1, since_iso: str) -> list[dict]:
     for r in rows:
         text = f"{r['title']} {r.get('body') or ''}"
         edge, matched = idf_mod.edge_score(text, skills, phrase_idf)
-        score = edge * source_weight(r["source"], rss_weights)
+        mem, mem_matched = idf_mod.memory_score(text, mem_idf)
+        score = (edge + mem) * source_weight(r["source"], rss_weights)
         if score > 0:
-            scored.append({**r, "recall_score": score, "matched": matched})
+            scored.append({**r, "recall_score": score, "matched": matched + mem_matched})
 
     scored.sort(key=lambda x: -x["recall_score"])
     survivors = scored[: config.RECALL_TOP_K]

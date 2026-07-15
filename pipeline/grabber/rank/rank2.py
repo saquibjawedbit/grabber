@@ -12,6 +12,10 @@ a false alert costs trust; silence is the product. Most postings should get aler
 ## The person
 {profile}
 
+Anything under "Owner-stated memories" came from the owner directly and is authoritative:
+a posting that conflicts with a stated preference or constraint should almost never alert;
+alignment with a stated goal or preference raises fit.
+
 ## Measured conversion rates so far (won / decided applications, by category)
 {rates}
 
@@ -71,6 +75,18 @@ def profile_summary(db: D1) -> str:
         row = db.one("SELECT content FROM profile WHERE key = ?", (key,))
         if row:
             parts.append(f"### {key}\n{row['content'][:3000]}")
+    # Documents the owner sent their agent in Telegram (stored as doc:<name>).
+    for row in db.query("SELECT key, content FROM profile WHERE key LIKE 'doc:%' LIMIT 5"):
+        parts.append(f"### {row['key']}\n{row['content'][:2000]}")
+    # Phase 2: what the owner told their agent, verbatim — the authoritative layer.
+    mems = db.query("SELECT category, fact FROM memories ORDER BY category, id")
+    if mems:
+        lines = "\n".join(f"- ({m['category']}) {m['fact']}" for m in mems[:60])
+        parts.append(f"### Owner-stated memories\n{lines}")
+    summ = db.one("SELECT content FROM profile WHERE key = 'conversation_summary'")
+    if summ:
+        parts.append(f"### Recent conversation summary with their agent\n{summ['content'][:1500]}")
     if not parts:
-        raise SystemExit("Profile is empty — run pipeline/scripts/seed_profile.py first")
+        raise SystemExit(
+            "No profile and no memories — seed profile/ or tell the bot about yourself first")
     return "\n\n".join(parts)

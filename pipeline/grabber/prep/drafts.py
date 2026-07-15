@@ -23,6 +23,9 @@ achievements that aren't in the material below.
 ## Their past application essays
 {essays}
 
+## What they've told their agent (respect these preferences and constraints)
+{memories}
+
 Produce markdown with exactly these sections:
 # Essay draft
 (300-500 words, tailored to this opportunity, their voice, ready to edit not to write)
@@ -36,6 +39,8 @@ def generate(db: D1, alert_id: int, posting: dict, angle: str) -> None:
     resume = db.one("SELECT content FROM profile WHERE key = 'resume'")
     essays = db.query("SELECT key, content FROM profile WHERE key LIKE 'essay:%'")
     essays_text = "\n\n".join(f"[{e['key']}]\n{e['content'][:2000]}" for e in essays) or "(none yet)"
+    mems = db.query("SELECT fact FROM memories ORDER BY id LIMIT 40")
+    memories_text = "\n".join(f"- {m['fact']}" for m in mems) or "(none yet)"
 
     md = llm.complete(PROMPT.format(
         title=posting["title"],
@@ -45,6 +50,7 @@ def generate(db: D1, alert_id: int, posting: dict, angle: str) -> None:
         angle=angle,
         resume=(resume["content"][:4000] if resume else "(no resume seeded)"),
         essays=essays_text,
+        memories=memories_text,
     ))
     db.query(
         "INSERT OR REPLACE INTO drafts (alert_id, content_md, created_at) VALUES (?,?,?)",
