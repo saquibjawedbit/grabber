@@ -9,7 +9,9 @@ D1_DB_ID = os.environ.get("D1_DB_ID", "")
 TELEGRAM_BOT_TOKEN = os.environ.get("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.environ.get("TELEGRAM_CHAT_ID", "")
 
-# --- LLM (NVIDIA NIM primary; Gemini / Groq free tiers as fallbacks) ---
+# --- LLM (Cloudflare Workers AI primary — free 10k neurons/day, reuses the D1
+# token so no extra key; NVIDIA / Gemini / Groq as fallbacks) ---
+CF_AI_MODEL = os.environ.get("CF_AI_MODEL", "@cf/openai/gpt-oss-120b")
 NVIDIA_API_KEY = os.environ.get("NVIDIA_API_KEY", "")
 NVIDIA_MODEL = os.environ.get("NVIDIA_MODEL", "meta/llama-3.3-70b-instruct")
 GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")

@@ -1,4 +1,5 @@
-"""Free-tier LLM access: NVIDIA NIM primary, Gemini then Groq as fallbacks.
+"""Free-tier LLM access: Cloudflare Workers AI (gpt-oss-120b, 10k neurons/day free,
+same token as D1) primary; NVIDIA, Gemini, Groq as fallbacks.
 Plain REST, no SDKs. A fixed sleep between calls keeps us under free-tier RPM."""
 import json
 import re
@@ -49,6 +50,12 @@ def _openai_compat(base_url: str, key: str, model: str, prompt: str) -> str:
     return r.json()["choices"][0]["message"]["content"]
 
 
+def _cloudflare(prompt: str) -> str:
+    return _openai_compat(
+        f"https://api.cloudflare.com/client/v4/accounts/{config.CF_ACCOUNT_ID}/ai/v1",
+        config.CF_API_TOKEN, config.CF_AI_MODEL, prompt)
+
+
 def _nvidia(prompt: str) -> str:
     return _openai_compat(
         "https://integrate.api.nvidia.com/v1", config.NVIDIA_API_KEY, config.NVIDIA_MODEL, prompt)
@@ -60,6 +67,7 @@ def _groq(prompt: str) -> str:
 
 
 PROVIDERS = [
+    ("cloudflare", lambda: config.CF_API_TOKEN and config.CF_ACCOUNT_ID, _cloudflare),
     ("nvidia", lambda: config.NVIDIA_API_KEY, _nvidia),
     ("gemini", lambda: config.GEMINI_API_KEY, _gemini),
     ("groq", lambda: config.GROQ_API_KEY, _groq),
@@ -70,7 +78,9 @@ def complete(prompt: str) -> str:
     _pace()
     available = [(name, fn) for name, key, fn in PROVIDERS if key()]
     if not available:
-        raise RuntimeError("No LLM available: set NVIDIA_API_KEY, GEMINI_API_KEY, or GROQ_API_KEY")
+        raise RuntimeError(
+            "No LLM available: set CF_API_TOKEN+CF_ACCOUNT_ID, NVIDIA_API_KEY, "
+            "GEMINI_API_KEY, or GROQ_API_KEY")
     for i, (name, fn) in enumerate(available):
         try:
             return fn(prompt)

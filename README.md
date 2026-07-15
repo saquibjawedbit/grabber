@@ -58,10 +58,16 @@ The bot is a two-way tracker, not just a firehose:
 | `/applied` | your application log — each with 🏆 won / ❌ rejected / ⏳ waiting |
 | Alert buttons | ✅ Applied / 🙅 Skip / 💤 Snooze, then 🏆 Won / ❌ Rejected — each tap is a tracked label |
 
-### 3. LLM key (any one of these; set several for fallback)
-- `NVIDIA_API_KEY` — [build.nvidia.com](https://build.nvidia.com) → any model → Get API Key (`nvapi-...`). Primary.
-- `GEMINI_API_KEY` — [aistudio.google.com](https://aistudio.google.com), free tier.
-- `GROQ_API_KEY` — console.groq.com, free tier.
+### 3. LLM
+**None needed by default.** The primary provider is Cloudflare Workers AI
+(`@cf/openai/gpt-oss-120b`, 10,000 free neurons/day ≈ 60–70 rankings + drafts),
+authenticated with the same `CF_API_TOKEN`/`CF_ACCOUNT_ID` you already set for D1.
+
+Optional fallbacks for heavy days (tried in this order when Cloudflare errors or
+runs out of free neurons):
+- `NVIDIA_API_KEY` — [build.nvidia.com](https://build.nvidia.com) (`nvapi-...`)
+- `GEMINI_API_KEY` — [aistudio.google.com](https://aistudio.google.com)
+- `GROQ_API_KEY` — console.groq.com
 
 ### 4. Profile corpus (private — see `profile/README.md`)
 Drop `resume.md`, `bio.md`, `skills.yaml`, and every past essay into `profile/`, then:
