@@ -17,12 +17,24 @@ def load_feeds() -> list[dict]:
     return yaml.safe_load(FEEDS_FILE.read_text()).get("feeds", []) or []
 
 
+def slugify(name: str) -> str:
+    return re.sub(r"\W+", "-", name.lower()).strip("-")
+
+
+def feed_weights() -> dict[str, float]:
+    """Map 'rss:<slug>' -> weight for recall scoring (feeds.yaml `weight`)."""
+    return {
+        f"rss:{slugify(f.get('name') or 'feed')}": float(f.get("weight", 1.0))
+        for f in load_feeds()
+    }
+
+
 def fetch() -> list[Posting]:
     postings = []
     for feed in load_feeds():
         parsed = feedparser.parse(feed["url"])
         name = feed.get("name") or parsed.feed.get("title", "feed")
-        slug = re.sub(r"\W+", "-", name.lower()).strip("-")
+        slug = slugify(name)
         for e in parsed.entries[:40]:
             uid = e.get("id") or e.get("link") or e.get("title", "")
             if not uid:

@@ -16,6 +16,10 @@ GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
 GROQ_MODEL = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
 LLM_CALL_GAP_S = float(os.environ.get("LLM_CALL_GAP_S", "5"))  # stay under free-tier RPM
 
+# --- Google Programmable Search (X + LinkedIn posts finding engine) ---
+GOOGLE_CSE_KEY = os.environ.get("GOOGLE_CSE_KEY", "")
+GOOGLE_CSE_ID = os.environ.get("GOOGLE_CSE_ID", "")
+
 # --- Telegram relay ingestion (optional, poor-man's Twitter) ---
 TELETHON_API_ID = os.environ.get("TELETHON_API_ID", "")
 TELETHON_API_HASH = os.environ.get("TELETHON_API_HASH", "")
@@ -33,11 +37,15 @@ MIN_FIT_TO_ALERT = int(os.environ.get("MIN_FIT_TO_ALERT", "70"))
 # Obscurity prior (point 2): popularity is a penalty. Multiplies recall score.
 # Learned calibration eventually dominates; this is only the day-one prior.
 SOURCE_WEIGHTS = {
-    "tg": 1.5,        # relay channels — closest thing to "announced on someone's Twitter"
+    "x": 1.5,          # a post on someone's X IS the obscure channel (point 2)
+    "tg": 1.5,         # relay channels, same tier
+    "linkedin": 1.2,   # linkedin:posts — announcements, not listings
     "hn": 1.2,
-    "rss": 1.0,       # per-feed override in feeds.yaml
+    "web": 1.0,        # CSE hits outside x/linkedin
+    "rss": 1.0,        # per-feed override in feeds.yaml
     "devfolio": 0.9,
     "unstop": 0.9,
+    "linkedin:jobs": 0.7,  # it's a job board — everyone saw it
 }
 
 

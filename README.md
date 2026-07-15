@@ -82,6 +82,20 @@ optional `GROQ_API_KEY`, `TELETHON_API_ID`, `TELETHON_API_HASH`, `TELETHON_SESSI
 Actions tab → *grabber pipeline* → Run workflow (`ingest` first to build the corpus,
 then `nightly` for IDF, then `run`).
 
+### X + LinkedIn finding engine
+Neither platform has a free API (X reads: $200/mo; LinkedIn: none), so grabber uses
+three zero-cost, zero-account-risk paths — tune all of them in `pipeline/searches.yaml`:
+
+| Path | What it finds | Needs |
+|---|---|---|
+| **Google CSE** | Fresh X posts *and* LinkedIn posts matching your queries, via Google's index of both sites | Free key (below) |
+| **Nitter RSS** | Full timelines of specific X accounts you watch | Nothing (instances are flaky; fails soft) |
+| **LinkedIn guest jobs API** | Real job listings by keyword+location, past 3 days | Nothing |
+
+Google CSE setup (5 min, free, 100 queries/day — grabber uses ~24):
+1. [programmablesearchengine.google.com](https://programmablesearchengine.google.com) → create engine → enable **Search the entire web** → copy the engine ID → `GOOGLE_CSE_ID`.
+2. [Custom Search JSON API](https://developers.google.com/custom-search/v1/overview) → get an API key → `GOOGLE_CSE_KEY`.
+
 ### Optional: Telegram relay channels (poor-man's Twitter firehose)
 API creds from [my.telegram.org](https://my.telegram.org), then
 `python pipeline/scripts/make_session.py` → `TELETHON_SESSION` secret.

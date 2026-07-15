@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(node --check worker/src/index.js)",
+      "Bash(git init *)",
+      "Bash(git commit -q -m 'Grabber: zero-cost opportunity agent measured in applications submitted *)",
+      "Bash(gh repo *)",
+      "Bash(gh workflow *)",
+      "Bash(git commit -q -m 'Finding engine: X + LinkedIn via Google CSE, Nitter RSS, LinkedIn guest jobs API *)",
+      "Bash(git push *)"
+    ]
+  }
+}

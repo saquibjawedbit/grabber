@@ -31,6 +31,8 @@ jobs:
           TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
           TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
           GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
+          GOOGLE_CSE_KEY: ${{ secrets.GOOGLE_CSE_KEY }}
+          GOOGLE_CSE_ID: ${{ secrets.GOOGLE_CSE_ID }}
           GROQ_API_KEY: ${{ secrets.GROQ_API_KEY }}
           TELETHON_API_ID: ${{ secrets.TELETHON_API_ID }}
           TELETHON_API_HASH: ${{ secrets.TELETHON_API_HASH }}

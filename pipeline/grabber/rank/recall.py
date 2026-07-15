@@ -5,9 +5,12 @@ from ..db import D1
 from . import idf as idf_mod
 
 
-def source_weight(source: str) -> float:
-    prefix = source.split(":")[0]
-    return config.SOURCE_WEIGHTS.get(prefix, 1.0)
+def source_weight(source: str, rss_weights: dict[str, float]) -> float:
+    if source in rss_weights:                     # per-feed override from feeds.yaml
+        return rss_weights[source]
+    if source in config.SOURCE_WEIGHTS:           # exact match (e.g. "linkedin:jobs")
+        return config.SOURCE_WEIGHTS[source]
+    return config.SOURCE_WEIGHTS.get(source.split(":")[0], 1.0)
 
 
 def run(db: D1, since_iso: str) -> list[dict]:
@@ -26,11 +29,14 @@ def run(db: D1, since_iso: str) -> list[dict]:
         for r in db.query("SELECT term, idf FROM idf WHERE term LIKE 'phrase:%'")
     }
 
+    from ..sources.rss import feed_weights
+    rss_weights = feed_weights()
+
     scored = []
     for r in rows:
         text = f"{r['title']} {r.get('body') or ''}"
         edge, matched = idf_mod.edge_score(text, skills, phrase_idf)
-        score = edge * source_weight(r["source"])
+        score = edge * source_weight(r["source"], rss_weights)
         if score > 0:
             scored.append({**r, "recall_score": score, "matched": matched})
 

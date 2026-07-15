@@ -1,0 +1,31 @@
+# Finding engine for X + LinkedIn (and the open web), all zero-cost.
+
+# Google Programmable Search (needs free GOOGLE_CSE_KEY + GOOGLE_CSE_ID, 100 queries/day).
+# Google indexes X posts and LinkedIn posts — this searches both without touching either platform.
+# `days` restricts to recent results (freshness is the whole point).
+cse:
+  - query: '(site:x.com OR site:twitter.com) (fellowship OR grant OR "applications are open" OR "apply by")'
+    days: 3
+  - query: '(site:x.com OR site:twitter.com) (hackathon OR "hiring" OR "looking for a") (developer OR engineer OR builder)'
+    days: 3
+  - query: 'site:linkedin.com/posts (fellowship OR grant OR hackathon OR "applications open") india'
+    days: 3
+  - query: 'site:linkedin.com/posts ("we are hiring" OR "paid opportunity" OR "freelance") (django OR react OR "browser extension")'
+    days: 3
+
+# Nitter RSS for specific X accounts worth following (the "announced on someone's
+# Twitter" channel). Instances are tried in order; all of them are best-effort.
+x_watch:
+  instances: [nitter.net, nitter.privacyredirect.com, nitter.poast.org]
+  accounts:
+    - devfolio
+    - MLHacks
+    # add founders/orgs whose announcements you never want to miss
+
+# LinkedIn guest jobs API (public, no auth). Keyword+location pairs.
+linkedin_jobs:
+  location: India
+  keywords:
+    - django developer remote
+    - founding engineer
+    - browser extension developer
