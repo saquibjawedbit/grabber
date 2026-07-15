@@ -13,7 +13,9 @@
     --baseline:    #c3c2b7;
     --border:      rgba(11,11,11,0.10);
     --seq:         #2a78d6;           /* single-hue magnitude (bars) */
+    --seq-fill:    rgba(42, 120, 214, 0.13);
     --critical:    #d03b3b;
+    --good:        #0ca30c;
     --cat-identity:   #2a78d6;
     --cat-preference: #008300;
     --cat-skill:      #e87ba4;
@@ -35,6 +37,9 @@
       --baseline:    #383835;
       --border:      rgba(255,255,255,0.10);
       --seq:         #3987e5;
+      --seq-fill:    rgba(57, 135, 229, 0.16);
+      --critical:    #ef6b64;
+      --good:        #3fbf68;
       --cat-identity:   #3987e5;
       --cat-preference: #008300;
       --cat-skill:      #d55181;
@@ -90,6 +95,11 @@
   .bar-wrap { position: relative; height: 16px; }
   .bar { position: absolute; left: 0; top: 1px; height: 14px; background: var(--seq); border-radius: 0 4px 4px 0; min-width: 2px; }
   .bar-v { position: absolute; top: -1px; font-size: 0.75rem; color: var(--ink); font-variant-numeric: tabular-nums; }
+  .spark { display: block; width: 100%; height: 54px; margin-top: 0.3rem; }
+  .lil { font-size: 0.85rem; display: flex; justify-content: space-between; gap: 0.6rem;
+         padding: 0.3rem 0; border-bottom: 1px solid var(--grid); }
+  .lil:last-child { border-bottom: 0; }
+  .lil span { color: var(--ink-2); font-variant-numeric: tabular-nums; white-space: nowrap; }
   .post { padding: 0.45rem 0; border-bottom: 1px solid var(--grid); font-size: 0.88rem; }
   .post:last-child { border-bottom: 0; }
   .post a { color: inherit; text-decoration: none; }
@@ -128,6 +138,11 @@
     <h2>Knowledge graph</h2>
     <canvas id="graph"></canvas>
     <div class="legend" id="legend"></div>
+  </div>
+
+  <div class="card" id="life">
+    <h2>Life</h2>
+    <div id="life-body"></div>
   </div>
 
   <div class="cols">
@@ -260,6 +275,74 @@ function renderSummary(s) {
 
 const money = n => "₹" + Math.round(n).toLocaleString("en-IN");
 
+function sparkline(points, w = 300, h = 54) {
+  if (points.length < 2) return "";
+  const vals = points.map(p => p.value);
+  const lo = Math.min(...vals), hi = Math.max(...vals);
+  const span = hi - lo || 1;
+  const x = i => (i / (points.length - 1)) * w;
+  const y = v => h - 6 - ((v - lo) / span) * (h - 14);
+  const line = points.map((p, i) => `${x(i).toFixed(1)},${y(p.value).toFixed(1)}`).join(" L");
+  const last = points[points.length - 1];
+  return `<svg class="spark" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" role="img"
+      aria-label="trend from ${vals[0]} to ${last.value}">
+    <path d="M${line} L${w},${h} L0,${h} Z" fill="var(--seq-fill)"></path>
+    <path d="M${line}" fill="none" stroke="var(--seq)" stroke-width="2"
+          vector-effect="non-scaling-stroke"></path>
+    <circle cx="${x(points.length - 1).toFixed(1)}" cy="${y(last.value).toFixed(1)}" r="3" fill="var(--seq)"></circle>
+  </svg>`;
+}
+
+function renderLife(l) {
+  if (!l) return;
+  const cash = l.accounts.filter(a => a.kind !== "card").reduce((s, a) => s + (a.balance || 0), 0);
+  const cardDebt = l.accounts.filter(a => a.kind === "card").reduce((s, a) => s + Math.abs(a.balance || 0), 0);
+  const assets = l.holdings.filter(h => h.kind === "asset").reduce((s, h) => s + h.value, 0);
+  const owed = cardDebt + l.holdings.filter(h => h.kind === "liability").reduce((s, h) => s + h.value, 0);
+  const net = cash + assets - owed;
+  const nothing = !l.accounts.length && !l.holdings.length && !l.tx_count && !l.weight.length && !l.cold_threads.length;
+  if (nothing) {
+    $("life-body").innerHTML = `<div class="empty">Nothing on file yet. Tell the bot what you have — "my HDFC account has 96400", "71.2 today", "met Ankit, he's a recruiter at Rippling" — and it shows up here.</div>`;
+    return;
+  }
+
+  const spendTotal = l.spend_30d.reduce((s, c) => s + c.total, 0);
+  const maxCat = Math.max(1, ...l.spend_30d.map(c => c.total));
+  const weightPts = l.weight.map(w => ({ value: w.value, at: w.at }));
+  const wDelta = weightPts.length > 1
+    ? Math.round((weightPts[weightPts.length - 1].value - weightPts[0].value) * 10) / 10 : null;
+
+  $("life-body").innerHTML = `
+    <div class="tiles" style="margin-bottom:1rem">
+      <div class="tile"><div class="v">${(l.accounts.length || l.holdings.length) ? money(net) : "—"}</div>
+        <div class="k">Net worth</div></div>
+      <div class="tile"><div class="v">${spendTotal ? money(spendTotal) : "—"}</div>
+        <div class="k">Spent · 30 days</div></div>
+      <div class="tile"><div class="v">${weightPts.length ? weightPts[weightPts.length - 1].value : "—"}${weightPts.length ? '<span style="font-size:.75rem"> kg</span>' : ""}</div>
+        <div class="k">Weight${wDelta != null ? ` · ${wDelta > 0 ? "▲" : "▼"} ${Math.abs(wDelta)}` : ""}</div></div>
+      <div class="tile"><div class="v">${l.cold_threads.length || "—"}</div>
+        <div class="k">Cold threads</div></div>
+    </div>
+    <div class="cols">
+      <div>
+        ${l.spend_30d.length ? `<div class="meta">Where it went · 30 days</div>` + l.spend_30d.map(c => {
+          const pct = Math.max(2, (c.total / maxCat) * 80);
+          return `<div class="bar-row"><span class="lbl">${esc(c.category || "other")}</span>
+            <span class="bar-wrap"><span class="bar" style="width:${pct}%"></span>
+            <span class="bar-v" style="left:calc(${pct}% + 7px)">${money(c.total)}</span></span></div>`;
+        }).join("") : `<div class="empty">No spending recorded yet.</div>`}
+        ${weightPts.length > 1 ? `<div class="meta" style="margin-top:.9rem">Weight</div>${sparkline(weightPts)}` : ""}
+      </div>
+      <div>
+        ${(l.accounts.length || l.holdings.length) ? `<div class="meta">Position</div>` +
+          [...l.accounts.map(a => `<div class="lil">${esc(a.name)} <span>${money(a.balance)}</span></div>`),
+           ...l.holdings.map(h => `<div class="lil">${esc(h.name)} <span style="color:${h.kind === "liability" ? "var(--critical)" : "inherit"}">${h.kind === "liability" ? "−" : ""}${money(h.value)}</span></div>`)].join("") : ""}
+        ${l.cold_threads.length ? `<div class="meta" style="margin-top:.9rem">Going cold</div>` +
+          l.cold_threads.map(p => `<div class="lil">${esc(p.name)}${p.next_step ? ` — <i>${esc(p.next_step)}</i>` : ""} <span>${p.days_quiet}d</span></div>`).join("") : ""}
+      </div>
+    </div>`;
+}
+
 function renderSenses(s) {
   if (!s) return;
   const dot = ok => `<span class="chip" style="--c:${ok ? "var(--good)" : "var(--muted)"}">${ok ? "on" : "off"}</span>`;
@@ -287,7 +370,8 @@ function renderSenses(s) {
           ? `<b style="color:${n.direction === "credit" ? "var(--good)" : "var(--critical)"}">${n.direction === "credit" ? "+" : "−"}${money(n.amount)}</b> `
           : "";
         return `<div class="rem"><span class="when">${IST.format(Date.parse(n.received_at))}</span>
-          <span>${amt}${esc(n.counterparty || n.title || n.app)}<span class="id">${esc(n.app)}</span></span></div>`;
+          <span>${amt}${esc(n.counterparty || n.title || n.app)}
+            <span class="meta" style="margin-left:.45rem">via ${esc(n.app)}</span></span></div>`;
       }).join(""));
   }
   $("senses-list").innerHTML = parts.join("") ||
@@ -527,6 +611,7 @@ async function boot() {
     renderMemories(brain.memories);
     renderDocs(brain.documents);
     renderSummary(brain.summary);
+    renderLife(brain.life);
     renderSenses(brain.senses);
     renderResearch(brain.research);
     renderWatchers(brain.watchers);

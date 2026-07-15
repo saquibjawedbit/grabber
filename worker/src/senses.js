@@ -4,7 +4,7 @@
 // allowlisted apps are ever written down. Everything else is dropped in memory and
 // never reaches the database — your chats are not the agent's business.
 
-import { llm } from "./agent.js";
+import { llm } from "./llm.js";
 
 // ---------- Phone notifications ----------
 

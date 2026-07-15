@@ -4,6 +4,7 @@
 import { embedMemory, rememberExchange, runAgent, TOOLS } from "./agent.js";
 import { runWatchers } from "./watch.js";
 import { googleConnected, ingestNotification, pollCalendar, pollGmail, remindEvents, surfaceEmail } from "./senses.js";
+import { processBankNotifications } from "./life.js";
 
 const TG = (env, method) => `https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/${method}`;
 
@@ -492,6 +493,21 @@ async function handleApi(url, env) {
         SELECT title, source, url, deadline, ingested_at FROM postings
         ORDER BY ingested_at DESC LIMIT 12`).all(),
     ]);
+    const [accounts, holdings, spend, weight, cold, txCount] = await Promise.all([
+      env.DB.prepare("SELECT name, kind, balance FROM accounts ORDER BY balance DESC").all(),
+      env.DB.prepare("SELECT name, kind, category, value FROM holdings ORDER BY value DESC").all(),
+      env.DB.prepare(`SELECT category, ROUND(SUM(amount)) AS total FROM transactions
+                      WHERE direction = 'debit' AND datetime(at) >= datetime('now', '-30 days')
+                      GROUP BY category ORDER BY total DESC`).all(),
+      env.DB.prepare(`SELECT value, at FROM health WHERE metric = 'weight' AND value IS NOT NULL
+                      AND datetime(at) >= datetime('now', '-120 days') ORDER BY at`).all(),
+      env.DB.prepare(`SELECT name, relation, next_step, last_contact,
+                             CAST(julianday('now') - julianday(COALESCE(last_contact, created_at)) AS INTEGER) AS days_quiet
+                      FROM people WHERE status != 'closed'
+                        AND julianday('now') - julianday(COALESCE(last_contact, created_at)) >= 10
+                      ORDER BY days_quiet DESC LIMIT 8`).all(),
+      env.DB.prepare("SELECT COUNT(*) AS n FROM transactions").first(),
+    ]);
     const [notifications, events, mails, allow] = await Promise.all([
       env.DB.prepare(`SELECT app, title, body, kind, amount, direction, counterparty, received_at
                       FROM notifications ORDER BY id DESC LIMIT 20`).all(),
@@ -517,6 +533,14 @@ async function handleApi(url, env) {
       recent: recent.results,
       watchers: watchers.results,
       research: research.results.map(r => ({ ...r, sources: r.sources ? JSON.parse(r.sources) : [] })),
+      life: {
+        accounts: accounts.results,
+        holdings: holdings.results,
+        spend_30d: spend.results,
+        weight: weight.results,
+        cold_threads: cold.results,
+        tx_count: txCount.n,
+      },
       senses: {
         google_connected: googleConnected(env),
         notify_wired: Boolean(env.NOTIFY_SECRET),
@@ -551,8 +575,10 @@ async function handleApi(url, env) {
     // Manual trigger for testing — same work as the hourly cron.
     await runReminders(env);
     await runNags(env);
+    const money = await processBankNotifications(env);
+    const senses = url.searchParams.get("senses") === "1" ? await runSenses(env) : "skipped";
     const watch = url.searchParams.get("watch") === "1" ? await runWatchers(env, tg) : "skipped";
-    return Response.json({ ok: true, watch });
+    return Response.json({ ok: true, money, senses, watch });
   }
   if (url.pathname === "/api/stats") {
     const { results } = await env.DB.prepare("SELECT * FROM calibration").all();
@@ -600,7 +626,11 @@ export default {
     await runReminders(env);
     await runNags(env); // idempotent: nag_level gates each escalation to once
     // One sense failing must never stop the others.
-    for (const [name, fn] of [["senses", runSenses], ["watchers", e => runWatchers(e, tg)]]) {
+    for (const [name, fn] of [
+      ["senses", runSenses],
+      ["money", processBankNotifications],   // bank alerts Phase 4 filed -> transactions
+      ["watchers", e => runWatchers(e, tg)],
+    ]) {
       try {
         await fn(env);
       } catch (e) {

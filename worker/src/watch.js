@@ -6,7 +6,7 @@
 // Flow per hit: store -> cheap recall score (edge over IDF, point 5 stage 1) ->
 // LLM reads survivors -> draft -> alert if it clears the bar and the budget holds.
 
-import { llm } from "./agent.js";
+import { llm } from "./llm.js";
 
 const MAX_ALERTS_PER_DAY = 2;   // point 7: silence is the product
 const MIN_FIT_TO_ALERT = 70;

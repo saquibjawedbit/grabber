@@ -1,62 +1,14 @@
-// Conversational core: a tool-calling agent loop on Workers AI gpt-oss-120b.
-// The model speaks a strict JSON protocol ({"tool": ...} or {"reply": ...}) — more
-// portable than native function calling and easy to parse defensively.
-//
-// Context management: every prompt carries the owner's bio, categorized memories,
-// a rolling summary of ALL past conversation, and the recent exchanges verbatim.
-// Old chat is compacted into the summary, never dropped.
+import { LIFE_TOOLS } from "./life.js";
+import { extractJson, llm } from "./llm.js";
 
-const MODEL = "@cf/openai/gpt-oss-120b";
+export { llm };
+
 const EMBED_MODEL = "@cf/baai/bge-small-en-v1.5";  // 384-dim, plenty for short facts
 const MAX_STEPS = 8;
 const HISTORY_ACTIVE = 24;      // recent chat_history rows kept verbatim in the prompt
 const HISTORY_COMPACT_AT = 48;  // beyond this, oldest rows fold into the rolling summary
 const HISTORY_HARD_CAP = 140;   // safety valve if summarization keeps failing
 const RECALL_K = 14;            // memories retrieved per turn (v3: by meaning, not all of them)
-
-export async function llm(env, prompt) {
-  for (let attempt = 0; attempt < 2; attempt++) {
-    const res = await env.AI.run(MODEL, { input: prompt });
-    const out = res.output || [];
-    const msg = out.find(o => o.type === "message");
-    const text = msg?.content?.find(c => c.type === "output_text")?.text ?? "";
-    if (text.trim()) return { text, salvaged: false };
-    // gpt-oss sometimes stops inside its reasoning channel without emitting a
-    // final message — the decided JSON may be sitting right there. Salvage it,
-    // but flag it so the caller never ships raw reasoning prose to the owner.
-    const salvage = out.filter(o => o.type === "reasoning")
-      .flatMap(o => o.content || []).map(c => c.text || "").join("\n");
-    console.log("llm: no message channel, salvaged:", salvage.slice(0, 200));
-    if (salvage.trim()) return { text: salvage, salvaged: true };
-  }
-  return { text: "", salvaged: true };
-}
-
-function extractJson(text) {
-  // Scan for the last balanced {...} block — reasoning prose may contain
-  // several brace fragments before the real decision.
-  const candidates = [];
-  for (let i = 0; i < text.length; i++) {
-    if (text[i] !== "{") continue;
-    let depth = 0, inStr = false, escaped = false;
-    for (let j = i; j < text.length; j++) {
-      const ch = text[j];
-      if (escaped) { escaped = false; continue; }
-      if (ch === "\\") { escaped = true; continue; }
-      if (ch === '"') inStr = !inStr;
-      if (inStr) continue;
-      if (ch === "{") depth++;
-      if (ch === "}" && --depth === 0) { candidates.push(text.slice(i, j + 1)); i = j; break; }
-    }
-  }
-  for (const c of candidates.reverse()) {
-    try {
-      const obj = JSON.parse(c);
-      if (obj && (obj.reply || obj.tool)) return obj;
-    } catch { /* keep scanning */ }
-  }
-  return null;
-}
 
 // ---------- Memory v3: vectors packed as base64 Float32, normalised at write time
 // so recall is a dot product. JSON arrays would blow the Worker's CPU budget. ----------
@@ -560,7 +512,33 @@ export const TOOLS = {
       return { jobs: results };
     },
   },
+
+  ...LIFE_TOOLS,
 };
+
+// The tool list is long enough now that a flat dump reads as noise. Group it so the
+// model can find the right shelf before the right tool.
+const TOOL_GROUPS = {
+  search_corpus: "Opportunities", corpus_overview: "Opportunities", get_pending: "Opportunities",
+  get_stats: "Opportunities", get_draft: "Opportunities", redraft: "Opportunities",
+  add_watcher: "Opportunities", list_watchers: "Opportunities", remove_watcher: "Opportunities",
+  web_search: "Web & research", web_fetch: "Web & research",
+  spawn_research: "Web & research", get_research: "Web & research",
+  save_memory: "Memory", forget_memory: "Memory", read_profile: "Memory",
+  set_reminder: "Reminders", list_reminders: "Reminders", cancel_reminder: "Reminders",
+  get_calendar: "Senses", search_email: "Senses", search_notifications: "Senses",
+  watch_app: "Senses",
+};
+
+function toolList() {
+  const groups = {};
+  for (const [name, t] of Object.entries(TOOLS)) {
+    const g = t.group || TOOL_GROUPS[name] || "Other";
+    (groups[g] ||= []).push(`- ${name}: ${t.desc}`);
+  }
+  return Object.entries(groups)
+    .map(([g, lines]) => `### ${g}\n${lines.join("\n")}`).join("\n");
+}
 
 // ---------- Prompt assembly ----------
 
@@ -603,7 +581,7 @@ function localNow() {
 }
 
 function buildPrompt(ctx, userText, transcript, mustReply) {
-  const toolList = Object.entries(TOOLS).map(([n, t]) => `- ${n}: ${t.desc}`).join("\n");
+  const tools = toolList();
   const nowUtc = new Date().toISOString().slice(0, 16) + "Z";
   const local = localNow();
   return `You are Intelly, the personal AI agent of exactly one owner, living in their Telegram. You handle anything they need: answer questions, research the web, track their applications, set reminders, remember their life. Your standing mission behind it all: find, research, and win opportunities (jobs, internships, hackathons, fellowships, grants, contracts) for them. Be concise and direct — short paragraphs, no corporate fluff, no markdown headers.
@@ -625,7 +603,7 @@ ${ctx.summary || "(none yet)"}
 ${ctx.history || "(none)"}
 
 ## Tools
-${toolList}
+${tools}
 
 ## Rules
 - When the owner states a fact, preference, or constraint about themselves, call save_memory with the right category BEFORE doing anything else. Never rely on chat history to retain it.
@@ -636,6 +614,10 @@ ${toolList}
 - Quick lookup vs deep dig: web_search/web_fetch answer in seconds and you reply now. spawn_research is for questions worth 10 minutes of an agent's time (interview processes, background on a person or company, "should I do X"). After spawning, reply immediately saying it's running — never wait for it.
 - You have no scraper. Opportunities reach you only through channels the owner asked you to watch, so when they mention someone or something worth following, offer to add_watcher it.
 - You have senses: their calendar, recruiter mail, and allowlisted phone notifications. Check them before asking the owner something you could look up (get_calendar, search_email, search_notifications).
+- You hold their money, body and people. Look things up rather than asking — but never invent a number. If nothing is on file, say so and offer to record it.
+- When the owner states a balance, an investment, a debt, a weight, or a detail about a person, PERSIST it first (set_account, set_holding, log_health, remember_person, log_transaction) and only then reply. Doing the arithmetic in your head and moving on loses the data forever.
+- NEVER say you saved, recorded, scheduled or watched something unless a tool call actually returned ok. If you only worked it out in your head, say exactly that. A false "I've recorded it" is worse than admitting you didn't.
+- When they mention a person by name, log_interaction. Relationships go cold through inattention, not intent, and you are the one keeping count.
 
 ## Protocol
 Respond with EXACTLY ONE JSON object and nothing else:
