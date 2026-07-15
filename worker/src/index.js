@@ -1,7 +1,7 @@
 // Grabber edge worker: conversational agent, Telegram webhook (taps -> labels),
 // deadline nags, dashboard API.
 
-import { rememberExchange, runAgent } from "./agent.js";
+import { rememberExchange, runAgent, TOOLS } from "./agent.js";
 
 const TG = (env, method) => `https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/${method}`;
 
@@ -16,7 +16,9 @@ async function tg(env, method, body) {
 
 // ---------- Bot commands: the tracker you can talk to ----------
 
-const HELP = `Just talk to me — "any AI hackathons this week?", "what should I apply to?", "make that essay more technical", "remember I only want remote work".
+const HELP = `Just talk to me — "any AI hackathons this week?", "what's new in the Workers AI pricing?", "remind me Friday 6pm to follow up", "remember I only want remote work".
+
+You can also send me any text/markdown file (resume, bio, notes) and I'll keep it in your profile and use it in everything I do.
 
 Commands if you prefer them:
 /stats — applications, win rates, corpus size
@@ -100,9 +102,16 @@ async function cmdApplied(env) {
 
 async function cmdMemories(env) {
   const { results } = await env.DB.prepare(
-    "SELECT id, fact FROM memories ORDER BY id DESC LIMIT 30").all();
-  if (!results.length) return "Nothing saved yet. Tell me things worth remembering — preferences, skills, constraints.";
-  return `🧠 <b>What I know about you</b>\n\n${results.map(m => `• ${esc(m.fact)}`).join("\n")}`;
+    "SELECT id, category, fact FROM memories ORDER BY category, id DESC LIMIT 60").all();
+  const docs = await env.DB.prepare(
+    "SELECT key FROM profile WHERE key != 'conversation_summary' ORDER BY key LIMIT 20").all();
+  if (!results.length && !docs.results.length) {
+    return "Nothing saved yet. Tell me things worth remembering — preferences, skills, constraints — or send me a file.";
+  }
+  const memLines = results.map(m => `• <i>#${m.id} ${esc(m.category)}</i> — ${esc(m.fact)}`).join("\n");
+  const docLine = docs.results.length
+    ? `\n\n📄 <b>Profile documents:</b> ${docs.results.map(d => esc(d.key)).join(", ")}` : "";
+  return `🧠 <b>What I know about you</b>\n\n${memLines || "(no memories yet)"}${docLine}\n\nSay "forget #id" to remove one.`;
 }
 
 function isOwner(chatId, env) {
@@ -150,6 +159,39 @@ async function converse(env, chatId, text, placeholderId) {
   if (r.ok && !reply.startsWith("⚠️")) await rememberExchange(env, text, reply);
 }
 
+// ---------- File uploads: "knows everything about me" — any text file becomes profile corpus ----------
+
+const TEXT_EXT = /\.(md|txt|markdown|yaml|yml|json|csv|tex|rst)$/i;
+
+async function ingestDocument(env, chatId, doc) {
+  const name = doc.file_name || "untitled.txt";
+  let reply;
+  if ((doc.file_size || 0) > 300_000) {
+    reply = "That file is over 300KB — send a trimmed text version and I'll keep it.";
+  } else if (!TEXT_EXT.test(name) && !(doc.mime_type || "").startsWith("text/")) {
+    reply = `I can only read text for now (.md, .txt, .yaml, .json…). For a PDF resume, export or paste it as text/markdown and send that.`;
+  } else {
+    const fi = await tg(env, "getFile", { file_id: doc.file_id });
+    const path = fi.result?.file_path;
+    if (!path) {
+      reply = "Telegram wouldn't hand me that file — try sending it again.";
+    } else {
+      const r = await fetch(`https://api.telegram.org/file/bot${env.TELEGRAM_BOT_TOKEN}/${path}`);
+      const content = (await r.text()).slice(0, 200_000);
+      const base = name.toLowerCase().replace(/\.[^.]+$/, "");
+      // resume.md / bio.md land on the canonical keys the ranker + agent already read.
+      const key = ["resume", "bio", "skills"].includes(base)
+        ? base : `doc:${base.replace(/[^a-z0-9._-]+/g, "-")}`;
+      await env.DB.prepare(`
+        INSERT INTO profile (key, content, updated_at) VALUES (?, ?, ?)
+        ON CONFLICT(key) DO UPDATE SET content = excluded.content, updated_at = excluded.updated_at`)
+        .bind(key, content, new Date().toISOString()).run();
+      reply = `📄 Saved as <b>${esc(key)}</b> (${content.length} chars). I'll use it in everything — rankings, drafts, and our chats.`;
+    }
+  }
+  await tg(env, "sendMessage", { chat_id: chatId, text: reply, parse_mode: "HTML" });
+}
+
 // ---------- Telegram webhook: every tap is a label (point 4) ----------
 
 async function handleTelegram(request, env, ctx) {
@@ -161,6 +203,11 @@ async function handleTelegram(request, env, ctx) {
   const msg = update.message;
   if (msg?.text?.startsWith("/")) {
     await handleCommand(msg.text, msg.chat.id, env);
+    return new Response("ok");
+  }
+  if (msg?.document) {
+    if (!isOwner(msg.chat.id, env)) return new Response("ok");
+    await ingestDocument(env, msg.chat.id, msg.document);
     return new Response("ok");
   }
   if (msg?.text) {
@@ -180,6 +227,15 @@ async function handleTelegram(request, env, ctx) {
   if (!cb) return new Response("ok");
 
   const [tag, alertId, action] = (cb.data || "").split(":");
+  if (tag === "r" && alertId) {
+    await env.DB.prepare("UPDATE reminders SET done = 1 WHERE id = ?").bind(Number(alertId)).run();
+    await tg(env, "editMessageReplyMarkup", {
+      chat_id: cb.message.chat.id, message_id: cb.message.message_id,
+      reply_markup: { inline_keyboard: [] },
+    });
+    await tg(env, "answerCallbackQuery", { callback_query_id: cb.id, text: "Done ✅" });
+    return new Response("ok");
+  }
   if (tag !== "a" || !alertId || !action) {
     await tg(env, "answerCallbackQuery", { callback_query_id: cb.id });
     return new Response("ok");
@@ -251,6 +307,23 @@ async function runNags(env) {
   }
 }
 
+// ---------- Reminders: general-agent capability, fired by the hourly cron ----------
+
+async function runReminders(env) {
+  const { results } = await env.DB.prepare(`
+    SELECT id, text FROM reminders
+    WHERE done = 0 AND notified = 0 AND datetime(due_at) <= datetime('now')
+    ORDER BY due_at LIMIT 20`).all();
+  for (const r of results) {
+    await tg(env, "sendMessage", {
+      chat_id: env.TELEGRAM_CHAT_ID,
+      text: `⏰ Reminder: ${r.text}`,
+      reply_markup: { inline_keyboard: [[{ text: "✅ Done", callback_data: `r:${r.id}:done` }]] },
+    });
+    await env.DB.prepare("UPDATE reminders SET notified = 1 WHERE id = ?").bind(r.id).run();
+  }
+}
+
 // ---------- Dashboard API ----------
 
 async function handleApi(url, env) {
@@ -269,6 +342,24 @@ async function handleApi(url, env) {
       WHERE a.sent_at IS NOT NULL
       ORDER BY a.sent_at DESC LIMIT 100`).all();
     return Response.json(results);
+  }
+  if (url.pathname === "/api/tool") {
+    // Debug: run one agent tool directly. /api/tool?t=TOKEN&name=web_search&args={"query":"..."}
+    const tool = TOOLS[url.searchParams.get("name")];
+    if (!tool) return Response.json({ error: "unknown tool" }, { status: 404 });
+    let args = {};
+    try { args = JSON.parse(url.searchParams.get("args") || "{}"); } catch { /* empty */ }
+    try {
+      return Response.json(await tool.run(env, args));
+    } catch (e) {
+      return Response.json({ error: String(e) });
+    }
+  }
+  if (url.pathname === "/api/cron") {
+    // Manual trigger for testing — same work as the hourly cron.
+    await runReminders(env);
+    await runNags(env);
+    return Response.json({ ok: true });
   }
   if (url.pathname === "/api/stats") {
     const { results } = await env.DB.prepare("SELECT * FROM calibration").all();
@@ -295,6 +386,7 @@ export default {
     return env.ASSETS.fetch(request);
   },
   async scheduled(_event, env) {
-    await runNags(env);
+    await runReminders(env);
+    await runNags(env); // idempotent: nag_level gates each escalation to once
   },
 };

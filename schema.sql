@@ -73,14 +73,27 @@ CREATE TABLE IF NOT EXISTS calibration (
 CREATE TABLE IF NOT EXISTS memories (
   id         INTEGER PRIMARY KEY AUTOINCREMENT,
   fact       TEXT NOT NULL,
+  category   TEXT DEFAULT 'fact',      -- identity | preference | skill | goal | project | contact | fact
   created_at TEXT NOT NULL
 );
 
+-- Old chat beyond the active window is folded into a rolling summary
+-- (profile key 'conversation_summary') instead of being deleted.
 CREATE TABLE IF NOT EXISTS chat_history (
   id      INTEGER PRIMARY KEY AUTOINCREMENT,
   role    TEXT NOT NULL,               -- user | assistant
   content TEXT NOT NULL,
   at      TEXT NOT NULL
+);
+
+-- General-agent reminders ("remind me Thursday to follow up"), fired by the hourly cron.
+CREATE TABLE IF NOT EXISTS reminders (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  text       TEXT NOT NULL,
+  due_at     TEXT NOT NULL,            -- UTC ISO
+  created_at TEXT NOT NULL,
+  notified   INTEGER NOT NULL DEFAULT 0,
+  done       INTEGER NOT NULL DEFAULT 0
 );
 
 CREATE INDEX IF NOT EXISTS idx_postings_ingested ON postings(ingested_at);

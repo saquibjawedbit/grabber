@@ -6,6 +6,11 @@ compatibility_date = "2026-01-01"
 directory = "public"
 binding = "ASSETS"
 
+[vars]
+# Google Programmable Search engine id (public). Pair with `wrangler secret put
+# GOOGLE_CSE_KEY` to give web_search its primary backend (free 100 queries/day).
+GOOGLE_CSE_ID = "271772a3accdf45e5"
+
 # Workers AI: powers the conversational agent (gpt-oss-120b, free neurons).
 [ai]
 binding = "AI"
@@ -15,9 +20,9 @@ binding = "DB"
 database_name = "grabber"
 database_id = "f3e409f6-bac3-4606-8f3b-0737b57a5660"
 
-# Deadline nags, twice a day (point 6: most losses are inaction).
+# Hourly: reminders fire on the hour; deadline nags escalate at most once per level.
 [triggers]
-crons = ["30 3 * * *", "30 12 * * *"]
+crons = ["0 * * * *"]
 
 # Secrets (set with `wrangler secret put <NAME>`):
 #   TELEGRAM_BOT_TOKEN   — same bot as the pipeline
