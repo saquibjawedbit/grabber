@@ -1,0 +1,4 @@
+[     607ms] [VERBOSE] [DOM] Password field is not contained in a form: (More info: https://goo.gl/9p2vKq) %o @ https://grabber.saquibjawed.workers.dev/:0
+[     634ms] [ERROR] Failed to load resource: the server responded with a status of 403 () @ https://grabber.saquibjawed.workers.dev/api/brain?t=c68a341d0bf3f55d3ec7fbe78f1aaa2d2c6a5f8763dc9686:0
+[     719ms] [ERROR] Failed to load resource: the server responded with a status of 403 () @ https://grabber.saquibjawed.workers.dev/api/alerts?t=c68a341d0bf3f55d3ec7fbe78f1aaa2d2c6a5f8763dc9686:0
+[     719ms] [ERROR] Failed to load resource: the server responded with a status of 404 () @ https://grabber.saquibjawed.workers.dev/favicon.ico:0

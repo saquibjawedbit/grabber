@@ -171,6 +171,6 @@ TOOL_SPECS = json.dumps([
      "does": "read a page as text (set render true for JS-heavy sites); handles PDFs"},
     {"tool": "search_videos", "args": {"query": "..."}, "does": "find talks/interviews on YouTube"},
     {"tool": "watch", "args": {"url": "youtube url or id"}, "does": "read a video's transcript"},
-    {"tool": "done", "args": {"report": "markdown", "confidence": "high|medium|low"},
-     "does": "finish and hand back the report"},
+    {"tool": "done", "args": {"confidence": "high|medium|low"},
+     "does": "stop gathering — you'll write the report in a separate step, so do NOT put it here"},
 ], indent=None)
