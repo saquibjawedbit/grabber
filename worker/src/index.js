@@ -1,7 +1,8 @@
 // Grabber edge worker: conversational agent, Telegram webhook (taps -> labels),
 // deadline nags, dashboard API.
 
-import { rememberExchange, runAgent, TOOLS } from "./agent.js";
+import { embedMemory, rememberExchange, runAgent, TOOLS } from "./agent.js";
+import { runWatchers } from "./watch.js";
 
 const TG = (env, method) => `https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/${method}`;
 
@@ -16,15 +17,21 @@ async function tg(env, method, body) {
 
 // ---------- Bot commands: the tracker you can talk to ----------
 
-const HELP = `Just talk to me — "any AI hackathons this week?", "what's new in the Workers AI pricing?", "remind me Friday 6pm to follow up", "remember I only want remote work".
+const HELP = `Just talk to me. Some things worth knowing I can do:
 
-You can also send me any text/markdown file (resume, bio, notes) and I'll keep it in your profile and use it in everything I do.
+• <b>Dig properly</b> — "what does Zepto ask in SDE interviews? go deep" spawns a research agent on a real machine. It browses, reads, and watches talks for ~10 min, then pings you.
+• <b>Watch a channel</b> — "watch @kunalb11 for hiring posts". I only interrupt you if something clears the bar.
+• <b>Remember you</b> — tell me anything about yourself; I recall what's relevant when it matters.
+• <b>Reminders</b> — "remind me Friday 6pm to follow up with Ankit".
+• Send me any text/markdown file (resume, bio, notes) and I'll use it in everything.
 
-Commands if you prefer them:
-/stats — applications, win rates, corpus size
-/pending — alerted but not yet applied, by deadline
-/applied — everything you applied to, with status
-/memories — what I've saved about you
+Commands:
+/watchers — what I'm watching
+/research — recent deep dives
+/stats — applications, win rates, corpus
+/pending — alerted, not yet applied
+/applied — everything you applied to
+/memories — what I know about you
 /help — this message`;
 
 const esc = s => String(s ?? "").replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
@@ -114,6 +121,33 @@ async function cmdMemories(env) {
   return `🧠 <b>What I know about you</b>\n\n${memLines || "(no memories yet)"}${docLine}\n\nSay "forget #id" to remove one.`;
 }
 
+async function cmdWatchers(env) {
+  const { results } = await env.DB.prepare(
+    "SELECT id, kind, target, note, last_checked, last_error, hits FROM watchers WHERE active = 1 ORDER BY id").all();
+  if (!results.length) {
+    return "👀 Watching nothing yet.\n\nThere's no scraper anymore — I only look where you point me. Try: <i>\"watch @kunalb11 for hiring posts\"</i> or <i>\"watch the Devfolio blog feed\"</i>.";
+  }
+  const lines = results.map(w => {
+    const label = w.kind === "x" ? "@" + w.target : w.target.slice(0, 50);
+    const status = w.last_error ? `⚠️ ${esc(w.last_error.slice(0, 40))}`
+      : w.last_checked ? `checked ${esc(w.last_checked.slice(5, 16).replace("T", " "))}` : "not checked yet";
+    return `• <b>${esc(label)}</b> <i>(${esc(w.kind)})</i> — ${w.hits} seen · ${status}\n  <i>${esc(w.note || "")}</i> <code>#${w.id}</code>`;
+  });
+  return `👀 <b>Watching ${results.length}</b>\n\n${lines.join("\n")}\n\nSay "stop watching #id" to remove one.`;
+}
+
+async function cmdResearch(env) {
+  const { results } = await env.DB.prepare(
+    "SELECT id, question, status, created_at, finished_at FROM research ORDER BY id DESC LIMIT 8").all();
+  if (!results.length) {
+    return "🔍 No deep dives yet.\n\nAsk me something that deserves real digging — <i>\"what does Zepto ask in SDE interviews? go deep\"</i> — and I'll put an agent on it for ten minutes.";
+  }
+  const icon = { done: "✅", running: "◐", queued: "◌", failed: "⚠️" };
+  const lines = results.map(r =>
+    `${icon[r.status] || "·"} <b>${esc(r.question.slice(0, 70))}</b>\n  <i>${esc(r.status)}</i> <code>#${r.id}</code>`);
+  return `🔍 <b>Research</b>\n\n${lines.join("\n")}\n\nSay "show me research #id" for the full report.`;
+}
+
 function isOwner(chatId, env) {
   return String(chatId) === String(env.TELEGRAM_CHAT_ID);
 }
@@ -128,6 +162,8 @@ async function handleCommand(text, chatId, env) {
   else if (cmd === "/pending") reply = await cmdPending(env);
   else if (cmd === "/applied") reply = await cmdApplied(env);
   else if (cmd === "/memories") reply = await cmdMemories(env);
+  else if (cmd === "/watchers") reply = await cmdWatchers(env);
+  else if (cmd === "/research") reply = await cmdResearch(env);
   else reply = `Unknown command.\n\n${esc(HELP)}`;
   await tg(env, "sendMessage", {
     chat_id: chatId, text: reply, parse_mode: "HTML", disable_web_page_preview: true,
@@ -355,6 +391,8 @@ async function handleApi(url, env) {
         SELECT
           (SELECT COUNT(*) FROM postings) AS corpus,
           (SELECT COUNT(*) FROM memories) AS memories,
+          (SELECT COUNT(*) FROM watchers WHERE active = 1) AS watchers,
+          (SELECT COUNT(*) FROM research WHERE status = 'done') AS research,
           (SELECT COUNT(*) FROM reminders WHERE done = 0) AS reminders,
           (SELECT COUNT(*) FROM alerts WHERE sent_at IS NOT NULL) AS alerted,
           (SELECT COUNT(DISTINCT alert_id) FROM outcomes WHERE action = 'applied') AS applied,
@@ -364,6 +402,12 @@ async function handleApi(url, env) {
         SELECT title, source, url, deadline, ingested_at FROM postings
         ORDER BY ingested_at DESC LIMIT 12`).all(),
     ]);
+    const [watchers, research] = await Promise.all([
+      env.DB.prepare("SELECT id, kind, target, note, last_checked, last_error, hits, active FROM watchers ORDER BY id").all(),
+      env.DB.prepare(`SELECT id, question, depth, status, sources, steps, created_at, finished_at,
+                             error, substr(report_md, 1, 4000) AS report_md
+                      FROM research ORDER BY id DESC LIMIT 20`).all(),
+    ]);
     return Response.json({
       memories: mem.results,
       reminders: rem.results,
@@ -372,7 +416,17 @@ async function handleApi(url, env) {
       by_source: bySource.results,
       totals,
       recent: recent.results,
+      watchers: watchers.results,
+      research: research.results.map(r => ({ ...r, sources: r.sources ? JSON.parse(r.sources) : [] })),
     });
+  }
+  if (url.pathname === "/api/embed-backfill") {
+    // One-shot: give memories saved before v3 their vectors.
+    const { results } = await env.DB.prepare(
+      "SELECT id, fact FROM memories WHERE embedding IS NULL LIMIT 50").all();
+    let ok = 0;
+    for (const m of results) if (await embedMemory(env, m.id, m.fact)) ok++;
+    return Response.json({ pending: results.length, embedded: ok });
   }
   if (url.pathname === "/api/tool") {
     // Debug: run one agent tool directly. /api/tool?t=TOKEN&name=web_search&args={"query":"..."}
@@ -390,7 +444,8 @@ async function handleApi(url, env) {
     // Manual trigger for testing — same work as the hourly cron.
     await runReminders(env);
     await runNags(env);
-    return Response.json({ ok: true });
+    const watch = url.searchParams.get("watch") === "1" ? await runWatchers(env, tg) : "skipped";
+    return Response.json({ ok: true, watch });
   }
   if (url.pathname === "/api/stats") {
     const { results } = await env.DB.prepare("SELECT * FROM calibration").all();
@@ -419,5 +474,10 @@ export default {
   async scheduled(_event, env) {
     await runReminders(env);
     await runNags(env); // idempotent: nag_level gates each escalation to once
+    try {
+      await runWatchers(env, tg);
+    } catch (e) {
+      console.log("watchers failed:", String(e).slice(0, 200));
+    }
   },
 };

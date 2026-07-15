@@ -1,0 +1,30 @@
+name: nightly
+
+# The only scheduled job left. Watchers, ranking, drafts and alerts all run in the
+# Worker now — this exists because recomputing IDF over the whole corpus needs more
+# CPU than a Worker invocation gets.
+
+on:
+  schedule:
+    - cron: "47 21 * * *"   # ~3:15am IST
+  workflow_dispatch:
+
+jobs:
+  nightly:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: pipeline/requirements.txt
+      - run: pip install -r pipeline/requirements.txt
+      - name: Recompute IDF + calibration
+        working-directory: pipeline
+        env:
+          CF_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+          CF_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          D1_DB_ID: ${{ secrets.D1_DB_ID }}
+        run: python -m grabber.main nightly

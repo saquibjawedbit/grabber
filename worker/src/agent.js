@@ -7,12 +7,14 @@
 // Old chat is compacted into the summary, never dropped.
 
 const MODEL = "@cf/openai/gpt-oss-120b";
+const EMBED_MODEL = "@cf/baai/bge-small-en-v1.5";  // 384-dim, plenty for short facts
 const MAX_STEPS = 8;
 const HISTORY_ACTIVE = 24;      // recent chat_history rows kept verbatim in the prompt
 const HISTORY_COMPACT_AT = 48;  // beyond this, oldest rows fold into the rolling summary
 const HISTORY_HARD_CAP = 140;   // safety valve if summarization keeps failing
+const RECALL_K = 14;            // memories retrieved per turn (v3: by meaning, not all of them)
 
-async function llm(env, prompt) {
+export async function llm(env, prompt) {
   for (let attempt = 0; attempt < 2; attempt++) {
     const res = await env.AI.run(MODEL, { input: prompt });
     const out = res.output || [];
@@ -54,6 +56,74 @@ function extractJson(text) {
     } catch { /* keep scanning */ }
   }
   return null;
+}
+
+// ---------- Memory v3: vectors packed as base64 Float32, normalised at write time
+// so recall is a dot product. JSON arrays would blow the Worker's CPU budget. ----------
+
+async function embed(env, text) {
+  const res = await env.AI.run(EMBED_MODEL, { text: [String(text).slice(0, 1200)] });
+  const v = res?.data?.[0];
+  if (!Array.isArray(v) || !v.length) throw new Error("embedding came back empty");
+  let norm = Math.hypot(...v) || 1;
+  return Float32Array.from(v, x => x / norm);
+}
+
+function packVec(f32) {
+  const bytes = new Uint8Array(f32.buffer);
+  let s = "";
+  for (let i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i]);
+  return btoa(s);
+}
+
+function unpackVec(b64) {
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return new Float32Array(bytes.buffer);
+}
+
+function dot(a, b) {
+  let s = 0;
+  const n = Math.min(a.length, b.length);
+  for (let i = 0; i < n; i++) s += a[i] * b[i];
+  return s;
+}
+
+async function recallMemories(env, query) {
+  const { results } = await env.DB.prepare(
+    "SELECT id, category, fact, embedding FROM memories ORDER BY id DESC LIMIT 400").all();
+  if (!results.length) return [];
+  const embedded = results.filter(r => r.embedding);
+  // Un-embedded rows (saved before v3, or embedding failed) always ride along —
+  // better a slightly bigger prompt than silently forgetting a fact.
+  const plain = results.filter(r => !r.embedding).slice(0, 12);
+  if (!embedded.length) return plain;
+  let q;
+  try {
+    q = await embed(env, query);
+  } catch {
+    return results.slice(0, RECALL_K);
+  }
+  const scored = embedded.map(r => {
+    let sim = -1;
+    try { sim = dot(q, unpackVec(r.embedding)); } catch { /* corrupt vector */ }
+    return { ...r, sim };
+  });
+  scored.sort((a, b) => b.sim - a.sim);
+  return [...plain, ...scored.slice(0, RECALL_K)];
+}
+
+export async function embedMemory(env, id, fact) {
+  try {
+    const v = await embed(env, fact);
+    await env.DB.prepare("UPDATE memories SET embedding = ? WHERE id = ?")
+      .bind(packVec(v), id).run();
+    return true;
+  } catch (e) {
+    console.log("embedMemory failed:", String(e).slice(0, 120));
+    return false;
+  }
 }
 
 function stripHtml(html) {
@@ -265,9 +335,12 @@ export const TOOLS = {
     run: async (env, args) => {
       if (!args.fact) return { error: "empty fact" };
       const cat = MEMORY_CATEGORIES.includes(args.category) ? args.category : "fact";
-      await env.DB.prepare("INSERT INTO memories (fact, category, created_at) VALUES (?, ?, ?)")
-        .bind(String(args.fact).slice(0, 500), cat, new Date().toISOString()).run();
-      return { ok: true };
+      const fact = String(args.fact).slice(0, 500);
+      const row = await env.DB.prepare(
+        "INSERT INTO memories (fact, category, created_at) VALUES (?, ?, ?) RETURNING id")
+        .bind(fact, cat, new Date().toISOString()).first();
+      await embedMemory(env, row.id, fact);   // so it's recallable by meaning, not just recency
+      return { ok: true, id: row.id };
     },
   },
 
@@ -308,25 +381,143 @@ export const TOOLS = {
       return r.meta.changes ? { ok: true } : { error: "no reminder with that id" };
     },
   },
+
+  // --- Watchers: the owner names a channel worth watching; nothing else gets crawled ---
+
+  add_watcher: {
+    desc: 'watch a channel for opportunities. args: {"kind": "x|rss|page|search", "target": "handle | feed url | page url | search query", "note": "why it matters"}',
+    run: async (env, args) => {
+      const kind = String(args.kind || "").toLowerCase();
+      if (!["x", "rss", "page", "search"].includes(kind)) {
+        return { error: 'kind must be one of: x (an X/Twitter handle), rss (feed url), page (url to diff), search (query)' };
+      }
+      let target = String(args.target || "").trim();
+      if (!target) return { error: "empty target" };
+      if (kind === "x") target = target.replace(/^@/, "").replace(/^https?:\/\/(x|twitter)\.com\//i, "");
+      if ((kind === "rss" || kind === "page") && !/^https?:\/\//.test(target)) {
+        return { error: `${kind} watchers need a full http(s) url` };
+      }
+      if (kind === "search" && !env.GOOGLE_CSE_KEY) {
+        return { error: "search watchers need GOOGLE_CSE_KEY set — the owner hasn't provided it yet. Suggest an x/rss/page watcher instead." };
+      }
+      try {
+        const row = await env.DB.prepare(
+          "INSERT INTO watchers (kind, target, note, created_at) VALUES (?,?,?,?) RETURNING id")
+          .bind(kind, target.slice(0, 300), String(args.note || "").slice(0, 200),
+                new Date().toISOString()).first();
+        return { ok: true, id: row.id, checked: "hourly", note: "I'll only interrupt if something clears the bar." };
+      } catch (e) {
+        return /UNIQUE/.test(String(e)) ? { error: "already watching that" } : { error: String(e).slice(0, 150) };
+      }
+    },
+  },
+
+  list_watchers: {
+    desc: "what is being watched, with last check and hit counts. args: {}",
+    run: async (env) => {
+      const { results } = await env.DB.prepare(
+        "SELECT id, kind, target, note, last_checked, last_error, hits, active FROM watchers ORDER BY id").all();
+      return { count: results.length, watchers: results };
+    },
+  },
+
+  remove_watcher: {
+    desc: 'stop watching something. args: {"id": <number>}',
+    run: async (env, args) => {
+      if (!args.id) return { error: "need the watcher id" };
+      const r = await env.DB.prepare("DELETE FROM watchers WHERE id = ?").bind(Number(args.id)).run();
+      return r.meta.changes ? { ok: true } : { error: "no watcher with that id" };
+    },
+  },
+
+  // --- Deep research: hand the question to an agent with a real machine ---
+
+  spawn_research: {
+    desc: 'launch a background research agent for a question that needs real digging (browsing many pages, reading articles, watching talks). Takes ~5-15 min and reports back on its own. Use for "what does X ask in interviews", "who is this founder", "is Y worth doing". args: {"question": "...", "depth": "quick|normal|deep"}',
+    run: async (env, args) => {
+      const question = String(args.question || "").trim();
+      if (!question) return { error: "empty question" };
+      if (!env.GH_TOKEN || !env.GH_REPO) {
+        return { error: "research needs GH_TOKEN + GH_REPO configured — tell the owner it isn't wired up yet" };
+      }
+      const depth = ["quick", "normal", "deep"].includes(args.depth) ? args.depth : "normal";
+      const running = await env.DB.prepare(
+        "SELECT COUNT(*) AS n FROM research WHERE status IN ('queued','running')").first();
+      if (running.n >= 3) return { error: "3 research jobs already in flight — wait for one to land" };
+
+      const row = await env.DB.prepare(
+        "INSERT INTO research (question, depth, created_at) VALUES (?,?,?) RETURNING id")
+        .bind(question.slice(0, 500), depth, new Date().toISOString()).first();
+
+      // Only the job id travels — the question itself is read from D1 by the runner,
+      // so nothing personal lands in a public build log.
+      const r = await fetch(`https://api.github.com/repos/${env.GH_REPO}/dispatches`, {
+        method: "POST",
+        headers: {
+          "Authorization": `Bearer ${env.GH_TOKEN}`,
+          "Accept": "application/vnd.github+json",
+          "User-Agent": "intelly-agent",
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ event_type: "research", client_payload: { job_id: row.id } }),
+      });
+      if (!r.ok) {
+        const body = await r.text();
+        await env.DB.prepare("UPDATE research SET status = 'failed', error = ? WHERE id = ?")
+          .bind(`dispatch ${r.status}: ${body.slice(0, 150)}`, row.id).run();
+        return { error: `could not launch the agent (${r.status})` };
+      }
+      return {
+        ok: true, job_id: row.id, depth,
+        note: "Agent is on a real machine now. Tell the owner it'll take ~5-15 min and you'll ping them — do NOT wait for it.",
+      };
+    },
+  },
+
+  get_research: {
+    desc: 'read research results. args: {"id": <number>} for one report, or {} to list recent jobs and their status',
+    run: async (env, args) => {
+      if (args.id) {
+        const row = await env.DB.prepare(
+          "SELECT id, question, status, report_md, sources, error, finished_at FROM research WHERE id = ?")
+          .bind(Number(args.id)).first();
+        if (!row) return { error: "no research job with that id" };
+        return {
+          ...row,
+          report_md: row.report_md ? row.report_md.slice(0, 3000) : null,
+          sources: row.sources ? JSON.parse(row.sources).slice(0, 15) : [],
+        };
+      }
+      const { results } = await env.DB.prepare(
+        "SELECT id, question, status, created_at, finished_at FROM research ORDER BY id DESC LIMIT 10").all();
+      return { jobs: results };
+    },
+  },
 };
 
 // ---------- Prompt assembly ----------
 
-async function context(env) {
-  const [mem, hist, bio, summary, docs] = await Promise.all([
-    env.DB.prepare("SELECT id, category, fact FROM memories ORDER BY id DESC LIMIT 80").all(),
+async function context(env, userText) {
+  const [mem, hist, bio, summary, docs, counts] = await Promise.all([
+    recallMemories(env, userText),   // v3: relevant to THIS message, not simply the newest
     env.DB.prepare("SELECT role, content FROM chat_history ORDER BY id DESC LIMIT ?")
       .bind(HISTORY_ACTIVE).all(),
     env.DB.prepare("SELECT content FROM profile WHERE key = 'bio'").first(),
     env.DB.prepare("SELECT content FROM profile WHERE key = 'conversation_summary'").first(),
     env.DB.prepare("SELECT key FROM profile WHERE key NOT IN ('bio','conversation_summary') ORDER BY key LIMIT 30").all(),
+    env.DB.prepare(`SELECT
+        (SELECT COUNT(*) FROM memories) AS memories,
+        (SELECT COUNT(*) FROM watchers WHERE active = 1) AS watchers,
+        (SELECT COUNT(*) FROM research WHERE status IN ('queued','running')) AS research_running`).first(),
   ]);
   return {
-    memories: mem.results.reverse().map(r => `- [#${r.id}|${r.category}] ${r.fact}`).join("\n"),
+    memories: mem.map(r => `- [#${r.id}|${r.category}] ${r.fact}`).join("\n"),
+    recalled: mem.length,
     history: hist.results.reverse().map(r => `${r.role}: ${r.content.slice(0, 400)}`).join("\n"),
     bio: bio?.content?.slice(0, 800) || "",
     summary: summary?.content?.slice(0, 2000) || "",
     docs: docs.results.map(r => r.key).join(", "),
+    counts,
   };
 }
 
@@ -338,8 +529,11 @@ Now: ${nowUtc} (UTC). Owner's timezone: Asia/Kolkata, UTC+5:30 — convert times
 
 ## What you know about your owner
 ${ctx.bio || "(no bio yet)"}
+
+Memories relevant to this message${ctx.counts.memories > ctx.recalled ? ` (${ctx.recalled} recalled of ${ctx.counts.memories} you hold — ask and you'll recall others)` : ""}:
 ${ctx.memories || "(no memories saved yet — when the owner tells you about themselves, save_memory it)"}
 ${ctx.docs ? `Profile documents you can read_profile: ${ctx.docs}` : "(no profile documents yet — the owner can send any text/markdown file in this chat and you'll keep it)"}
+Currently watching ${ctx.counts.watchers} channel(s); ${ctx.counts.research_running} research job(s) in flight.
 
 ## Summary of older conversation
 ${ctx.summary || "(none yet)"}
@@ -356,6 +550,8 @@ ${toolList}
 - If a new fact contradicts or supersedes a memory, forget_memory the old id, then save the new one.
 - Reminder due_at must be UTC ISO — subtract 5:30 from Indian times.
 - For questions about current events, prices, or anything outside your corpus, use web_search / web_fetch rather than guessing.
+- Quick lookup vs deep dig: web_search/web_fetch answer in seconds and you reply now. spawn_research is for questions worth 10 minutes of an agent's time (interview processes, background on a person or company, "should I do X"). After spawning, reply immediately saying it's running — never wait for it.
+- You have no scraper. Opportunities reach you only through channels the owner asked you to watch, so when they mention someone or something worth following, offer to add_watcher it.
 
 ## Protocol
 Respond with EXACTLY ONE JSON object and nothing else:
@@ -373,7 +569,7 @@ Now output ONLY the JSON object as your final answer message:`;
 // ---------- The loop ----------
 
 export async function runAgent(env, userText) {
-  const ctx = await context(env);
+  const ctx = await context(env, userText);
   let transcript = "";
   let lastPlain = ""; // clean-channel prose kept as a last resort, never shipped mid-loop
   for (let step = 0; step < MAX_STEPS; step++) {

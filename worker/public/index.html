@@ -146,6 +146,14 @@
       </div>
     </div>
     <div>
+      <div class="card" id="research">
+        <h2>Research</h2>
+        <div id="research-list"></div>
+      </div>
+      <div class="card">
+        <h2>Watching</h2>
+        <div id="watchers"></div>
+      </div>
       <div class="card">
         <h2>Reminders</h2>
         <div id="reminders"></div>
@@ -212,10 +220,10 @@ function tipHide() { $("tip").style.display = "none"; }
 // ---------- sections ----------
 function renderTiles(t) {
   const tiles = [
-    [t.corpus, "postings in corpus"],
     [t.memories, "memories"],
+    [t.watchers, "watching"],
+    [t.research, "deep dives"],
     [t.reminders, "open reminders"],
-    [t.alerted, "alerts sent"],
     [t.applied, "applied"],
     [t.won, "won"],
   ];
@@ -243,6 +251,43 @@ function renderSummary(s) {
     ? `<pre class="summary">${esc(s.text)}</pre>`
     : `<div class="empty">Builds automatically once chat history is long enough to compact.</div>`;
   if (s?.updated_at) $("sum-at").textContent = "· updated " + s.updated_at.slice(0, 10);
+}
+
+const R_ICON = { done: "✅", running: "◐", queued: "◌", failed: "⚠️" };
+
+function renderResearch(jobs) {
+  if (!jobs?.length) {
+    $("research-list").innerHTML = `<div class="empty">No deep dives yet. Ask the bot something worth ten minutes of an agent's time — "what does Zepto ask in SDE interviews? go deep".</div>`;
+    return;
+  }
+  $("research-list").innerHTML = jobs.map(j => {
+    const when = j.finished_at || j.created_at || "";
+    const srcs = (j.sources || []).length;
+    return `<div class="post">
+      <b>${R_ICON[j.status] || "·"} ${esc(j.question)}</b>
+      <div class="meta">${esc(j.status)}${srcs ? ` · ${srcs} sources read` : ""} · ${esc(when.slice(0, 10))}${j.error ? ` · ${esc(j.error.slice(0, 60))}` : ""}</div>
+      ${j.report_md ? `<details><summary>read report</summary><pre class="draft">${esc(j.report_md)}</pre>
+        ${srcs ? `<div class="meta">${j.sources.slice(0, 12).map(u => `<a href="${esc(u)}" target="_blank" rel="noopener">${esc(new URL(u).hostname)}</a>`).join(" · ")}</div>` : ""}
+      </details>` : ""}
+    </div>`;
+  }).join("");
+}
+
+function renderWatchers(ws) {
+  if (!ws?.length) {
+    $("watchers").innerHTML = `<div class="empty">Watching nothing. There's no scraper — the bot only looks where you point it. Try "watch @kunalb11 for hiring posts".</div>`;
+    return;
+  }
+  $("watchers").innerHTML = ws.map(w => {
+    const label = w.kind === "x" ? "@" + w.target : w.target;
+    const state = w.last_error
+      ? `<span class="overdue">⚠ ${esc(w.last_error.slice(0, 44))}</span>`
+      : `<span class="meta">${w.hits} seen${w.last_checked ? ` · checked ${esc(w.last_checked.slice(5, 16).replace("T", " "))}` : " · not checked yet"}</span>`;
+    return `<div class="mem">
+      <span class="chip" style="--c:${catColor(w.kind === "x" ? "identity" : "project")}">${esc(w.kind)}</span>
+      <span>${esc(label.slice(0, 60))}<span class="id">#${w.id}</span><br>${state}</span>
+    </div>`;
+  }).join("");
 }
 
 function renderReminders(rems) {
@@ -441,11 +486,14 @@ async function boot() {
     renderMemories(brain.memories);
     renderDocs(brain.documents);
     renderSummary(brain.summary);
+    renderResearch(brain.research);
+    renderWatchers(brain.watchers);
     renderReminders(brain.reminders);
     renderBars(brain.by_source);
     renderRecent(brain.recent);
     renderAlerts(alerts);
     runGraph(brain);
+    if (location.hash) document.querySelector(location.hash)?.scrollIntoView();
   } catch (e) {
     localStorage.removeItem("dash_token");
     gate(e.message === "token" && token ? "Wrong token — try again." : "");

@@ -10,6 +10,8 @@ binding = "ASSETS"
 # Google Programmable Search engine id (public). Pair with `wrangler secret put
 # GOOGLE_CSE_KEY` to give web_search its primary backend (free 100 queries/day).
 GOOGLE_CSE_ID = "271772a3accdf45e5"
+# Where spawn_research dispatches its jobs.
+GH_REPO = "saquibjawedbit/grabber"
 
 # Workers AI: powers the conversational agent (gpt-oss-120b, free neurons).
 [ai]
@@ -29,3 +31,6 @@ crons = ["0 * * * *"]
 #   TELEGRAM_CHAT_ID     — your chat with the bot
 #   TG_WEBHOOK_SECRET    — random string, also passed to setWebhook
 #   DASH_TOKEN           — random string gating /api/* and the dashboard
+#   GH_TOKEN             — fine-grained PAT, Contents:read-write on GH_REPO only,
+#                          so spawn_research can dispatch the research workflow
+#   GOOGLE_CSE_KEY       — optional; upgrades web_search and enables search watchers

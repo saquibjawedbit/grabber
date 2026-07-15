@@ -1,0 +1,26 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(node --check worker/src/index.js)",
+      "Bash(git init *)",
+      "Bash(git commit -q -m 'Grabber: zero-cost opportunity agent measured in applications submitted *)",
+      "Bash(gh repo *)",
+      "Bash(gh workflow *)",
+      "Bash(git commit -q -m 'Finding engine: X + LinkedIn via Google CSE, Nitter RSS, LinkedIn guest jobs API *)",
+      "Bash(git push *)",
+      "Bash(gh secret *)",
+      "Bash(gh variable *)",
+      "Bash(curl -s https://api.telegram.org/bot__CMDSUB_OUTPUT__/setWebhook -d url=https://grabber.saquibjawed.workers.dev/telegram -d secret_token=__TRACKED_VAR__)",
+      "Bash(curl -s https://api.telegram.org/bot__CMDSUB_OUTPUT__/setMyCommands -H 'Content-Type: application/json' -d '{\"commands\":[{\"command\":\"stats\",\"description\":\"applications, win rates, corpus size\"},{\"command\":\"pending\",\"description\":\"alerted but not applied, by deadline\"},{\"command\":\"applied\",\"description\":\"application tracker with status\"},{\"command\":\"help\",\"description\":\"list commands\"}]}')",
+      "Bash(curl -s https://api.telegram.org/bot__CMDSUB_OUTPUT__/getWebhookInfo)",
+      "Bash(git commit -q -m 'Deploy wiring: D1 database id, NVIDIA NIM as primary LLM provider *)",
+      "Bash(curl -sL -o /tmp/claude-1000/-home-saquib-Desktop-grabber/e5b134f0-cecb-46c2-8209-50393242a9ad/scratchpad/mlh.xml -w '%{http_code}' -A 'Mozilla/5.0' https://www.mlh.com/feed.xml)",
+      "Bash(curl -s -o /dev/null -w '%{http_code}' -A 'Mozilla/5.0' -H 'Accept: application/rss+xml, application/xml' https://devpost.com/hackathons.rss)",
+      "Bash(curl -s -w \"\\\\n[%{http_code}]\" \"https://grabber.saquibjawed.workers.dev/ai-debug?t=$\\(cat /tmp/claude-1000/-home-saquib-Desktop-grabber/e5b134f0-cecb-46c2-8209-50393242a9ad/scratchpad/cf/dash_token.txt\\)\")",
+      "Skill(artifact-design)",
+      "Artifact",
+      "Bash(git commit -q -m 'Phase 3: watchers replace the scraper, memory recalls by meaning, research gets a machine *)",
+      "Bash(git commit *)"
+    ]
+  }
+}
