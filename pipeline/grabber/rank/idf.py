@@ -44,8 +44,9 @@ def recompute(db: D1) -> int:
     ts = now()
     db.query("DELETE FROM idf")
     batch = [(t, d, math.log((n + 1) / (d + 1))) for t, d in df.items() if d >= 2]
-    for i in range(0, len(batch), 50):
-        chunk = batch[i:i + 50]
+    # D1 allows max 100 bound params per statement -> 20 rows x 4 params.
+    for i in range(0, len(batch), 20):
+        chunk = batch[i:i + 20]
         values = ",".join("(?,?,?,?)" for _ in chunk)
         params = []
         for t, d, v in chunk:
