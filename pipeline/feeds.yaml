@@ -1,16 +1,13 @@
 # RSS pack. Add anything with a feed; obscure > popular (point 2).
 # weight multiplies the recall score for that feed (default 1.0).
 feeds:
-  - name: MLH events
-    url: https://mlh.io/feed.xml
-    weight: 0.8            # popular board -> penalized
-  - name: Devpost new hackathons
-    url: https://devpost.com/hackathons.rss
-    weight: 0.7            # very popular -> penalized harder
+  - name: WeWorkRemotely programming
+    url: https://weworkremotely.com/categories/remote-programming-jobs.rss
+    weight: 0.7            # popular board -> penalized
   # Examples worth adding (uncomment / replace with your niches):
-  # - name: ProsperityFellowship blog
-  #   url: https://example.org/feed
-  #   weight: 1.4
   # - name: University research grants office
   #   url: https://example.edu/opportunities/rss
   #   weight: 1.5
+  # - name: A niche foundation's blog
+  #   url: https://example.org/feed
+  #   weight: 1.4

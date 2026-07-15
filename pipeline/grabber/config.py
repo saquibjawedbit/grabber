@@ -49,6 +49,8 @@ SOURCE_WEIGHTS = {
     "rss": 1.0,        # per-feed override in feeds.yaml
     "devfolio": 0.9,
     "unstop": 0.9,
+    "devpost": 0.7,    # very popular board — penalized harder
+
     "linkedin:jobs": 0.7,  # it's a job board — everyone saw it
 }
 
