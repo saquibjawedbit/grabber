@@ -3,6 +3,7 @@
 
 import { embedMemory, rememberExchange, runAgent, TOOLS } from "./agent.js";
 import { runWatchers } from "./watch.js";
+import { googleConnected, ingestNotification, pollCalendar, pollGmail, remindEvents, surfaceEmail } from "./senses.js";
 
 const TG = (env, method) => `https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/${method}`;
 
@@ -170,9 +171,52 @@ async function handleCommand(text, chatId, env) {
   });
 }
 
+// ---------- Voice: talking is faster than typing ----------
+
+const MAX_VOICE_BYTES = 20_000_000;
+
+async function transcribe(env, fileId) {
+  const fi = await tg(env, "getFile", { file_id: fileId });
+  const path = fi.result?.file_path;
+  if (!path) throw new Error("Telegram wouldn't hand over the audio");
+  const r = await fetch(`https://api.telegram.org/file/bot${env.TELEGRAM_BOT_TOKEN}/${path}`);
+  if (!r.ok) throw new Error(`audio download failed (${r.status})`);
+  const buf = await r.arrayBuffer();
+  if (buf.byteLength > MAX_VOICE_BYTES) throw new Error("that clip is too long for me");
+  const res = await env.AI.run("@cf/openai/whisper", { audio: [...new Uint8Array(buf)] });
+  return (res?.text || "").trim();
+}
+
+async function handleVoice(env, chatId, fileId, placeholderId) {
+  let heard;
+  try {
+    heard = await transcribe(env, fileId);
+  } catch (e) {
+    await tg(env, "editMessageText", {
+      chat_id: chatId, message_id: placeholderId,
+      text: `🎧 I couldn't make that out — ${String(e.message || e).slice(0, 120)}`,
+    });
+    return;
+  }
+  if (!heard) {
+    await tg(env, "editMessageText", {
+      chat_id: chatId, message_id: placeholderId,
+      text: "🎧 That came through silent — try again?",
+    });
+    return;
+  }
+  // Show what was heard before answering: a wrong transcript should be obvious,
+  // not something the owner has to reverse-engineer from a strange reply.
+  await tg(env, "editMessageText", {
+    chat_id: chatId, message_id: placeholderId,
+    text: `🎧 <i>“${esc(heard)}”</i>\n\n🤔 …`, parse_mode: "HTML",
+  });
+  await converse(env, chatId, heard, placeholderId, `🎧 <i>“${esc(heard)}”</i>\n\n`);
+}
+
 // ---------- Conversational agent ----------
 
-async function converse(env, chatId, text, placeholderId) {
+async function converse(env, chatId, text, placeholderId, prefix = "") {
   let reply;
   try {
     reply = await runAgent(env, text);
@@ -180,14 +224,16 @@ async function converse(env, chatId, text, placeholderId) {
     reply = `⚠️ I hit an error: ${String(e).slice(0, 200)}`;
   }
   const body = {
-    chat_id: chatId, text: reply, parse_mode: "HTML", disable_web_page_preview: true,
+    chat_id: chatId, text: prefix + reply, parse_mode: "HTML", disable_web_page_preview: true,
   };
   let r = placeholderId
     ? await tg(env, "editMessageText", { ...body, message_id: placeholderId })
     : await tg(env, "sendMessage", body);
   if (!r.ok) {
-    // Usually the model emitted HTML-unsafe text — resend plain.
+    // Usually the model emitted HTML-unsafe text — resend plain, and strip the
+    // prefix's own markup so the owner never sees raw <i> tags.
     delete body.parse_mode;
+    body.text = prefix.replace(/<[^>]+>/g, "") + reply;
     r = placeholderId
       ? await tg(env, "editMessageText", { ...body, message_id: placeholderId })
       : await tg(env, "sendMessage", body);
@@ -244,6 +290,13 @@ async function handleTelegram(request, env, ctx) {
   if (msg?.document) {
     if (!isOwner(msg.chat.id, env)) return new Response("ok");
     await ingestDocument(env, msg.chat.id, msg.document);
+    return new Response("ok");
+  }
+  const audio = msg?.voice || msg?.audio || msg?.video_note;
+  if (audio) {
+    if (!isOwner(msg.chat.id, env)) return new Response("ok");
+    const sent = await tg(env, "sendMessage", { chat_id: msg.chat.id, text: "🎧 listening…" });
+    ctx.waitUntil(handleVoice(env, msg.chat.id, audio.file_id, sent.result?.message_id));
     return new Response("ok");
   }
   if (msg?.text) {
@@ -343,6 +396,41 @@ async function runNags(env) {
   }
 }
 
+// ---------- Senses on the cron: calendar, mail ----------
+
+async function runSenses(env) {
+  if (!googleConnected(env)) return { google: "not connected" };
+  const out = {};
+  try {
+    out.calendar = await pollCalendar(env);
+    out.reminded = await remindEvents(env, tg);
+  } catch (e) {
+    out.calendar_error = String(e).slice(0, 150);
+  }
+  try {
+    const { items = [], fresh = 0 } = await pollGmail(env);
+    out.mail_fresh = fresh;
+    if (items.length) {
+      // Only the profile matters here, and only once for the whole batch.
+      const parts = [];
+      for (const key of ["bio", "skills"]) {
+        const row = await env.DB.prepare("SELECT content FROM profile WHERE key = ?").bind(key).first();
+        if (row) parts.push(row.content.slice(0, 1200));
+      }
+      const { results: mems } = await env.DB.prepare(
+        "SELECT fact FROM memories ORDER BY id LIMIT 30").all();
+      const profile = [...parts, ...mems.map(m => `- ${m.fact}`)].join("\n") || "(nothing known yet)";
+      out.surfaced = 0;
+      for (const m of items.slice(0, 5)) {
+        if (await surfaceEmail(env, tg, profile, m)) out.surfaced++;
+      }
+    }
+  } catch (e) {
+    out.mail_error = String(e).slice(0, 150);
+  }
+  return out;
+}
+
 // ---------- Reminders: general-agent capability, fired by the hourly cron ----------
 
 async function runReminders(env) {
@@ -394,6 +482,8 @@ async function handleApi(url, env) {
           (SELECT COUNT(*) FROM watchers WHERE active = 1) AS watchers,
           (SELECT COUNT(*) FROM research WHERE status = 'done') AS research,
           (SELECT COUNT(*) FROM reminders WHERE done = 0) AS reminders,
+          (SELECT COUNT(*) FROM notifications) +
+            (SELECT COUNT(*) FROM events) + (SELECT COUNT(*) FROM emails) AS sensed,
           (SELECT COUNT(*) FROM alerts WHERE sent_at IS NOT NULL) AS alerted,
           (SELECT COUNT(DISTINCT alert_id) FROM outcomes WHERE action = 'applied') AS applied,
           (SELECT COUNT(DISTINCT alert_id) FROM outcomes WHERE action = 'won') AS won,
@@ -401,6 +491,15 @@ async function handleApi(url, env) {
       env.DB.prepare(`
         SELECT title, source, url, deadline, ingested_at FROM postings
         ORDER BY ingested_at DESC LIMIT 12`).all(),
+    ]);
+    const [notifications, events, mails, allow] = await Promise.all([
+      env.DB.prepare(`SELECT app, title, body, kind, amount, direction, counterparty, received_at
+                      FROM notifications ORDER BY id DESC LIMIT 20`).all(),
+      env.DB.prepare(`SELECT title, starts_at, location FROM events
+                      WHERE datetime(starts_at) >= datetime('now') ORDER BY starts_at LIMIT 10`).all(),
+      env.DB.prepare(`SELECT sender, subject, kind, received_at FROM emails
+                      ORDER BY received_at DESC LIMIT 10`).all(),
+      env.DB.prepare("SELECT pattern, kind FROM notify_allow ORDER BY kind, pattern").all(),
     ]);
     const [watchers, research] = await Promise.all([
       env.DB.prepare("SELECT id, kind, target, note, last_checked, last_error, hits, active FROM watchers ORDER BY id").all(),
@@ -418,6 +517,14 @@ async function handleApi(url, env) {
       recent: recent.results,
       watchers: watchers.results,
       research: research.results.map(r => ({ ...r, sources: r.sources ? JSON.parse(r.sources) : [] })),
+      senses: {
+        google_connected: googleConnected(env),
+        notify_wired: Boolean(env.NOTIFY_SECRET),
+        notifications: notifications.results,
+        events: events.results,
+        emails: mails.results,
+        allowlist: allow.results,
+      },
     });
   }
   if (url.pathname === "/api/embed-backfill") {
@@ -467,6 +574,24 @@ export default {
         return Response.json({ error: String(e) });
       }
     }
+    if (url.pathname === "/ingest/notification" && request.method === "POST") {
+      // The phone bridge posts here. Its own secret, so a leaked dashboard token
+      // can't write into the agent's senses.
+      if (request.headers.get("X-Intelly-Secret") !== env.NOTIFY_SECRET || !env.NOTIFY_SECRET) {
+        return new Response("forbidden", { status: 403 });
+      }
+      let payload;
+      try {
+        payload = await request.json();
+      } catch {
+        return Response.json({ error: "expected json" }, { status: 400 });
+      }
+      try {
+        return Response.json(await ingestNotification(env, payload));
+      } catch (e) {
+        return Response.json({ error: String(e).slice(0, 150) }, { status: 500 });
+      }
+    }
     if (url.pathname === "/telegram" && request.method === "POST") return handleTelegram(request, env, ctx);
     if (url.pathname.startsWith("/api/")) return handleApi(url, env);
     return env.ASSETS.fetch(request);
@@ -474,10 +599,13 @@ export default {
   async scheduled(_event, env) {
     await runReminders(env);
     await runNags(env); // idempotent: nag_level gates each escalation to once
-    try {
-      await runWatchers(env, tg);
-    } catch (e) {
-      console.log("watchers failed:", String(e).slice(0, 200));
+    // One sense failing must never stop the others.
+    for (const [name, fn] of [["senses", runSenses], ["watchers", e => runWatchers(e, tg)]]) {
+      try {
+        await fn(env);
+      } catch (e) {
+        console.log(`${name} failed:`, String(e).slice(0, 200));
+      }
     }
   },
 };

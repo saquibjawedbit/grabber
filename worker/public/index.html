@@ -146,6 +146,11 @@
       </div>
     </div>
     <div>
+      <div class="card" id="senses">
+        <h2>Senses</h2>
+        <div id="senses-status"></div>
+        <div id="senses-list"></div>
+      </div>
       <div class="card" id="research">
         <h2>Research</h2>
         <div id="research-list"></div>
@@ -224,8 +229,8 @@ function renderTiles(t) {
     [t.watchers, "watching"],
     [t.research, "deep dives"],
     [t.reminders, "open reminders"],
+    [t.sensed, "things sensed"],
     [t.applied, "applied"],
-    [t.won, "won"],
   ];
   $("tiles").innerHTML = tiles.map(([v, k]) =>
     `<div class="tile"><div class="v">${v ?? 0}</div><div class="k">${k}</div></div>`).join("");
@@ -251,6 +256,42 @@ function renderSummary(s) {
     ? `<pre class="summary">${esc(s.text)}</pre>`
     : `<div class="empty">Builds automatically once chat history is long enough to compact.</div>`;
   if (s?.updated_at) $("sum-at").textContent = "· updated " + s.updated_at.slice(0, 10);
+}
+
+const money = n => "₹" + Math.round(n).toLocaleString("en-IN");
+
+function renderSenses(s) {
+  if (!s) return;
+  const dot = ok => `<span class="chip" style="--c:${ok ? "var(--good)" : "var(--muted)"}">${ok ? "on" : "off"}</span>`;
+  $("senses-status").innerHTML = `
+    <div class="mem">${dot(s.notify_wired)}<span>Phone notifications — ${s.notify_wired
+      ? `${s.allowlist.length} apps allowed; everything else is dropped unread`
+      : "not wired up yet"}</span></div>
+    <div class="mem">${dot(s.google_connected)}<span>Gmail &amp; Calendar — ${s.google_connected
+      ? "read-only" : "not connected — run pipeline/scripts/google_auth.py"}</span></div>`;
+
+  const parts = [];
+  if (s.events?.length) {
+    parts.push(`<div class="meta" style="margin-top:.7rem">Next up</div>` + s.events.slice(0, 4).map(e =>
+      `<div class="rem"><span class="when">${IST.format(Date.parse(e.starts_at))}</span><span>${esc(e.title)}</span></div>`).join(""));
+  }
+  if (s.emails?.length) {
+    parts.push(`<div class="meta" style="margin-top:.7rem">Mail seen</div>` + s.emails.slice(0, 4).map(m =>
+      `<div class="post"><b>${esc(m.subject)}</b><div class="meta">${esc(m.sender)} · ${esc(m.kind || "")}</div></div>`).join(""));
+  }
+  if (s.notifications?.length) {
+    const spend = s.notifications.filter(n => n.direction === "debit").reduce((a, n) => a + (n.amount || 0), 0);
+    parts.push(`<div class="meta" style="margin-top:.7rem">Notifications${spend ? ` · ${money(spend)} out (recent)` : ""}</div>` +
+      s.notifications.slice(0, 6).map(n => {
+        const amt = n.amount
+          ? `<b style="color:${n.direction === "credit" ? "var(--good)" : "var(--critical)"}">${n.direction === "credit" ? "+" : "−"}${money(n.amount)}</b> `
+          : "";
+        return `<div class="rem"><span class="when">${IST.format(Date.parse(n.received_at))}</span>
+          <span>${amt}${esc(n.counterparty || n.title || n.app)}<span class="id">${esc(n.app)}</span></span></div>`;
+      }).join(""));
+  }
+  $("senses-list").innerHTML = parts.join("") ||
+    `<div class="empty">Nothing sensed yet. Once the phone bridge or Google is connected, what it sees shows up here.</div>`;
 }
 
 const R_ICON = { done: "✅", running: "◐", queued: "◌", failed: "⚠️" };
@@ -486,6 +527,7 @@ async function boot() {
     renderMemories(brain.memories);
     renderDocs(brain.documents);
     renderSummary(brain.summary);
+    renderSenses(brain.senses);
     renderResearch(brain.research);
     renderWatchers(brain.watchers);
     renderReminders(brain.reminders);

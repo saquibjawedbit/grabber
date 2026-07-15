@@ -474,6 +474,73 @@ export const TOOLS = {
     },
   },
 
+  // --- Senses: things the owner never told you, but you saw ---
+
+  get_calendar: {
+    desc: 'upcoming meetings from their Google Calendar. args: {"days": 7}',
+    run: async (env, args) => {
+      const days = Math.min(Math.max(Number(args.days) || 7, 1), 30);
+      const { results } = await env.DB.prepare(`
+        SELECT title, starts_at, location, attendees FROM events
+        WHERE datetime(starts_at) >= datetime('now')
+          AND datetime(starts_at) <= datetime('now', '+' || ? || ' days')
+        ORDER BY starts_at LIMIT 20`).bind(days).all();
+      return { count: results.length, events: results,
+               note: results.length ? "times are UTC — convert to IST for the owner" : "nothing scheduled" };
+    },
+  },
+
+  search_email: {
+    desc: 'search recruiter/opportunity mail the agent has seen. args: {"query": "keywords"} or {} for recent',
+    run: async (env, args) => {
+      const q = String(args.query || "").trim();
+      if (!q) {
+        const { results } = await env.DB.prepare(
+          "SELECT sender, subject, snippet, kind, received_at FROM emails ORDER BY received_at DESC LIMIT 10").all();
+        return { count: results.length, emails: results };
+      }
+      const { results } = await env.DB.prepare(
+        `SELECT sender, subject, snippet, kind, received_at FROM emails
+         WHERE sender LIKE ? OR subject LIKE ? OR snippet LIKE ?
+         ORDER BY received_at DESC LIMIT 10`).bind(`%${q}%`, `%${q}%`, `%${q}%`).all();
+      return { count: results.length, emails: results };
+    },
+  },
+
+  search_notifications: {
+    desc: 'phone notifications the agent captured (bank alerts, recruiter pings). args: {"kind": "bank|recruiter|calendar|other", "days": 7}',
+    run: async (env, args) => {
+      const days = Math.min(Math.max(Number(args.days) || 7, 1), 90);
+      const kind = String(args.kind || "").trim();
+      const where = kind ? "kind = ? AND " : "";
+      const binds = kind ? [kind, days] : [days];
+      const { results } = await env.DB.prepare(
+        `SELECT app, title, body, kind, amount, direction, counterparty, received_at
+         FROM notifications WHERE ${where} datetime(received_at) >= datetime('now', '-' || ? || ' days')
+         ORDER BY received_at DESC LIMIT 25`).bind(...binds).all();
+      const spend = results.filter(r => r.direction === "debit")
+        .reduce((s, r) => s + (r.amount || 0), 0);
+      return {
+        count: results.length, notifications: results,
+        ...(spend ? { total_debits_in_window: Math.round(spend) } : {}),
+      };
+    },
+  },
+
+  watch_app: {
+    desc: 'allow a phone app\'s notifications to be stored (they are dropped unless allowed). args: {"pattern": "lowercase app name fragment", "kind": "bank|recruiter|calendar|delivery|other"}',
+    run: async (env, args) => {
+      const pattern = String(args.pattern || "").toLowerCase().trim();
+      if (!pattern) return { error: "empty pattern" };
+      const kind = ["bank", "recruiter", "calendar", "delivery", "other"].includes(args.kind)
+        ? args.kind : "other";
+      await env.DB.prepare(
+        "INSERT OR REPLACE INTO notify_allow (pattern, kind, created_at) VALUES (?,?,?)")
+        .bind(pattern.slice(0, 60), kind, new Date().toISOString()).run();
+      return { ok: true, note: "notifications matching this will now be stored" };
+    },
+  },
+
   get_research: {
     desc: 'read research results. args: {"id": <number>} for one report, or {} to list recent jobs and their status',
     run: async (env, args) => {
@@ -521,11 +588,27 @@ async function context(env, userText) {
   };
 }
 
+function localNow() {
+  // The owner lives in IST. Late UTC evening is already tomorrow for them, so a
+  // prompt carrying only UTC makes the model compute weekdays off the wrong day.
+  const now = new Date();
+  const parts = new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Asia/Kolkata", weekday: "long", day: "2-digit", month: "long",
+    year: "numeric", hour: "2-digit", minute: "2-digit", hour12: false,
+  }).formatToParts(now).reduce((a, p) => ((a[p.type] = p.value), a), {});
+  const iso = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Kolkata", year: "numeric", month: "2-digit", day: "2-digit",
+  }).format(now);
+  return { text: `${parts.weekday} ${parts.day} ${parts.month} ${parts.year}, ${parts.hour}:${parts.minute} IST`, iso };
+}
+
 function buildPrompt(ctx, userText, transcript, mustReply) {
   const toolList = Object.entries(TOOLS).map(([n, t]) => `- ${n}: ${t.desc}`).join("\n");
   const nowUtc = new Date().toISOString().slice(0, 16) + "Z";
+  const local = localNow();
   return `You are Intelly, the personal AI agent of exactly one owner, living in their Telegram. You handle anything they need: answer questions, research the web, track their applications, set reminders, remember their life. Your standing mission behind it all: find, research, and win opportunities (jobs, internships, hackathons, fellowships, grants, contracts) for them. Be concise and direct — short paragraphs, no corporate fluff, no markdown headers.
-Now: ${nowUtc} (UTC). Owner's timezone: Asia/Kolkata, UTC+5:30 — convert times for reminders and when talking about time.
+Right now it is ${local.text} where the owner is (today's date for them is ${local.iso}). In UTC that is ${nowUtc}.
+Always reason about days and weekdays from THEIR local date above — never from the UTC date, which is often the previous day. When they say a weekday, count forward from ${local.text.split(" ")[0]}; "Friday" means the next Friday on or after today, never simply tomorrow.
 
 ## What you know about your owner
 ${ctx.bio || "(no bio yet)"}
@@ -552,6 +635,7 @@ ${toolList}
 - For questions about current events, prices, or anything outside your corpus, use web_search / web_fetch rather than guessing.
 - Quick lookup vs deep dig: web_search/web_fetch answer in seconds and you reply now. spawn_research is for questions worth 10 minutes of an agent's time (interview processes, background on a person or company, "should I do X"). After spawning, reply immediately saying it's running — never wait for it.
 - You have no scraper. Opportunities reach you only through channels the owner asked you to watch, so when they mention someone or something worth following, offer to add_watcher it.
+- You have senses: their calendar, recruiter mail, and allowlisted phone notifications. Check them before asking the owner something you could look up (get_calendar, search_email, search_notifications).
 
 ## Protocol
 Respond with EXACTLY ONE JSON object and nothing else:

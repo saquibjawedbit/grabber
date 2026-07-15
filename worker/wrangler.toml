@@ -34,3 +34,7 @@ crons = ["0 * * * *"]
 #   GH_TOKEN             — fine-grained PAT, Contents:read-write on GH_REPO only,
 #                          so spawn_research can dispatch the research workflow
 #   GOOGLE_CSE_KEY       — optional; upgrades web_search and enables search watchers
+#   NOTIFY_SECRET        — shared with the phone's notification forwarder
+#   GOOGLE_CLIENT_ID     — } read-only Gmail + Calendar. Get all three by running
+#   GOOGLE_CLIENT_SECRET — } pipeline/scripts/google_auth.py
+#   GOOGLE_REFRESH_TOKEN — }
