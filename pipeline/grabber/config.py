@@ -20,8 +20,9 @@ GROQ_API_KEY = os.environ.get("GROQ_API_KEY", "")
 GROQ_MODEL = os.environ.get("GROQ_MODEL", "llama-3.3-70b-versatile")
 LLM_CALL_GAP_S = float(os.environ.get("LLM_CALL_GAP_S", "5"))  # stay under free-tier RPM
 
-# --- Dashboard (Cloudflare Worker URL) ---
+# --- Worker (dashboard + the search proxy research borrows, since CI IPs are blocked) ---
 DASH_URL = os.environ.get("DASH_URL", "").rstrip("/")
+DASH_TOKEN = os.environ.get("DASH_TOKEN", "")
 
 # --- Research runner ---
 RESEARCH_MAX_STEPS = int(os.environ.get("RESEARCH_MAX_STEPS", "22"))

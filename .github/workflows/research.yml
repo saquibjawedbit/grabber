@@ -45,7 +45,10 @@ jobs:
           NVIDIA_API_KEY: ${{ secrets.NVIDIA_API_KEY }}
           GOOGLE_CSE_KEY: ${{ secrets.GOOGLE_CSE_KEY }}
           GOOGLE_CSE_ID: ${{ vars.GOOGLE_CSE_ID }}
+          # Search engines 202-challenge CI IPs; the Worker's IP isn't blocked, so the
+          # agent borrows it to search and does its reading from here.
           DASH_URL: ${{ vars.DASH_URL }}
+          DASH_TOKEN: ${{ secrets.DASH_TOKEN }}
         run: |
           JOB="${{ github.event.client_payload.job_id }}${{ inputs.job_id }}"
           python -m grabber.main research "$JOB"

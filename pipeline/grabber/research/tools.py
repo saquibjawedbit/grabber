@@ -20,7 +20,9 @@ def _clean(text: str) -> str:
 
 
 def search(query: str, n: int = 8) -> list[dict]:
-    """Google CSE if keyed, else DuckDuckGo's lite endpoint."""
+    """Search engines block datacenter IPs — a CI runner gets a 202 challenge from
+    DuckDuckGo every time. The Worker's IP isn't blocked, so ask it to search for us
+    and keep the heavy reading here. CSE first when keyed; direct DDG last resort."""
     if config.GOOGLE_CSE_KEY and config.GOOGLE_CSE_ID:
         try:
             r = requests.get(
@@ -36,16 +38,38 @@ def search(query: str, n: int = 8) -> list[dict]:
                              "snippet": (i.get("snippet") or "")[:200]} for i in items]
         except Exception as e:
             print(f"search: cse failed ({type(e).__name__})")
+
+    if config.DASH_URL and config.DASH_TOKEN:
+        try:
+            r = requests.get(
+                f"{config.DASH_URL}/api/tool",
+                params={"t": config.DASH_TOKEN, "name": "web_search",
+                        "args": json.dumps({"query": query})},
+                timeout=TIMEOUT,
+            )
+            if r.ok:
+                res = r.json().get("results") or []
+                if res:
+                    return res[:n]
+                print(f"search: worker proxy returned nothing ({r.json().get('error', '')[:60]})")
+        except Exception as e:
+            print(f"search: worker proxy failed ({type(e).__name__})")
+
     try:
         r = requests.post("https://lite.duckduckgo.com/lite/", data={"q": query},
                           headers=UA, timeout=TIMEOUT)
         from bs4 import BeautifulSoup
         soup = BeautifulSoup(r.text, "html.parser")
         out = []
-        for a in soup.select("a.result-link")[:n]:
-            href = a.get("href", "")
-            if href.startswith("http"):
-                out.append({"title": _clean(a.get_text()), "url": href, "snippet": ""})
+        for a in soup.find_all("a", href=True):
+            href = a["href"]
+            title = _clean(a.get_text())
+            if href.startswith("http") and "duckduckgo.com" not in href and len(title) > 8:
+                out.append({"title": title[:120], "url": href, "snippet": ""})
+            if len(out) >= n:
+                break
+        if not out:
+            print(f"search: ddg gave nothing (status {r.status_code})")
         return out
     except Exception as e:
         print(f"search: ddg failed ({type(e).__name__})")
