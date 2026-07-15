@@ -42,12 +42,24 @@ def _openai_compat(base_url: str, key: str, model: str, prompt: str) -> str:
             "model": model,
             "messages": [{"role": "user", "content": prompt}],
             "temperature": 0.4,
-            "max_tokens": 2048,
+            # Reasoning models spend this budget thinking before they emit a word —
+            # too low and `content` comes back null with everything in the reasoning.
+            "max_tokens": 6000,
         },
-        timeout=120,
+        timeout=180,
     )
     r.raise_for_status()
-    return r.json()["choices"][0]["message"]["content"]
+    msg = r.json()["choices"][0]["message"]
+    text = msg.get("content")
+    if not text:
+        # gpt-oss sometimes stops inside its reasoning channel. The decision we want
+        # is usually sitting right there, so salvage it rather than lose the step.
+        text = msg.get("reasoning_content") or msg.get("reasoning") or ""
+        if text:
+            print("llm: no content channel, salvaged from reasoning")
+    if not text or not text.strip():
+        raise ValueError("empty completion (model emitted no content)")
+    return text
 
 
 def _cloudflare(prompt: str) -> str:
@@ -75,19 +87,26 @@ PROVIDERS = [
 
 
 def complete(prompt: str) -> str:
-    _pace()
+    """Never returns None or empty — raises instead, so callers can't be surprised."""
     available = [(name, fn) for name, key, fn in PROVIDERS if key()]
     if not available:
         raise RuntimeError(
             "No LLM available: set CF_API_TOKEN+CF_ACCOUNT_ID, NVIDIA_API_KEY, "
             "GEMINI_API_KEY, or GROQ_API_KEY")
-    for i, (name, fn) in enumerate(available):
-        try:
-            return fn(prompt)
-        except Exception as e:
-            if i == len(available) - 1:
-                raise
-            print(f"llm: {name} failed ({e}), trying {available[i + 1][0]}")
+    last = None
+    # Two passes: a provider that stalls or empties out often succeeds on retry.
+    for attempt in range(2):
+        for name, fn in available:
+            _pace()
+            try:
+                text = fn(prompt)
+                if text and text.strip():
+                    return text
+                last = ValueError(f"{name} returned empty")
+            except Exception as e:
+                last = e
+                print(f"llm: {name} failed ({type(e).__name__}: {str(e)[:120]})")
+    raise last or RuntimeError("all LLM providers failed")
 
 
 def complete_json(prompt: str) -> dict:

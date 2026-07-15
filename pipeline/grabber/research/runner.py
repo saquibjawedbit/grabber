@@ -112,7 +112,7 @@ def run(db: D1, job_id: int) -> None:
             transcript += f"\n(Your last call failed: {type(e).__name__}. Try a different tool.)"
             continue
 
-        action = _extract(out)
+        action = _extract(out or "")
         if not action:
             transcript += '\n(That broke protocol. Respond with ONE JSON object: {"tool": ...}.)'
             continue
