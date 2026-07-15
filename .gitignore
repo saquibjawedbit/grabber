@@ -11,3 +11,6 @@ __pycache__/
 node_modules/
 .wrangler/
 .dev.vars
+
+# Playwright MCP scratch output
+.playwright-mcp/
