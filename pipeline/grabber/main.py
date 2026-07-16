@@ -23,6 +23,9 @@ def main() -> None:
     db = D1()
     if cmd == "nightly":
         nightly(db)
+    elif cmd == "email":
+        from . import gmail_imap
+        gmail_imap.fetch(db)
     elif cmd == "research":
         if len(sys.argv) < 3:
             raise SystemExit("usage: python -m grabber.main research <job_id>")

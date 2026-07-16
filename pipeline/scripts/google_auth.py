@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Get a Google refresh token for Intelly's Gmail + Calendar senses.
+"""Get a Google refresh token — for CALENDAR only now. Gmail moved to IMAP + an App
+Password (see gmail_imap.py), because gmail.readonly over OAuth forces either a
+weeks-long verification review or a token that dies every 7 days. Calendar can still
+use this if you want it; calendar.readonly has the same 7-day caveat in testing mode,
+so treat it as optional.
 
 Google won't hand out a refresh token without a human clicking "Allow" once. This
 does that in ~2 minutes and prints the three values to hand back.
@@ -26,6 +30,7 @@ Read-only scopes: this can never send mail or change your calendar.
 """
 import http.server
 import json
+import os
 import secrets
 import socketserver
 import sys
@@ -66,8 +71,9 @@ class Handler(http.server.SimpleHTTPRequestHandler):
 
 
 def main() -> None:
-    client_id = input("Client ID: ").strip()
-    client_secret = input("Client secret: ").strip()
+    # Credentials come from env (non-interactive), or a prompt if run by hand.
+    client_id = (os.environ.get("GAUTH_CLIENT_ID") or "").strip() or input("Client ID: ").strip()
+    client_secret = (os.environ.get("GAUTH_CLIENT_SECRET") or "").strip() or input("Client secret: ").strip()
     if not client_id or not client_secret:
         raise SystemExit("Both are required — see the setup steps at the top of this file.")
 
@@ -84,16 +90,23 @@ def main() -> None:
 
     socketserver.TCPServer.allow_reuse_address = True
     server = socketserver.TCPServer(("localhost", PORT), Handler)
-    threading.Thread(target=server.handle_request, daemon=True).start()
+    # serve_forever (not handle_request) so a stray favicon hit doesn't consume our
+    # one shot before the real /callback arrives.
+    threading.Thread(target=server.serve_forever, daemon=True).start()
 
-    print("\nOpening your browser. Approve the two read-only scopes.")
-    print(f"If nothing opens, paste this in yourself:\n\n{auth_url}\n")
-    webbrowser.open(auth_url)
+    print("\n>>> OPEN THIS URL IN YOUR BROWSER AND APPROVE:\n")
+    print(auth_url)
+    print("\nWaiting up to 5 minutes for you to approve…\n", flush=True)
+    try:
+        webbrowser.open(auth_url)
+    except Exception:
+        pass
 
-    for _ in range(120):
+    for _ in range(600):
         if _code:
             break
         threading.Event().wait(1)
+    server.shutdown()
     server.server_close()
 
     if "error" in _code:

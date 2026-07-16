@@ -3,7 +3,7 @@
 
 import { embedMemory, rememberExchange, runAgent, TOOLS } from "./agent.js";
 import { runWatchers } from "./watch.js";
-import { googleConnected, ingestNotification, pollCalendar, pollGmail, remindEvents, surfaceEmail } from "./senses.js";
+import { classifyInbox, googleConnected, ingestNotification, pollCalendar, remindEvents } from "./senses.js";
 import { processBankNotifications } from "./life.js";
 import { runBriefing, runOvernightResearch, runWeekly } from "./briefing.js";
 import { generatePerception, getPerception } from "./perception.js";
@@ -399,37 +399,39 @@ async function runNags(env) {
   }
 }
 
-// ---------- Senses on the cron: calendar, mail ----------
+// ---------- Senses on the cron: mail (via IMAP job) + calendar (OAuth, optional) ----------
+
+async function sensesProfile(env) {
+  const parts = [];
+  for (const key of ["bio", "skills"]) {
+    const row = await env.DB.prepare("SELECT content FROM profile WHERE key = ?").bind(key).first();
+    if (row) parts.push(row.content.slice(0, 1200));
+  }
+  const { results: mems } = await env.DB.prepare("SELECT fact FROM memories ORDER BY id LIMIT 30").all();
+  return [...parts, ...mems.map(m => `- ${m.fact}`)].join("\n") || "(nothing known yet)";
+}
 
 async function runSenses(env) {
-  if (!googleConnected(env)) return { google: "not connected" };
   const out = {};
+  // Mail: the IMAP job (Actions) writes to D1; here we classify the backlog and
+  // surface only what's worth interrupting for. No OAuth needed.
   try {
-    out.calendar = await pollCalendar(env);
-    out.reminded = await remindEvents(env, tg);
-  } catch (e) {
-    out.calendar_error = String(e).slice(0, 150);
-  }
-  try {
-    const { items = [], fresh = 0 } = await pollGmail(env);
-    out.mail_fresh = fresh;
-    if (items.length) {
-      // Only the profile matters here, and only once for the whole batch.
-      const parts = [];
-      for (const key of ["bio", "skills"]) {
-        const row = await env.DB.prepare("SELECT content FROM profile WHERE key = ?").bind(key).first();
-        if (row) parts.push(row.content.slice(0, 1200));
-      }
-      const { results: mems } = await env.DB.prepare(
-        "SELECT fact FROM memories ORDER BY id LIMIT 30").all();
-      const profile = [...parts, ...mems.map(m => `- ${m.fact}`)].join("\n") || "(nothing known yet)";
-      out.surfaced = 0;
-      for (const m of items.slice(0, 5)) {
-        if (await surfaceEmail(env, tg, profile, m)) out.surfaced++;
-      }
+    const pending = await env.DB.prepare(
+      "SELECT COUNT(*) AS n FROM emails WHERE surfaced = 0").first();
+    if (pending.n) {
+      out.mail = await classifyInbox(env, tg, await sensesProfile(env));
     }
   } catch (e) {
     out.mail_error = String(e).slice(0, 150);
+  }
+  // Calendar still rides on OAuth — off unless connected, which it isn't by default.
+  if (googleConnected(env)) {
+    try {
+      out.calendar = await pollCalendar(env);
+      out.reminded = await remindEvents(env, tg);
+    } catch (e) {
+      out.calendar_error = String(e).slice(0, 150);
+    }
   }
   return out;
 }
@@ -589,13 +591,13 @@ async function handleApi(url, env) {
     for (const m of results) if (await embedMemory(env, m.id, m.fact)) ok++;
     return Response.json({ pending: results.length, embedded: ok });
   }
-  if (url.pathname === "/api/google-test") {
-    // Dry check after connecting: what Gmail + Calendar see, without alerting.
-    if (!googleConnected(env)) return Response.json({ connected: false });
-    const out = { connected: true };
-    try { out.gmail = await pollGmail(env); } catch (e) { out.gmail_error = String(e).slice(0, 200); }
-    try { out.calendar = await pollCalendar(env); } catch (e) { out.calendar_error = String(e).slice(0, 200); }
-    return Response.json(out);
+  if (url.pathname === "/api/mail-status") {
+    // What the IMAP job has delivered to D1, and what's waiting to be classified.
+    const total = await env.DB.prepare("SELECT COUNT(*) AS n FROM emails").first();
+    const pending = await env.DB.prepare("SELECT COUNT(*) AS n FROM emails WHERE surfaced = 0").first();
+    const { results } = await env.DB.prepare(
+      "SELECT sender, subject, kind, received_at FROM emails ORDER BY received_at DESC LIMIT 10").all();
+    return Response.json({ total: total.n, awaiting_classification: pending.n, latest: results });
   }
   if (url.pathname === "/api/perception") {
     // ?refresh=1 regenerates (one LLM call); otherwise return the cached read.

@@ -151,47 +151,23 @@ export async function remindEvents(env, tg) {
 
 const esc = s => String(s ?? "").replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
 
-// ---------- Gmail: only the mail that changes what you do today ----------
+// ---------- Gmail: classify what the IMAP poller wrote to D1 ----------
+//
+// The fetching itself happens in GitHub Actions (gmail_imap.py) over IMAP with an
+// App Password — a Worker can't speak IMAP, and OAuth for gmail.readonly forces a
+// verification review or a token that dies every 7 days. So Actions writes matching
+// mail to the emails table as 'unclassified', and this reads the backlog to classify
+// and surface it. Only mail that changes what the owner does today gets through.
 
-// Deliberately narrow. A general inbox reader would burn neurons on newsletters
-// and bury the two mails a week that actually matter.
-const GMAIL_QUERY = "newer_than:2d -category:promotions -category:social " +
-  "(recruiter OR hiring OR interview OR \"your application\" OR opportunity OR " +
-  "internship OR fellowship OR grant OR shortlisted OR offer)";
-
-export async function pollGmail(env) {
-  if (!googleConnected(env)) return { skipped: "google not connected" };
-  const token = await googleToken(env);
-  const listUrl = "https://gmail.googleapis.com/gmail/v1/users/me/messages?" +
-    new URLSearchParams({ q: GMAIL_QUERY, maxResults: "10" });
-  const r = await fetch(listUrl, { headers: { Authorization: `Bearer ${token}` } });
-  if (!r.ok) throw new Error(`gmail ${r.status}`);
-  const { messages = [] } = await r.json();
-
-  const fresh = [];
-  for (const m of messages) {
-    const seen = await env.DB.prepare("SELECT id FROM emails WHERE id = ?").bind(m.id).first();
-    if (seen) continue;
-    const mr = await fetch(
-      `https://gmail.googleapis.com/gmail/v1/users/me/messages/${m.id}?format=metadata` +
-      "&metadataHeaders=From&metadataHeaders=Subject&metadataHeaders=Date",
-      { headers: { Authorization: `Bearer ${token}` } });
-    if (!mr.ok) continue;
-    const msg = await mr.json();
-    const h = Object.fromEntries((msg.payload?.headers || []).map(x => [x.name.toLowerCase(), x.value]));
-    const row = {
-      id: m.id, thread_id: msg.threadId,
-      sender: (h.from || "").slice(0, 200), subject: (h.subject || "(no subject)").slice(0, 250),
-      snippet: (msg.snippet || "").slice(0, 500),
-      received_at: msg.internalDate ? new Date(Number(msg.internalDate)).toISOString() : new Date().toISOString(),
-    };
-    await env.DB.prepare(
-      `INSERT OR IGNORE INTO emails (id, thread_id, sender, subject, snippet, received_at, kind)
-       VALUES (?,?,?,?,?,?,'unclassified')`)
-      .bind(row.id, row.thread_id, row.sender, row.subject, row.snippet, row.received_at).run();
-    fresh.push(row);
+export async function classifyInbox(env, tg, profile) {
+  const { results } = await env.DB.prepare(
+    `SELECT id, thread_id, sender, subject, snippet FROM emails
+     WHERE surfaced = 0 ORDER BY received_at DESC LIMIT 8`).all();
+  let surfaced = 0;
+  for (const m of results) {
+    if (await surfaceEmail(env, tg, profile, m)) surfaced++;
   }
-  return { matched: messages.length, fresh: fresh.length, items: fresh };
+  return { classified: results.length, surfaced };
 }
 
 const MAIL_PROMPT = (profile, m) => `Classify one email for someone's personal agent.

@@ -28,6 +28,11 @@ DASH_TOKEN = os.environ.get("DASH_TOKEN", "")
 RESEARCH_MAX_STEPS = int(os.environ.get("RESEARCH_MAX_STEPS", "22"))
 RESEARCH_MAX_FETCH = int(os.environ.get("RESEARCH_MAX_FETCH", "18"))
 
+# --- Gmail over IMAP (App Password — no OAuth, no verification, no 7-day expiry) ---
+GMAIL_ADDRESS = os.environ.get("GMAIL_ADDRESS", "")
+# Google shows app passwords with spaces ("abcd efgh ijkl mnop"); IMAP wants them removed.
+GMAIL_APP_PASSWORD = os.environ.get("GMAIL_APP_PASSWORD", "").replace(" ", "")
+
 # Google Programmable Search — optional; research falls back to DuckDuckGo without it.
 GOOGLE_CSE_KEY = os.environ.get("GOOGLE_CSE_KEY", "")
 GOOGLE_CSE_ID = os.environ.get("GOOGLE_CSE_ID", "")
