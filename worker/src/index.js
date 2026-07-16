@@ -494,6 +494,25 @@ async function handleApi(url, env) {
         SELECT title, source, url, deadline, ingested_at FROM postings
         ORDER BY ingested_at DESC LIMIT 12`).all(),
     ]);
+    // Measured rarity (point 3) and the learned pieces are the most interesting
+    // things this system holds — they belong on screen, not only in the ranker.
+    const [rarity, calib, people, txs, health, merchants, briefing] = await Promise.all([
+      env.DB.prepare(`SELECT term, df, ROUND(idf, 2) AS idf FROM idf
+                      WHERE term NOT LIKE 'phrase:%' AND df >= 2
+                      ORDER BY idf DESC LIMIT 24`).all(),
+      env.DB.prepare("SELECT * FROM calibration ORDER BY n_applied DESC").all(),
+      env.DB.prepare(`SELECT p.name, p.relation, p.how_met, p.status, p.next_step, p.notes,
+                             p.last_contact, p.created_at,
+                             CAST(julianday('now') - julianday(COALESCE(p.last_contact, p.created_at)) AS INTEGER) AS days_quiet,
+                             (SELECT COUNT(*) FROM interactions i WHERE i.person_id = p.id) AS touches
+                      FROM people p ORDER BY days_quiet ASC LIMIT 40`).all(),
+      env.DB.prepare(`SELECT amount, direction, counterparty, category, at, source
+                      FROM transactions ORDER BY at DESC LIMIT 25`).all(),
+      env.DB.prepare(`SELECT metric, value, unit, at FROM health
+                      WHERE datetime(at) >= datetime('now', '-180 days') ORDER BY at`).all(),
+      env.DB.prepare("SELECT pattern, category FROM merchant_category ORDER BY category, pattern").all(),
+      env.DB.prepare("SELECT value, updated_at FROM state WHERE key = 'briefing_text'").first(),
+    ]);
     const [accounts, holdings, spend, weight, cold, txCount] = await Promise.all([
       env.DB.prepare("SELECT name, kind, balance FROM accounts ORDER BY balance DESC").all(),
       env.DB.prepare("SELECT name, kind, category, value FROM holdings ORDER BY value DESC").all(),
@@ -541,7 +560,14 @@ async function handleApi(url, env) {
         weight: weight.results,
         cold_threads: cold.results,
         tx_count: txCount.n,
+        transactions: txs.results,
+        people: people.results,
+        health: health.results,
       },
+      rarity: rarity.results,
+      calibration: calib.results,
+      merchants: merchants.results,
+      briefing: briefing ? { text: briefing.value, at: briefing.updated_at } : null,
       senses: {
         google_connected: googleConnected(env),
         notify_wired: Boolean(env.NOTIFY_SECRET),
@@ -624,7 +650,12 @@ export default {
     }
     if (url.pathname === "/telegram" && request.method === "POST") return handleTelegram(request, env, ctx);
     if (url.pathname.startsWith("/api/")) return handleApi(url, env);
-    return env.ASSETS.fetch(request);
+    // The dashboard is one HTML file that changes every deploy — never let a browser
+    // or edge cache serve a stale copy, or a UI fix looks broken until a hard reload.
+    const res = await env.ASSETS.fetch(request);
+    const headers = new Headers(res.headers);
+    headers.set("Cache-Control", "no-cache, must-revalidate");
+    return new Response(res.body, { status: res.status, headers });
   },
   async scheduled(_event, env) {
     await runReminders(env);

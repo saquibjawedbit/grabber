@@ -64,6 +64,16 @@
     background: var(--surface); border: 1px solid var(--border);
     border-radius: 12px; padding: 1rem 1.1rem; margin: 0 0 1rem;
   }
+  .tabs { display: flex; gap: 0.25rem; margin: 0 0 1rem; flex-wrap: wrap; border-bottom: 1px solid var(--grid); }
+  .tabs button {
+    background: none; border: 0; border-bottom: 2px solid transparent; margin-bottom: -1px;
+    padding: 0.5rem 0.9rem; font: inherit; font-size: 0.9rem; color: var(--muted);
+    cursor: pointer; border-radius: 6px 6px 0 0;
+  }
+  .tabs button:hover { color: var(--ink); }
+  .tabs button.on { color: var(--ink); border-bottom-color: var(--seq); font-weight: 600; }
+  section[data-panel] { display: grid; gap: 0; }
+  section[data-panel][hidden] { display: none; }
   .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 0.75rem; margin-bottom: 1rem; }
   .tile { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 0.8rem 1rem; }
   .tile .v { font-size: 1.7rem; font-weight: 650; letter-spacing: -0.02em; }
@@ -134,65 +144,85 @@
 
   <div class="tiles" id="tiles"></div>
 
-  <div class="card">
-    <h2>Knowledge graph</h2>
-    <canvas id="graph"></canvas>
-    <div class="legend" id="legend"></div>
-  </div>
+  <nav class="tabs" id="tabs">
+    <button data-tab="brain" class="on">Brain</button>
+    <button data-tab="life">Life</button>
+    <button data-tab="opportunities">Opportunities</button>
+    <button data-tab="research">Research</button>
+    <button data-tab="senses">Senses</button>
+  </nav>
 
-  <div class="card" id="life">
-    <h2>Life</h2>
-    <div id="life-body"></div>
-  </div>
-
-  <div class="cols">
-    <div>
-      <div class="card">
-        <h2>Memories</h2>
-        <div id="memories"></div>
+  <!-- BRAIN -->
+  <section data-panel="brain">
+    <div class="card" id="briefing-card" hidden>
+      <h2>Latest briefing <span class="sub" id="brief-at"></span></h2>
+      <div id="briefing"></div>
+    </div>
+    <div class="card">
+      <h2>Knowledge graph</h2>
+      <canvas id="graph"></canvas>
+      <div class="legend" id="legend"></div>
+    </div>
+    <div class="cols">
+      <div>
+        <div class="card"><h2>Memories</h2><div id="memories"></div></div>
+        <div class="card"><h2>Profile documents</h2><div id="docs"></div></div>
       </div>
-      <div class="card">
-        <h2>Profile documents</h2>
-        <div id="docs"></div>
-      </div>
-      <div class="card">
-        <h2>Conversation summary <span class="sub" id="sum-at"></span></h2>
-        <div id="summary"></div>
+      <div>
+        <div class="card"><h2>Reminders</h2><div id="reminders"></div></div>
+        <div class="card">
+          <h2>Conversation summary <span class="sub" id="sum-at"></span></h2>
+          <div id="summary"></div>
+        </div>
       </div>
     </div>
-    <div>
-      <div class="card" id="senses">
-        <h2>Senses</h2>
-        <div id="senses-status"></div>
-        <div id="senses-list"></div>
+  </section>
+
+  <!-- LIFE -->
+  <section data-panel="life" hidden>
+    <div class="card"><h2>Money, body &amp; people</h2><div id="life-body"></div></div>
+    <div class="cols">
+      <div><div class="card"><h2>People</h2><div id="people"></div></div></div>
+      <div><div class="card"><h2>Recent transactions</h2><div id="transactions"></div></div></div>
+    </div>
+  </section>
+
+  <!-- OPPORTUNITIES -->
+  <section data-panel="opportunities" hidden>
+    <div class="cols">
+      <div>
+        <div class="card"><h2>Watching</h2><div id="watchers"></div></div>
+        <div class="card"><h2>Win rates by category</h2><div id="calibration"></div></div>
       </div>
-      <div class="card" id="research">
-        <h2>Research</h2>
-        <div id="research-list"></div>
-      </div>
-      <div class="card">
-        <h2>Watching</h2>
-        <div id="watchers"></div>
-      </div>
-      <div class="card">
-        <h2>Reminders</h2>
-        <div id="reminders"></div>
-      </div>
-      <div class="card">
-        <h2>Corpus by source</h2>
-        <div id="bysource"></div>
-      </div>
-      <div class="card">
-        <h2>Latest ingested</h2>
-        <div id="recent"></div>
+      <div>
+        <div class="card">
+          <h2>Rarest terms <span class="sub">measured, not hardcoded</span></h2>
+          <div id="rarity"></div>
+        </div>
+        <div class="card"><h2>Corpus by source</h2><div id="bysource"></div></div>
       </div>
     </div>
-  </div>
+    <div class="card"><h2>Alerts sent</h2><div id="alerts"></div></div>
+    <div class="card"><h2>Latest ingested</h2><div id="recent"></div></div>
+  </section>
 
-  <div class="card">
-    <h2>Alerts sent</h2>
-    <div id="alerts"></div>
-  </div>
+  <!-- RESEARCH -->
+  <section data-panel="research" hidden>
+    <div class="card"><h2>Deep dives</h2><div id="research-list"></div></div>
+  </section>
+
+  <!-- SENSES -->
+  <section data-panel="senses" hidden>
+    <div class="card">
+      <h2>What it can sense</h2>
+      <div id="senses-status"></div>
+      <div id="senses-list"></div>
+    </div>
+    <div class="cols">
+      <div><div class="card"><h2>Allowed apps</h2><div id="allowlist"></div></div></div>
+      <div><div class="card"><h2>Learned merchants</h2><div id="merchants"></div></div></div>
+    </div>
+  </section>
 </main>
 
 <div id="gate" hidden>
@@ -601,26 +631,134 @@ function runGraph(data) {
     `<span style="--c:${catColor("doc")}">document</span>`;
 }
 
+function renderBriefing(b) {
+  if (!b?.text) return;
+  $("briefing-card").hidden = false;
+  // The briefing is authored with simple <b>/<i>; render those, escape the rest.
+  const safe = esc(b.text).replace(/&lt;(\/?(?:b|i))&gt;/g, "<$1>");
+  $("briefing").innerHTML = `<div style="white-space:pre-wrap;font-size:0.92rem">${safe}</div>`;
+  if (b.at) $("brief-at").textContent = "· " + b.at.slice(0, 10);
+}
+
+function renderPeople(people) {
+  if (!people?.length) {
+    $("people").innerHTML = `<div class="empty">Nobody on file. Tell the bot "met Ankit, he's a recruiter at Rippling" and they show up here, tracked.</div>`;
+    return;
+  }
+  const relColor = { recruiter: "contact", founder: "goal", mentor: "skill", friend: "preference",
+                     family: "preference", colleague: "project", dating: "skill" };
+  $("people").innerHTML = people.map(p => {
+    const cold = p.days_quiet >= 14 && p.status !== "closed";
+    return `<div class="mem"><span class="chip" style="--c:${catColor(relColor[p.relation] || "fact")}">${esc(p.relation || "—")}</span>
+      <span><b>${esc(p.name)}</b>${p.next_step ? ` — <i>${esc(p.next_step)}</i>` : ""}
+        <br><span class="meta">${p.touches} touch${p.touches === 1 ? "" : "es"} · ${cold ? `<span class="overdue">${p.days_quiet}d quiet</span>` : `${p.days_quiet}d`}${p.how_met ? " · " + esc(p.how_met) : ""}</span></span></div>`;
+  }).join("");
+}
+
+function renderTransactions(txs) {
+  if (!txs?.length) {
+    $("transactions").innerHTML = `<div class="empty">No transactions yet. Once the phone bridge is connected, bank alerts land here automatically.</div>`;
+    return;
+  }
+  $("transactions").innerHTML = txs.map(t => {
+    const cr = t.direction === "credit";
+    return `<div class="rem"><span class="when">${IST.format(Date.parse(t.at))}</span>
+      <span><b style="color:${cr ? "var(--good)" : "var(--critical)"}">${cr ? "+" : "−"}${money(t.amount)}</b>
+      ${esc(t.counterparty || "—")} <span class="meta">${esc(t.category || "")} · ${esc(t.source)}</span></span></div>`;
+  }).join("");
+}
+
+function renderCalibration(cal) {
+  const decided = cal.filter(c => (c.n_won || 0) + (c.n_rejected || 0) > 0);
+  if (!decided.length) {
+    $("calibration").innerHTML = `<div class="empty">No win rates yet — they're measured from real outcomes, so this fills in after you've applied and heard back. Guessing until then.</div>`;
+    return;
+  }
+  $("calibration").innerHTML = decided.map(c => {
+    const d = (c.n_won || 0) + (c.n_rejected || 0);
+    const pct = c.rate != null ? Math.round(c.rate * 100) : null;
+    const w = pct == null ? 2 : Math.max(2, pct * 0.8);
+    return `<div class="bar-row"><span class="lbl">${esc(c.category)}</span>
+      <span class="bar-wrap"><span class="bar" style="width:${w}%"></span>
+      <span class="bar-v" style="left:calc(${w}% + 7px)">${pct == null ? "?" : pct + "%"} <span class="meta">(${d} decided)</span></span></span></div>`;
+  }).join("");
+}
+
+function renderRarity(terms) {
+  if (!terms?.length) {
+    $("rarity").innerHTML = `<div class="empty">IDF is recomputed nightly over the corpus. A term is rare when few postings contain it — that's what earns it weight in ranking.</div>`;
+    return;
+  }
+  const max = Math.max(...terms.map(t => t.idf));
+  $("rarity").innerHTML = terms.map(t => {
+    const w = Math.max(3, (t.idf / max) * 78);
+    return `<div class="bar-row"><span class="lbl">${esc(t.term)}</span>
+      <span class="bar-wrap"><span class="bar" style="width:${w}%"></span>
+      <span class="bar-v" style="left:calc(${w}% + 7px)">${t.idf} <span class="meta">${t.df} docs</span></span></span></div>`;
+  }).join("");
+}
+
+function renderMerchants(m) {
+  if (!m?.length) { $("merchants").innerHTML = `<div class="empty">None learned yet.</div>`; return; }
+  const byCat = {};
+  for (const r of m) (byCat[r.category] ||= []).push(r.pattern);
+  $("merchants").innerHTML = Object.entries(byCat).map(([cat, pats]) =>
+    `<div class="mem"><span class="chip" style="--c:${catColor("project")}">${esc(cat)}</span>
+      <span>${pats.map(esc).join(", ")}</span></div>`).join("");
+}
+
+function renderAllowlist(a) {
+  if (!a?.length) { $("allowlist").innerHTML = `<div class="empty">Nothing allowed yet.</div>`; return; }
+  const byKind = {};
+  for (const r of a) (byKind[r.kind] ||= []).push(r.pattern);
+  $("allowlist").innerHTML = Object.entries(byKind).map(([kind, pats]) =>
+    `<div class="mem"><span class="chip" style="--c:${catColor(kind === "bank" ? "goal" : "contact")}">${esc(kind)}</span>
+      <span>${pats.map(esc).join(", ")}</span></div>`).join("") +
+    `<div class="meta" style="margin-top:.5rem">Every other app is dropped before it's stored.</div>`;
+}
+
+// ---------- tabs ----------
+let graphStarted = false;
+function showTab(name) {
+  document.querySelectorAll("#tabs button").forEach(b => b.classList.toggle("on", b.dataset.tab === name));
+  document.querySelectorAll("section[data-panel]").forEach(s => { s.hidden = s.dataset.panel !== name; });
+  // The canvas can't size itself while hidden — start it the first time Brain shows.
+  if (name === "brain" && !graphStarted && window.__brain) { graphStarted = true; runGraph(window.__brain); }
+  try { history.replaceState(null, "", "#" + name); } catch { /* ignore */ }
+}
+document.getElementById("tabs").addEventListener("click", e => {
+  const b = e.target.closest("button[data-tab]");
+  if (b) showTab(b.dataset.tab);
+});
+
 // ---------- boot ----------
 async function boot() {
   try {
     const [brain, alerts] = await Promise.all([api("/api/brain"), api("/api/alerts")]);
+    window.__brain = brain;
     $("gate").hidden = true; $("app").hidden = false;
     $("asof").textContent = "as of " + IST.format(new Date());
     renderTiles(brain.totals);
+    renderBriefing(brain.briefing);
     renderMemories(brain.memories);
     renderDocs(brain.documents);
     renderSummary(brain.summary);
     renderLife(brain.life);
+    renderPeople(brain.life?.people);
+    renderTransactions(brain.life?.transactions);
     renderSenses(brain.senses);
+    renderAllowlist(brain.senses?.allowlist);
+    renderMerchants(brain.merchants);
     renderResearch(brain.research);
     renderWatchers(brain.watchers);
     renderReminders(brain.reminders);
     renderBars(brain.by_source);
     renderRecent(brain.recent);
+    renderRarity(brain.rarity);
+    renderCalibration(brain.calibration);
     renderAlerts(alerts);
-    runGraph(brain);
-    if (location.hash) document.querySelector(location.hash)?.scrollIntoView();
+    const start = (location.hash || "").slice(1);
+    showTab(["brain", "life", "opportunities", "research", "senses"].includes(start) ? start : "brain");
   } catch (e) {
     localStorage.removeItem("dash_token");
     gate(e.message === "token" && token ? "Wrong token — try again." : "");
