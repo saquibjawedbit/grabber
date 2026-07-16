@@ -7,13 +7,20 @@ does that in ~2 minutes and prints the three values to hand back.
 Setup (one time, in console.cloud.google.com):
   1. New project (any name).
   2. APIs & Services -> Library -> enable "Gmail API" and "Google Calendar API".
-  3. APIs & Services -> OAuth consent screen -> External -> fill the required
-     fields -> Audience -> Test users -> add your own gmail address.
+  3. APIs & Services -> OAuth consent screen -> External -> fill the required fields.
+     THEN PUBLISH IT: set publishing status to "In production" (the "Publish app"
+     button), NOT "Testing". This matters — gmail.readonly is a restricted scope, and
+     while the app is in Testing, Google expires your refresh token after 7 DAYS, so
+     the connection would silently die every week. In production it lasts indefinitely.
   4. Credentials -> Create credentials -> OAuth client ID -> Desktop app.
      Copy the client ID and client secret.
 
 Then:
   python3 pipeline/scripts/google_auth.py
+
+At the consent screen you'll see "Google hasn't verified this app" — expected for a
+personal one-user app. Click "Advanced" -> "Go to (your app name) (unsafe)" -> Allow.
+That warning is about verification, not safety; the scopes below are read-only.
 
 Read-only scopes: this can never send mail or change your calendar.
 """

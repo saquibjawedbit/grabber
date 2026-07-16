@@ -589,6 +589,14 @@ async function handleApi(url, env) {
     for (const m of results) if (await embedMemory(env, m.id, m.fact)) ok++;
     return Response.json({ pending: results.length, embedded: ok });
   }
+  if (url.pathname === "/api/google-test") {
+    // Dry check after connecting: what Gmail + Calendar see, without alerting.
+    if (!googleConnected(env)) return Response.json({ connected: false });
+    const out = { connected: true };
+    try { out.gmail = await pollGmail(env); } catch (e) { out.gmail_error = String(e).slice(0, 200); }
+    try { out.calendar = await pollCalendar(env); } catch (e) { out.calendar_error = String(e).slice(0, 200); }
+    return Response.json(out);
+  }
   if (url.pathname === "/api/perception") {
     // ?refresh=1 regenerates (one LLM call); otherwise return the cached read.
     if (url.searchParams.get("refresh") === "1") {
