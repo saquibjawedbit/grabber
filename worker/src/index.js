@@ -489,6 +489,8 @@ async function handleApi(url, env) {
           (SELECT COUNT(*) FROM reminders WHERE done = 0) AS reminders,
           (SELECT COUNT(*) FROM notifications) +
             (SELECT COUNT(*) FROM events) + (SELECT COUNT(*) FROM emails) AS sensed,
+          (SELECT COUNT(*) FROM applications) AS packs,
+          (SELECT COUNT(*) FROM applications WHERE status NOT IN ('ready','dropped')) AS sent,
           (SELECT COUNT(*) FROM alerts WHERE sent_at IS NOT NULL) AS alerted,
           (SELECT COUNT(DISTINCT alert_id) FROM outcomes WHERE action = 'applied') AS applied,
           (SELECT COUNT(DISTINCT alert_id) FROM outcomes WHERE action = 'won') AS won,
@@ -517,6 +519,9 @@ async function handleApi(url, env) {
       env.DB.prepare("SELECT value, updated_at FROM state WHERE key = 'briefing_text'").first(),
     ]);
     const perception = await getPerception(env);
+    const applications = (await env.DB.prepare(
+      `SELECT id, title, company, url, fit, status, created_at, applied_at, cover_note, package_md
+       FROM applications ORDER BY id DESC LIMIT 40`).all()).results;
     const [accounts, holdings, spend, weight, cold, txCount] = await Promise.all([
       env.DB.prepare("SELECT name, kind, balance FROM accounts ORDER BY balance DESC").all(),
       env.DB.prepare("SELECT name, kind, category, value FROM holdings ORDER BY value DESC").all(),
@@ -570,6 +575,7 @@ async function handleApi(url, env) {
       },
       rarity: rarity.results,
       calibration: calib.results,
+      applications,
       merchants: merchants.results,
       briefing: briefing ? { text: briefing.value, at: briefing.updated_at } : null,
       perception,

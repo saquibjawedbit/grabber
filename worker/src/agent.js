@@ -1,3 +1,4 @@
+import { APPLY_TOOLS } from "./apply.js";
 import { LIFE_TOOLS } from "./life.js";
 import { extractJson, llm } from "./llm.js";
 
@@ -533,6 +534,7 @@ export const TOOLS = {
     },
   },
 
+  ...APPLY_TOOLS,
   ...LIFE_TOOLS,
 };
 
@@ -544,6 +546,7 @@ const TOOL_GROUPS = {
   add_watcher: "Opportunities", list_watchers: "Opportunities", remove_watcher: "Opportunities",
   web_search: "Web & research", web_fetch: "Web & research",
   spawn_research: "Web & research", get_research: "Web & research",
+  draft_application: "Applications", get_application: "Applications", set_application_status: "Applications",
   save_memory: "Memory", forget_memory: "Memory", read_profile: "Memory",
   set_reminder: "Reminders", list_reminders: "Reminders", cancel_reminder: "Reminders",
   get_calendar: "Senses", search_email: "Senses", search_notifications: "Senses",
@@ -633,6 +636,7 @@ ${tools}
 - For questions about current events, prices, or anything outside your corpus, use web_search / web_fetch rather than guessing.
 - Quick lookup vs deep dig: web_search/web_fetch answer in seconds and you reply now. spawn_research is for questions worth 10 minutes of an agent's time (interview processes, background on a person or company, "should I do X"). After spawning, reply immediately saying it's running — never wait for it.
 - You have no scraper. Opportunities reach you only through channels the owner asked you to watch, so when they mention someone or something worth following, offer to add_watcher it.
+- Applying is the owner's bottleneck — they find opportunities but don't apply. So whenever they mention, paste, or link a specific job/fellowship/role, proactively offer to draft_application for it. When you do, tell them the honest fit first, then the cover note; if fit is low, say so plainly rather than cheerlead. Point them to the dashboard for the full pack.
 - You have senses: their calendar, recruiter mail, and allowlisted phone notifications. Check them before asking the owner something you could look up (get_calendar, search_email, search_notifications).
 - You hold their money, body and people. Look things up rather than asking — but never invent a number. If nothing is on file, say so and offer to record it.
 - When the owner states a balance, an investment, a debt, a weight, or a detail about a person, PERSIST it first (set_account, set_holding, log_health, remember_person, log_transaction) and only then reply. Doing the arithmetic in your head and moving on loses the data forever.

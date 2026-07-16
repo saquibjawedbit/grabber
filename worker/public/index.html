@@ -143,6 +143,9 @@
   details { margin-top: 0.4rem; } summary { cursor: pointer; font-size: 0.8rem; color: var(--ink-2); }
   pre.draft { white-space: pre-wrap; font-family: inherit; font-size: 0.82rem;
     background: color-mix(in srgb, currentColor 6%, transparent); padding: 0.7rem; border-radius: 8px; }
+  .pack { font-size: 0.86rem; line-height: 1.55; background: color-mix(in srgb, currentColor 5%, transparent);
+    padding: 0.8rem 1rem; border-radius: 8px; margin-top: 0.5rem; }
+  .pack h3 { font-size: 0.98rem; }
   #tip {
     position: fixed; pointer-events: none; display: none; z-index: 10; max-width: 320px;
     background: var(--surface); color: var(--ink); border: 1px solid var(--border);
@@ -218,6 +221,10 @@
 
   <!-- OPPORTUNITIES -->
   <section data-panel="opportunities" hidden>
+    <div class="card" id="apps-card">
+      <h2>Applications <span class="sub" id="apps-sub"></span></h2>
+      <div id="applications"></div>
+    </div>
     <div class="cols">
       <div>
         <div class="card"><h2>Watching</h2><div id="watchers"></div></div>
@@ -303,8 +310,8 @@ function renderTiles(t) {
     [t.watchers, "watching"],
     [t.research, "deep dives"],
     [t.reminders, "open reminders"],
-    [t.sensed, "things sensed"],
-    [t.applied, "applied"],
+    [t.packs, "app packs"],
+    [t.sent, "applications sent"],
   ];
   $("tiles").innerHTML = tiles.map(([v, k]) =>
     `<div class="tile"><div class="v">${v ?? 0}</div><div class="k">${k}</div></div>`).join("");
@@ -435,6 +442,46 @@ function renderSenses(s) {
   }
   $("senses-list").innerHTML = parts.join("") ||
     `<div class="empty">Nothing sensed yet. Once the phone bridge or Google is connected, what it sees shows up here.</div>`;
+}
+
+const APP_STATUS = {
+  ready: { label: "ready to send", c: "--warn" }, applied: { label: "applied", c: "--accent" },
+  responded: { label: "responded", c: "--accent" }, interview: { label: "interview", c: "--good" },
+  offer: { label: "offer", c: "--good" }, rejected: { label: "rejected", c: "--muted" },
+  dropped: { label: "dropped", c: "--muted" },
+};
+
+function mdToHtml(md) {
+  return esc(md)
+    .replace(/^# (.*)$/gm, '<h3 style="margin:.6rem 0 .2rem">$1</h3>')
+    .replace(/^## (.*)$/gm, '<div class="meta" style="margin-top:.7rem;text-transform:uppercase;letter-spacing:.06em">$1</div>')
+    .replace(/^\*\*(.*?)\*\*$/gm, '<b>$1</b>')
+    .replace(/\*\*(.*?)\*\*/g, '<b>$1</b>')
+    .replace(/^- (.*)$/gm, '• $1')
+    .replace(/\n/g, "<br>");
+}
+
+function renderApplications(apps) {
+  const box = $("applications");
+  if (!apps?.length) {
+    $("apps-sub").textContent = "";
+    box.innerHTML = `<div class="empty">None yet. Point the bot at any job — a link, a pasted description, or "draft an application for the Django role in my inbox" — and a ready-to-send pack lands here. Applying is the bottleneck; this is the fix.</div>`;
+    return;
+  }
+  const applied = apps.filter(a => a.status !== "ready" && a.status !== "dropped").length;
+  $("apps-sub").textContent = `${apps.length} drafted · ${applied} sent`;
+  box.innerHTML = apps.map(a => {
+    const st = APP_STATUS[a.status] || APP_STATUS.ready;
+    const fitColor = a.fit >= 7 ? "--good" : a.fit >= 4 ? "--warn" : "--critical";
+    return `<div class="post">
+      <b>${a.url ? `<a href="${esc(a.url)}" target="_blank" rel="noopener">${esc(a.title)}</a>` : esc(a.title)}</b>
+      <span class="chip" style="--c:var(${st.c});margin-left:.4rem">${st.label}</span>
+      <span class="chip" style="--c:var(${fitColor})">fit ${a.fit}/10</span>
+      <details><summary>cover note + full pack</summary>
+        <div class="pack">${mdToHtml(a.package_md || a.cover_note || "")}</div>
+      </details>
+    </div>`;
+  }).join("");
 }
 
 const R_ICON = { done: "✅", running: "◐", queued: "◌", failed: "⚠️" };
@@ -820,6 +867,7 @@ async function boot() {
     renderReminders(brain.reminders);
     renderBars(brain.by_source);
     renderRecent(brain.recent);
+    renderApplications(brain.applications);
     renderRarity(brain.rarity);
     renderCalibration(brain.calibration);
     renderAlerts(alerts);
