@@ -513,6 +513,26 @@ export const TOOLS = {
     },
   },
 
+  configure_briefing: {
+    desc: 'change the morning briefing. args: {"enabled": true|false, "hour_ist": 8}',
+    run: async (env, args) => {
+      const set = async (k, v) => env.DB.prepare(
+        `INSERT INTO state (key, value, updated_at) VALUES (?,?,?)
+         ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`)
+        .bind(k, String(v), new Date().toISOString()).run();
+      if (args.enabled !== undefined) await set("briefing_enabled", args.enabled ? "1" : "0");
+      if (args.hour_ist !== undefined) {
+        const h = Number(args.hour_ist);
+        if (!Number.isInteger(h) || h < 0 || h > 23) return { error: "hour_ist must be 0-23" };
+        await set("briefing_hour", h);
+      }
+      const en = await env.DB.prepare("SELECT value FROM state WHERE key='briefing_enabled'").first();
+      const hr = await env.DB.prepare("SELECT value FROM state WHERE key='briefing_hour'").first();
+      return { ok: true, enabled: en?.value !== "0", hour_ist: Number(hr?.value || 8),
+               note: "I only send it when there's something worth interrupting you for." };
+    },
+  },
+
   ...LIFE_TOOLS,
 };
 

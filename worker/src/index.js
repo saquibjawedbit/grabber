@@ -5,6 +5,7 @@ import { embedMemory, rememberExchange, runAgent, TOOLS } from "./agent.js";
 import { runWatchers } from "./watch.js";
 import { googleConnected, ingestNotification, pollCalendar, pollGmail, remindEvents, surfaceEmail } from "./senses.js";
 import { processBankNotifications } from "./life.js";
+import { runBriefing, runOvernightResearch, runWeekly } from "./briefing.js";
 
 const TG = (env, method) => `https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/${method}`;
 
@@ -578,7 +579,10 @@ async function handleApi(url, env) {
     const money = await processBankNotifications(env);
     const senses = url.searchParams.get("senses") === "1" ? await runSenses(env) : "skipped";
     const watch = url.searchParams.get("watch") === "1" ? await runWatchers(env, tg) : "skipped";
-    return Response.json({ ok: true, money, senses, watch });
+    const q = k => url.searchParams.get(k) === "1";
+    const brief = q("brief") ? await runBriefing(env, tg, { force: q("force") }) : "skipped";
+    const weekly = q("weekly") ? await runWeekly(env, tg, { force: q("force") }) : "skipped";
+    return Response.json({ ok: true, money, senses, watch, brief, weekly });
   }
   if (url.pathname === "/api/stats") {
     const { results } = await env.DB.prepare("SELECT * FROM calibration").all();
@@ -630,9 +634,14 @@ export default {
       ["senses", runSenses],
       ["money", processBankNotifications],   // bank alerts Phase 4 filed -> transactions
       ["watchers", e => runWatchers(e, tg)],
+      // Initiative last: it reports on everything above, so it runs after them.
+      ["briefing", e => runBriefing(e, tg)],
+      ["weekly", e => runWeekly(e, tg)],
+      ["overnight", e => runOvernightResearch(e, (en, args) => TOOLS.spawn_research.run(en, args))],
     ]) {
       try {
-        await fn(env);
+        const out = await fn(env);
+        if (out && !out.skipped) console.log(`${name}:`, JSON.stringify(out).slice(0, 200));
       } catch (e) {
         console.log(`${name} failed:`, String(e).slice(0, 200));
       }
