@@ -6,6 +6,7 @@ import { runWatchers } from "./watch.js";
 import { googleConnected, ingestNotification, pollCalendar, pollGmail, remindEvents, surfaceEmail } from "./senses.js";
 import { processBankNotifications } from "./life.js";
 import { runBriefing, runOvernightResearch, runWeekly } from "./briefing.js";
+import { generatePerception, getPerception } from "./perception.js";
 
 const TG = (env, method) => `https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/${method}`;
 
@@ -513,6 +514,7 @@ async function handleApi(url, env) {
       env.DB.prepare("SELECT pattern, category FROM merchant_category ORDER BY category, pattern").all(),
       env.DB.prepare("SELECT value, updated_at FROM state WHERE key = 'briefing_text'").first(),
     ]);
+    const perception = await getPerception(env);
     const [accounts, holdings, spend, weight, cold, txCount] = await Promise.all([
       env.DB.prepare("SELECT name, kind, balance FROM accounts ORDER BY balance DESC").all(),
       env.DB.prepare("SELECT name, kind, category, value FROM holdings ORDER BY value DESC").all(),
@@ -568,6 +570,7 @@ async function handleApi(url, env) {
       calibration: calib.results,
       merchants: merchants.results,
       briefing: briefing ? { text: briefing.value, at: briefing.updated_at } : null,
+      perception,
       senses: {
         google_connected: googleConnected(env),
         notify_wired: Boolean(env.NOTIFY_SECRET),
@@ -585,6 +588,13 @@ async function handleApi(url, env) {
     let ok = 0;
     for (const m of results) if (await embedMemory(env, m.id, m.fact)) ok++;
     return Response.json({ pending: results.length, embedded: ok });
+  }
+  if (url.pathname === "/api/perception") {
+    // ?refresh=1 regenerates (one LLM call); otherwise return the cached read.
+    if (url.searchParams.get("refresh") === "1") {
+      return Response.json(await generatePerception(env));
+    }
+    return Response.json(await getPerception(env) || { empty: true });
   }
   if (url.pathname === "/api/tool") {
     // Debug: run one agent tool directly. /api/tool?t=TOKEN&name=web_search&args={"query":"..."}

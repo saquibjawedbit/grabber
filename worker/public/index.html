@@ -105,6 +105,27 @@
   .bar-wrap { position: relative; height: 16px; }
   .bar { position: absolute; left: 0; top: 1px; height: 14px; background: var(--seq); border-radius: 0 4px 4px 0; min-width: 2px; }
   .bar-v { position: absolute; top: -1px; font-size: 0.75rem; color: var(--ink); font-variant-numeric: tabular-nums; }
+  .perception { border-color: color-mix(in srgb, var(--seq) 30%, var(--border)); }
+  .perc-head { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
+  .perc-head h2 { margin: 0; }
+  .ghost-btn {
+    background: none; border: 1px solid var(--border); color: var(--ink-2);
+    border-radius: 7px; padding: 0.35rem 0.8rem; font: inherit; font-size: 0.82rem; cursor: pointer;
+  }
+  .ghost-btn:hover:not(:disabled) { color: var(--ink); border-color: var(--baseline); }
+  .ghost-btn:disabled { opacity: 0.5; cursor: default; }
+  .perc-headline { font-size: 1.15rem; font-weight: 600; letter-spacing: -0.01em; margin: 0.7rem 0 0.5rem; text-wrap: balance; }
+  .perc-read { color: var(--ink-2); margin: 0 0 0.9rem; }
+  .perc-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem 1.6rem; }
+  @media (max-width: 720px) { .perc-cols { grid-template-columns: 1fr; } }
+  .perc-block h4 {
+    margin: 0 0 0.35rem; font-size: 0.7rem; letter-spacing: 0.08em; text-transform: uppercase;
+    color: var(--muted); font-weight: 600;
+  }
+  .perc-block ul { margin: 0; padding-left: 1.05rem; }
+  .perc-block li { font-size: 0.88rem; margin-bottom: 0.25rem; color: var(--ink-2); }
+  .conf-chip { font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.06em; font-weight: 600; }
+  .conf-low { color: var(--muted); } .conf-medium { color: var(--warn); } .conf-high { color: var(--good); }
   .spark { display: block; width: 100%; height: 54px; margin-top: 0.3rem; }
   .lil { font-size: 0.85rem; display: flex; justify-content: space-between; gap: 0.6rem;
          padding: 0.3rem 0; border-bottom: 1px solid var(--grid); }
@@ -154,6 +175,14 @@
 
   <!-- BRAIN -->
   <section data-panel="brain">
+    <div class="card perception" id="perception-card">
+      <div class="perc-head">
+        <h2>How I see you <span class="sub" id="perc-conf"></span></h2>
+        <button id="perc-refresh" class="ghost-btn">Refresh</button>
+      </div>
+      <div id="perception"></div>
+      <div class="sub" id="perc-at"></div>
+    </div>
     <div class="card" id="briefing-card" hidden>
       <h2>Latest briefing <span class="sub" id="brief-at"></span></h2>
       <div id="briefing"></div>
@@ -631,6 +660,41 @@ function runGraph(data) {
     `<span style="--c:${catColor("doc")}">document</span>`;
 }
 
+function renderPerception(p) {
+  const box = $("perception");
+  if (!p || p.empty || p.error) {
+    $("perc-conf").textContent = "";
+    box.innerHTML = `<div class="empty">${p?.error ? esc(p.error)
+      : "Not generated yet. Hit Refresh and I'll give you my honest read — which right now is mostly “I barely know you.”"}</div>`;
+    $("perc-at").textContent = "";
+    return;
+  }
+  $("perc-conf").innerHTML = `<span class="conf-chip conf-${esc(p.confidence)}">${esc(p.confidence)} confidence</span>`;
+  const list = (arr, title) => arr?.length
+    ? `<div class="perc-block"><h4>${title}</h4><ul>${arr.map(x => `<li>${esc(x)}</li>`).join("")}</ul></div>` : "";
+  box.innerHTML =
+    `<div class="perc-headline">${esc(p.headline)}</div>` +
+    (p.read ? `<p class="perc-read">${esc(p.read)}</p>` : "") +
+    `<div class="perc-cols">
+       ${list(p.grounded_in, "What I actually know")}
+       ${list(p.blind_spots, "What I can't see")}
+       ${list(p.sharpen, "Tell me this and it sharpens")}
+     </div>`;
+  $("perc-at").textContent = (p.coverage ? p.coverage + " · " : "") + "updated " + (p.at || "").slice(0, 16).replace("T", " ");
+}
+
+async function refreshPerception() {
+  const btn = $("perc-refresh");
+  btn.disabled = true; btn.textContent = "Thinking…";
+  try {
+    const p = await api("/api/perception?refresh=1");
+    renderPerception(p);
+  } catch {
+    renderPerception({ error: "that didn't go through — try again" });
+  }
+  btn.disabled = false; btn.textContent = "Refresh";
+}
+
 function renderBriefing(b) {
   if (!b?.text) return;
   $("briefing-card").hidden = false;
@@ -739,6 +803,8 @@ async function boot() {
     $("gate").hidden = true; $("app").hidden = false;
     $("asof").textContent = "as of " + IST.format(new Date());
     renderTiles(brain.totals);
+    renderPerception(brain.perception);
+    $("perc-refresh").onclick = refreshPerception;
     renderBriefing(brain.briefing);
     renderMemories(brain.memories);
     renderDocs(brain.documents);
