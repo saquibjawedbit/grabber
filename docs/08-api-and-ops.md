@@ -46,6 +46,7 @@ flowchart TB
 | `/api/cron` | GET | Manually trigger cron work — flags `?senses=1&system=1&issue=1&debrief=1&force=1` (`issue`/`debrief` force one half of The System). |
 | `/api/rank` | GET | The System's level/XP/streak + active goals. |
 | `/api/system` | GET | The dashboard **System tab** payload: `rank` (level/XP/streak), `goals` (with per-goal quest counts), `quests_today`, and `activity` (the work log, newest 60). |
+| `/api/goal` | POST | Set a goal (`{title,why,target,deadline}` → `createGoal`) or change its status (`{id,status}` → active/achieved/dropped). This is how the dashboard's "Set a goal" form and per-goal buttons work. |
 
 > **Security note:** `DASH_TOKEN` gates *both* the read dashboard and mutating endpoints
 > (`/api/teach`, `/api/memory`, `/api/persona`, `/api/cron`, `/api/tool`). It is a

@@ -165,12 +165,19 @@
   .teach-status.bad { color: var(--critical); }
   #teach-out:not(:empty) { margin-top: 0.8rem; border-top: 1px solid var(--grid); padding-top: 0.6rem; }
   .learned-head { font-size: 0.78rem; color: var(--ink-2); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.4rem; }
-  #mem-add, #doc-edit, #persona-form { margin: 0.2rem 0 0.8rem; display: grid; gap: 0.4rem; }
+  #mem-add, #doc-edit, #persona-form, #goal-add { margin: 0.2rem 0 0.8rem; display: grid; gap: 0.4rem; }
   .field-label { font-size: 0.75rem; color: var(--ink-2); text-transform: uppercase; letter-spacing: 0.05em; margin-top: 0.3rem; }
   #persona-name { max-width: 22rem; }
   /* display:grid above outranks the UA rule that makes [hidden] work — without this
      the forms are open before you ask for them. */
-  #mem-add[hidden], #doc-edit[hidden] { display: none; }
+  #mem-add[hidden], #doc-edit[hidden], #goal-add[hidden] { display: none; }
+  .goal-actions { display: inline-flex; gap: 0.3rem; margin-left: 0.4rem; vertical-align: middle; }
+  .goal-actions button {
+    background: none; border: 1px solid var(--border); color: var(--muted); cursor: pointer;
+    font: inherit; font-size: 0.7rem; padding: 0 0.45rem; border-radius: 999px; line-height: 1.6;
+  }
+  .goal-actions button:hover { color: var(--ink); border-color: var(--baseline); }
+  .goal-actions .ok:hover { color: var(--good); border-color: var(--good); }
   /* Forget stays hidden until you mean it — deleting a memory is not a browse action. */
   .mem .x {
     flex: none; background: none; border: 0; color: var(--muted); cursor: pointer;
@@ -396,11 +403,29 @@
     <div class="cols">
       <div>
         <div class="card">
-          <div class="card-head"><h2>Today's quests <span class="sub" id="quests-sub"></span></h2></div>
+          <div class="card-head">
+            <h2>Today's quests <span class="sub" id="quests-sub"></span></h2>
+            <button id="quests-issue" class="ghost-btn" title="Generate today's quests now">Issue now</button>
+          </div>
           <div id="quests"></div>
         </div>
         <div class="card">
-          <h2>Goals <span class="sub" id="goals-sub"></span></h2>
+          <div class="card-head">
+            <h2>Goals <span class="sub" id="goals-sub"></span></h2>
+            <button id="goal-add-toggle" class="ghost-btn primary">＋ Set a goal</button>
+          </div>
+          <form id="goal-add" hidden>
+            <input id="goal-title" maxlength="200" placeholder="What are you trying to become? e.g. Backend SDE at a product company">
+            <input id="goal-target" maxlength="200" placeholder="Measurable success — optional, e.g. offer in hand">
+            <textarea id="goal-why" rows="2" maxlength="500" placeholder="Why it matters — optional; the mentor uses it to push you"></textarea>
+            <div class="row">
+              <label class="field-label" for="goal-deadline" style="margin:0">By</label>
+              <input id="goal-deadline" type="date" style="width:auto">
+              <button type="submit" class="ghost-btn primary">Set goal</button>
+              <button type="button" id="goal-cancel" class="ghost-btn">Cancel</button>
+              <span class="teach-status" id="goal-status"></span>
+            </div>
+          </form>
           <div id="goals"></div>
         </div>
       </div>
@@ -976,8 +1001,11 @@ function renderGoals(goals) {
     const days = g.deadline ? Math.ceil((new Date(g.deadline) - Date.now()) / 86400000) : null;
     const when = days == null ? "" : days < 0 ? ` · <span class="overdue">deadline passed</span>`
       : days === 0 ? ` · <span class="overdue">due today</span>` : ` · ${days}d left`;
+    const actions = g.status === "active"
+      ? `<span class="goal-actions"><button class="ok" onclick="goalStatus(${g.id},'achieved')" title="Mark achieved">✓ done</button><button onclick="goalStatus(${g.id},'dropped')" title="Drop this goal">drop</button></span>`
+      : "";
     return `<div class="goal ${esc(g.status)}">
-      <div class="gt">${esc(g.title)}${g.status !== "active" ? ` <span class="meta">(${esc(g.status)})</span>` : ""}</div>
+      <div class="gt">${esc(g.title)}${g.status !== "active" ? ` <span class="meta">(${esc(g.status)})</span>` : ""}${actions}</div>
       ${g.target ? `<div class="gm">${esc(g.target)}</div>` : ""}
       <div class="gp"><span>✅ ${g.quests_done} cleared</span>${g.quests_failed ? `<span>❌ ${g.quests_failed} failed</span>` : ""}${when}</div>
     </div>`;
@@ -1001,6 +1029,38 @@ function renderActivity(items) {
       <span class="at">${esc(day(a.at))} ${esc(clock(a.at))}</span>
     </div>`).join("");
 }
+
+// Set / manage goals right from the dashboard (same createGoal the bot's set_goal uses).
+function wireGoalForm() {
+  const form = $("goal-add");
+  $("goal-add-toggle").onclick = () => { form.hidden = !form.hidden; if (!form.hidden) $("goal-title").focus(); };
+  $("goal-cancel").onclick = () => { form.hidden = true; say("goal-status", ""); };
+  form.onsubmit = async e => {
+    e.preventDefault();
+    const title = $("goal-title").value.trim();
+    if (!title) { say("goal-status", "A goal needs a title.", true); return; }
+    say("goal-status", "Setting…");
+    try {
+      const r = await api("/api/goal", { method: "POST", body: {
+        title, target: $("goal-target").value.trim(), why: $("goal-why").value.trim(),
+        deadline: $("goal-deadline").value || null,
+      }});
+      if (r.error) { say("goal-status", r.error, true); return; }
+      $("goal-title").value = $("goal-target").value = $("goal-why").value = ""; $("goal-deadline").value = "";
+      form.hidden = true; say("goal-status", "");
+      boot();
+    } catch { say("goal-status", "That didn't save.", true); }
+  };
+  $("quests-issue").onclick = async () => {
+    const btn = $("quests-issue"); btn.disabled = true; btn.textContent = "Issuing…";
+    try { await api("/api/cron?issue=1"); await boot(); }
+    catch { btn.disabled = false; btn.textContent = "Issue now"; }
+  };
+}
+window.goalStatus = async (id, status) => {
+  try { await api("/api/goal", { method: "POST", body: { id, status } }); boot(); }
+  catch { /* the next load reflects the truth */ }
+};
 
 function renderReminders(rems) {
   if (!rems.length) { $("reminders").innerHTML = `<div class="empty">No open reminders. Ask the bot: “remind me Friday 6pm to…”.</div>`; return; }
@@ -1348,6 +1408,7 @@ async function boot() {
     renderGoals(sys.goals);
     renderActivity(sys.activity);
     renderApplications(brain.applications);
+    wireGoalForm();
     // Brain tab
     renderMemories(brain.memories);
     renderChat(brain.chat);

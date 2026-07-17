@@ -79,3 +79,66 @@ Cloudflare **Vectorize** is on the same free tier and removes the ceiling.
 - The agent loop / tool protocol (`runAgent`) — unchanged.
 - The extraction prompt and reconcile prompt logic — unchanged (only their write/delete
   side effects gain a Vectorize mirror).
+
+---
+
+# Task: Agent Loop Upgrades (borrow from frameworks, not the framework)
+
+Two targeted improvements that give us the useful parts of a framework (LangChain /
+LangGraph) without the dependency weight, the bundle-size hit on Workers, or fighting
+our model-specific workarounds (the gpt-oss reasoning-channel salvage in `llm.js:13`,
+the protocol-nudge/final-compose fallback in `agent.js:445-472`). Keep the hand-rolled
+loop — it's the right call for one owner + one model + a JSON-text protocol.
+
+## 1. Typed tool schema (validate args before `tool.run`)
+
+**Why.** Tools are described as prose `desc` strings (`agent.js:30`, etc.) and
+`runAgent` trusts whatever JSON the model emits — `tool.run(env, action.args || {})`
+(`agent.js:460`). A malformed or missing arg only fails *inside* the tool, or worse
+does the wrong thing silently. A lightweight schema catches it at the boundary and
+lets us hand the model a precise error to self-correct.
+
+- [ ] Add an optional `args` schema to each tool entry (plain object: field → `{type,
+      required, enum?}`), alongside the existing `desc`. No new dependency.
+- [ ] In `runAgent`, before calling `tool.run`, validate `action.args` against the
+      schema. On failure, append the validation error to the `transcript` (same channel
+      the protocol-nudge uses) so the model retries with corrected args — do NOT crash
+      the step.
+- [ ] Auto-render arg types into the prompt's tool list (`toolList()`, `agent.js:326`)
+      from the schema, so `desc` and the real contract can't drift apart.
+- [ ] Roll out incrementally: schema is optional, so untyped tools keep working — add
+      schemas to the highest-traffic tools first (`save_memory`, `set_reminder`,
+      `add_quest`, the LIFE_TOOLS money writers where a bad number is expensive).
+
+**Guardrail.** Validation failure must degrade to a retry with feedback, never a
+thrown step — mirror the existing "broke protocol → nudge, keep going" behavior.
+
+## 2. Graph/state mindset (adopt the pattern, not the package)
+
+**Only if/when** we add planning, parallel tool calls, or streaming — not now. Captured
+so we reach for the pattern instead of importing LangGraph reflexively.
+
+- [ ] If tool count or step complexity grows, replace the growing string `transcript`
+      (`agent.js:439`) with an explicit step/state list (structured tool-call records),
+      which is easier to compact, branch, and reason about.
+- [ ] Consider a planner→executor split only if single-loop reasoning starts missing
+      multi-step tasks — encode it as our own small state machine, not a framework.
+- [ ] Parallel independent tool calls (e.g. fan out `get_calendar` + `search_email`)
+      would need the state model above first.
+
+**Trigger to revisit the whole "no framework" decision:** going multi-provider *inside
+the Worker* (the pipeline already does NVIDIA→Gemini→Groq — `pipeline/grabber/config.py`)
+or serving more than one owner. Until then, hand-rolled wins.
+
+## Verification
+
+- [ ] `wrangler dev`: call a tool with a missing/wrong-typed arg via
+      `/api/tool?name=set_reminder&args=...` → confirm it returns a validation error and,
+      in a real chat, the model self-corrects on the next step (`wrangler tail`).
+- [ ] Confirm untyped tools still run unchanged (schema is opt-in).
+
+## Files in scope
+
+- `worker/src/agent.js` — tool registry entries, `toolList()`, `runAgent` validation.
+- `worker/src/system.js`, `apply.js`, `life.js` — add `args` schemas to their tools.
+- `CLAUDE.md` — note the typed-tool convention in the conventions section.

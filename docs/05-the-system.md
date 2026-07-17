@@ -30,9 +30,10 @@ The old engine's *prediction → label → calibration* shape maps almost 1:1 on
 
 A `goals` row is a real objective: `title`, `why` (fuels the mentor's pushing),
 `target` (measurable success), `deadline`, `status` (`active|achieved|dropped`).
-Everything the System does is judged against active goals. Managed from chat via the
-agent tools `set_goal` / `list_goals` / `update_goal` / `drop_goal`
-(`system.js` → `createGoal`/`listGoals`/`updateGoal`), or viewed with `/goals`.
+Everything the System does is judged against active goals. Set them **three ways**: tell
+the bot on Telegram (agent tool `set_goal`), the dashboard **System tab** "Set a goal" form
+(`POST /api/goal` → `createGoal`), or `/goals` to view. Also `list_goals` / `update_goal` /
+`drop_goal`; the dashboard has per-goal ✓done / drop buttons.
 
 The agent's rules make goals load-bearing: if the owner has **no active goals**, its
 first job is to extract them ("what are you trying to become, by when?") and `set_goal`

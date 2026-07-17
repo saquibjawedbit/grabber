@@ -4,7 +4,7 @@
 import { embedMemory, rememberExchange, runAgent, TOOLS } from "./agent.js";
 import { backfill, extract, forgetMemory, reconcile, saveMemory } from "./memory.js";
 import { DEFAULT_PERSONA, getPersona, resetPersona, setPersona } from "./persona.js";
-import { debrief, getSystemState, issueDaily, listGoals, listQuests, resolveQuest, runSystem } from "./system.js";
+import { createGoal, debrief, getSystemState, issueDaily, listGoals, listQuests, resolveQuest, runSystem, updateGoal } from "./system.js";
 import { classifyInbox, googleConnected, ingestNotification, pollCalendar, remindEvents } from "./senses.js";
 import { processBankNotifications } from "./life.js";
 import { generatePerception, getPerception } from "./perception.js";
@@ -710,6 +710,18 @@ async function handleApi(url, env, request) {
   }
   if (url.pathname === "/api/rank") {
     return Response.json({ ...await getSystemState(env), ...await listGoals(env, { status: "active" }) });
+  }
+  if (url.pathname === "/api/goal" && request.method === "POST") {
+    // Set a goal from the dashboard (same createGoal the agent's set_goal tool uses),
+    // or change one's status. {title,why,target,deadline} creates; {id,status} updates.
+    const body = await request.json().catch(() => ({}));
+    if (body.id) {
+      const status = ["active", "achieved", "dropped"].includes(body.status) ? body.status : null;
+      if (!status) return Response.json({ error: "status must be active|achieved|dropped" }, { status: 400 });
+      return Response.json(await updateGoal(env, body.id, { status }));
+    }
+    const r = await createGoal(env, body);
+    return Response.json(r, { status: r.error ? 400 : 200 });
   }
   if (url.pathname === "/api/system") {
     // Everything the dashboard's System tab shows: rank, goals, today's quests, and the
