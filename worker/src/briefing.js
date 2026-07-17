@@ -8,6 +8,7 @@
 // around facts it is handed; it is never asked what the numbers are.
 
 import { llm } from "./llm.js";
+import { getPersona, voiceBlock } from "./persona.js";
 
 const BRIEF_HOUR_DEFAULT = 8;    // IST
 const WEEKLY_HOUR = 19;          // IST Sunday
@@ -137,9 +138,9 @@ function worthSending(f) {
          f.research.length > 0 || f.anomalies.length > 0 || f.cold.length > 0;
 }
 
-const BRIEF_PROMPT = (profile, facts) => `You are Intelly, writing your owner's morning briefing.
+const BRIEF_PROMPT = (persona, profile, facts) => `You are ${persona.name}, writing your owner's morning briefing.
 One Telegram message. This is the only time today you interrupt them unasked, so earn it.
-
+${voiceBlock(persona)}
 ## Them
 ${profile}
 
@@ -175,7 +176,7 @@ export async function runBriefing(env, tg, { force = false } = {}) {
   }
 
   const profile = await ownerLine(env);
-  const { text, salvaged } = await llm(env, BRIEF_PROMPT(profile, facts));
+  const { text, salvaged } = await llm(env, BRIEF_PROMPT(await getPersona(env), profile, facts));
   if (!text.trim() || salvaged) return { error: "briefing came back empty" };
 
   const body = text.slice(0, 3500);
@@ -201,9 +202,9 @@ async function ownerLine(env) {
 
 // ---------- Weekly review ----------
 
-const WEEKLY_PROMPT = (profile, facts) => `You are Intelly, writing your owner's weekly review.
+const WEEKLY_PROMPT = (persona, profile, facts) => `You are ${persona.name}, writing your owner's weekly review.
 Be honest, not encouraging. The point is what actually moved and what quietly didn't.
-
+${voiceBlock(persona)}
 ## Them
 ${profile}
 
@@ -253,7 +254,7 @@ export async function runWeekly(env, tg, { force = false } = {}) {
     spent_this_week: Math.round(spend.v),
     threads_going_cold: cold.results,
   };
-  const { text, salvaged } = await llm(env, WEEKLY_PROMPT(await ownerLine(env), facts));
+  const { text, salvaged } = await llm(env, WEEKLY_PROMPT(await getPersona(env), await ownerLine(env), facts));
   if (!text.trim() || salvaged) return { error: "weekly came back empty" };
   await tg(env, "sendMessage", {
     chat_id: env.TELEGRAM_CHAT_ID, text: `📊 <b>Your week</b>\n\n${text.slice(0, 3500)}`,
@@ -265,9 +266,10 @@ export async function runWeekly(env, tg, { force = false } = {}) {
 
 // ---------- Overnight research: it picks its own question ----------
 
-const PICK_PROMPT = (profile, recent, watching) => `You are Intelly. Your owner is asleep. You
+const PICK_PROMPT = (persona, profile, recent, watching) => `You are ${persona.name}. Your owner is asleep. You
 have one research agent and a few hours. Pick the single question most worth answering for
 them by morning.
+${voiceBlock(persona)}
 
 ## Them
 ${profile}
@@ -305,7 +307,7 @@ export async function runOvernightResearch(env, spawn) {
   const { results: watchers } = await env.DB.prepare(
     "SELECT kind, target FROM watchers WHERE active = 1").all();
 
-  const { text } = await llm(env, PICK_PROMPT(
+  const { text } = await llm(env, PICK_PROMPT(await getPersona(env),
     await ownerLine(env),
     recent.map(r => r.question),
     watchers.map(w => `${w.kind}:${w.target}`)));

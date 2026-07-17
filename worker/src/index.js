@@ -2,6 +2,8 @@
 // deadline nags, dashboard API.
 
 import { embedMemory, rememberExchange, runAgent, TOOLS } from "./agent.js";
+import { backfill, extract, forgetMemory, reconcile, saveMemory } from "./memory.js";
+import { DEFAULT_PERSONA, getPersona, resetPersona, setPersona } from "./persona.js";
 import { runWatchers } from "./watch.js";
 import { classifyInbox, googleConnected, ingestNotification, pollCalendar, remindEvents } from "./senses.js";
 import { processBankNotifications } from "./life.js";
@@ -28,6 +30,8 @@ const HELP = `Just talk to me. Some things worth knowing I can do:
 • <b>Remember you</b> — tell me anything about yourself; I recall what's relevant when it matters.
 • <b>Reminders</b> — "remind me Friday 6pm to follow up with Ankit".
 • Send me any text/markdown file (resume, bio, notes) and I'll use it in everything.
+• <b>Talk, don't type</b> — send a voice note or a video and I'll listen to it.
+• <b>Show me</b> — screenshot a job post, photograph a whiteboard. I read what's in it and answer.
 
 Commands:
 /watchers — what I'm watching
@@ -177,17 +181,58 @@ async function handleCommand(text, chatId, env) {
 // ---------- Voice: talking is faster than typing ----------
 
 const MAX_VOICE_BYTES = 20_000_000;
+const MAX_IMAGE_BYTES = 10_000_000;
 
-async function transcribe(env, fileId) {
+async function download(env, fileId, maxBytes, what) {
   const fi = await tg(env, "getFile", { file_id: fileId });
   const path = fi.result?.file_path;
-  if (!path) throw new Error("Telegram wouldn't hand over the audio");
+  if (!path) throw new Error(`Telegram wouldn't hand over the ${what}`);
   const r = await fetch(`https://api.telegram.org/file/bot${env.TELEGRAM_BOT_TOKEN}/${path}`);
-  if (!r.ok) throw new Error(`audio download failed (${r.status})`);
+  if (!r.ok) throw new Error(`${what} download failed (${r.status})`);
   const buf = await r.arrayBuffer();
-  if (buf.byteLength > MAX_VOICE_BYTES) throw new Error("that clip is too long for me");
-  const res = await env.AI.run("@cf/openai/whisper", { audio: [...new Uint8Array(buf)] });
+  if (buf.byteLength > maxBytes) throw new Error(`that ${what} is too big for me`);
+  return new Uint8Array(buf);
+}
+
+async function transcribe(env, fileId) {
+  const bytes = await download(env, fileId, MAX_VOICE_BYTES, "audio");
+  const res = await env.AI.run("@cf/openai/whisper", { audio: [...bytes] });
   return (res?.text || "").trim();
+}
+
+function toDataUri(bytes, mime) {
+  // btoa needs a binary string, and spreading a whole image into fromCharCode
+  // blows the stack — walk it in chunks.
+  let s = "";
+  for (let i = 0; i < bytes.length; i += 8192) {
+    s += String.fromCharCode(...bytes.subarray(i, i + 8192));
+  }
+  return `data:${mime || "image/jpeg"};base64,${btoa(s)}`;
+}
+
+// Images: read them rather than ignore them — a JD screenshot or a whiteboard photo
+// is a question, and the owner shouldn't have to retype it.
+// Model choice is constrained: llava's OCR can't read a screenshot, and
+// llama-3.2-vision is gated behind a per-account licence prompt. Mistral reads
+// text out of images accurately with no gate.
+async function describeImage(env, fileId, caption, mime) {
+  const bytes = await download(env, fileId, MAX_IMAGE_BYTES, "image");
+  const res = await env.AI.run("@cf/mistralai/mistral-small-3.1-24b-instruct", {
+    messages: [{
+      role: "user",
+      content: [
+        {
+          type: "text",
+          text: caption
+            ? `Transcribe every word of text in this image verbatim, then describe what it shows. The person sent it saying: "${caption}"`
+            : "Transcribe every word of text in this image verbatim, then describe what it shows. It may be a screenshot of a job post, a message, or a document.",
+        },
+        { type: "image_url", image_url: { url: toDataUri(bytes, mime) } },
+      ],
+    }],
+    max_tokens: 1024,
+  });
+  return (res?.response ?? res?.choices?.[0]?.message?.content ?? "").trim();
 }
 
 async function handleVoice(env, chatId, fileId, placeholderId) {
@@ -215,6 +260,34 @@ async function handleVoice(env, chatId, fileId, placeholderId) {
     text: `🎧 <i>“${esc(heard)}”</i>\n\n🤔 …`, parse_mode: "HTML",
   });
   await converse(env, chatId, heard, placeholderId, `🎧 <i>“${esc(heard)}”</i>\n\n`);
+}
+
+async function handlePhoto(env, chatId, fileId, caption, placeholderId, mime) {
+  let seen;
+  try {
+    seen = await describeImage(env, fileId, caption, mime);
+  } catch (e) {
+    await tg(env, "editMessageText", {
+      chat_id: chatId, message_id: placeholderId,
+      text: `🖼 I couldn't open that image — ${String(e.message || e).slice(0, 120)}`,
+    });
+    return;
+  }
+  if (!seen) {
+    await tg(env, "editMessageText", {
+      chat_id: chatId, message_id: placeholderId,
+      text: "🖼 I couldn't make out anything in that one — send it larger, or tell me what to look at?",
+    });
+    return;
+  }
+  await tg(env, "editMessageText", {
+    chat_id: chatId, message_id: placeholderId, text: "🖼 🤔 …",
+  });
+  // The caption is the actual instruction; what the image says is context for it.
+  const ask = caption
+    ? `${caption}\n\n[The image I sent contains: ${seen}]`
+    : `I sent you this image. Here is what it contains:\n\n${seen}\n\nRespond to it as if I had sent you its contents directly.`;
+  await converse(env, chatId, ask, placeholderId, "🖼 ");
 }
 
 // ---------- Conversational agent ----------
@@ -290,12 +363,24 @@ async function handleTelegram(request, env, ctx) {
     await handleCommand(msg.text, msg.chat.id, env);
     return new Response("ok");
   }
+  // Photos arrive as an array of sizes, smallest first — the last one is the original.
+  // An image sent as a file (uncompressed) is a photo too, not profile corpus.
+  const photo = msg?.photo?.[msg.photo.length - 1]
+    || (msg?.document?.mime_type?.startsWith("image/") ? msg.document : null);
+  if (photo) {
+    if (!isOwner(msg.chat.id, env)) return new Response("ok");
+    const sent = await tg(env, "sendMessage", { chat_id: msg.chat.id, text: "🖼 looking…" });
+    ctx.waitUntil(handlePhoto(env, msg.chat.id, photo.file_id, msg.caption,
+      sent.result?.message_id, photo.mime_type));
+    return new Response("ok");
+  }
   if (msg?.document) {
     if (!isOwner(msg.chat.id, env)) return new Response("ok");
     await ingestDocument(env, msg.chat.id, msg.document);
     return new Response("ok");
   }
-  const audio = msg?.voice || msg?.audio || msg?.video_note;
+  // Video rides the same path: Whisper reads the audio track out of the container.
+  const audio = msg?.voice || msg?.audio || msg?.video_note || msg?.video;
   if (audio) {
     if (!isOwner(msg.chat.id, env)) return new Response("ok");
     const sent = await tg(env, "sendMessage", { chat_id: msg.chat.id, text: "🎧 listening…" });
@@ -312,6 +397,14 @@ async function handleTelegram(request, env, ctx) {
     // Ack Telegram fast; think in the background, then edit the placeholder.
     const sent = await tg(env, "sendMessage", { chat_id: msg.chat.id, text: "🤔 …" });
     ctx.waitUntil(converse(env, msg.chat.id, msg.text, sent.result?.message_id));
+    return new Response("ok");
+  }
+  if (msg && isOwner(msg.chat.id, env)) {
+    // Stickers, locations, contacts, polls. Say so — silence reads as a dead bot.
+    await tg(env, "sendMessage", {
+      chat_id: msg.chat.id,
+      text: "I can read text, voice, video, images and text files — that one I can't. Describe it to me?",
+    });
     return new Response("ok");
   }
 
@@ -455,7 +548,7 @@ async function runReminders(env) {
 
 // ---------- Dashboard API ----------
 
-async function handleApi(url, env) {
+async function handleApi(url, env, request) {
   if (url.searchParams.get("t") !== env.DASH_TOKEN) {
     return Response.json({ error: "bad token" }, { status: 403 });
   }
@@ -475,7 +568,8 @@ async function handleApi(url, env) {
   if (url.pathname === "/api/brain") {
     // Everything the dashboard shows: memory, reminders, profile, corpus shape.
     const [mem, rem, docs, summary, bySource, totals, recent] = await Promise.all([
-      env.DB.prepare("SELECT id, category, fact, created_at FROM memories ORDER BY id DESC LIMIT 200").all(),
+      env.DB.prepare(`SELECT id, category, fact, created_at, updated_at, source, context
+                      FROM memories ORDER BY id DESC LIMIT 200`).all(),
       env.DB.prepare("SELECT id, text, due_at, notified FROM reminders WHERE done = 0 ORDER BY due_at LIMIT 50").all(),
       env.DB.prepare("SELECT key, length(content) AS chars, updated_at FROM profile WHERE key != 'conversation_summary' ORDER BY key").all(),
       env.DB.prepare("SELECT content, updated_at FROM profile WHERE key = 'conversation_summary'").first(),
@@ -499,6 +593,11 @@ async function handleApi(url, env) {
         SELECT title, source, url, deadline, ingested_at FROM postings
         ORDER BY ingested_at DESC LIMIT 12`).all(),
     ]);
+    // The conversation itself: the dashboard showed what was distilled from it but
+    // never the thing being distilled, so a quiet memory layer looked like an empty one.
+    const chat = await env.DB.prepare(
+      "SELECT id, role, content, at FROM chat_history ORDER BY id DESC LIMIT 60").all();
+    const persona = await getPersona(env);
     // Measured rarity (point 3) and the learned pieces are the most interesting
     // things this system holds — they belong on screen, not only in the ranker.
     const [rarity, calib, people, txs, health, merchants, briefing] = await Promise.all([
@@ -554,6 +653,8 @@ async function handleApi(url, env) {
     ]);
     return Response.json({
       memories: mem.results,
+      persona: { ...persona, default_voice: DEFAULT_PERSONA.voice, default_name: DEFAULT_PERSONA.name },
+      chat: chat.results.reverse(),   // oldest-first: the panel reads like a conversation
       reminders: rem.results,
       documents: docs.results,
       summary: summary ? { text: summary.content, updated_at: summary.updated_at } : null,
@@ -596,6 +697,81 @@ async function handleApi(url, env) {
     let ok = 0;
     for (const m of results) if (await embedMemory(env, m.id, m.fact)) ok++;
     return Response.json({ pending: results.length, embedded: ok });
+  }
+  if (url.pathname === "/api/memory-backfill") {
+    // Sweep chat_history that predates the post-reply extractor. Additive and
+    // near-duplicate-checked, so re-running is safe, but it is not a no-op: the
+    // model may word a fact differently enough to clear the threshold. Follow it
+    // with /api/memory-reconcile.
+    const limit = Math.min(Number(url.searchParams.get("limit") || 40), 100);
+    const dry = url.searchParams.get("dry") === "1";
+    return Response.json(await backfill(env, { limit, dry }));
+  }
+  // ---------- Teaching it from the dashboard ----------
+  // Telegram was the only way in, which meant anything you wanted it to know had
+  // to be typed at a phone. These are the same memory layer, reached from the desk.
+
+  if (url.pathname === "/api/teach" && request.method === "POST") {
+    // Paste anything — notes, a bio, a JD, a brain-dump. The extractor mines the
+    // durable facts out of it, exactly as it does for a Telegram exchange.
+    const { text = "", dry = false } = await request.json().catch(() => ({}));
+    if (!String(text).trim()) return Response.json({ error: "nothing to read" }, { status: 400 });
+    const r = await extract(env, String(text).slice(0, 4000),
+      "(the owner pasted this into the dashboard for you to remember)",
+      { dry, allowForget: false, source: "dashboard" });
+    return Response.json(r);
+  }
+
+  if (url.pathname === "/api/persona" && request.method === "POST") {
+    // Who it is when it speaks. Applies to chat, briefings, weekly, overnight and
+    // perception alike — one voice, not five.
+    const body = await request.json().catch(() => ({}));
+    if (body.reset) return Response.json(await resetPersona(env));
+    return Response.json({ ...await setPersona(env, body), custom: true });
+  }
+
+  if (url.pathname === "/api/memory" && request.method === "POST") {
+    const { fact = "", category = "fact" } = await request.json().catch(() => ({}));
+    if (!String(fact).trim()) return Response.json({ error: "empty fact" }, { status: 400 });
+    const r = await saveMemory(env, String(fact).slice(0, 500), category, { source: "dashboard" });
+    return Response.json(r, { status: r.status === "empty" ? 400 : 200 });
+  }
+
+  if (url.pathname === "/api/memory" && request.method === "DELETE") {
+    const id = Number(url.searchParams.get("id"));
+    if (!id) return Response.json({ error: "need an id" }, { status: 400 });
+    return Response.json({ ok: await forgetMemory(env, id) });
+  }
+
+  if (url.pathname === "/api/profile" && request.method === "POST") {
+    // The corpus the ranker and the agent both read. Previously only reachable by
+    // sending a file to the bot; now editable in place.
+    const { key = "", content = "" } = await request.json().catch(() => ({}));
+    const clean = String(key).trim().toLowerCase().replace(/[^a-z0-9._:-]+/g, "-");
+    if (!clean || clean === "conversation_summary") {
+      return Response.json({ error: "pick a name (resume, bio, skills, or notes:anything)" }, { status: 400 });
+    }
+    if (!String(content).trim()) {
+      await env.DB.prepare("DELETE FROM profile WHERE key = ?").bind(clean).run();
+      return Response.json({ ok: true, deleted: clean });
+    }
+    await env.DB.prepare(`
+      INSERT INTO profile (key, content, updated_at) VALUES (?, ?, ?)
+      ON CONFLICT(key) DO UPDATE SET content = excluded.content, updated_at = excluded.updated_at`)
+      .bind(clean, String(content).slice(0, 200_000), new Date().toISOString()).run();
+    return Response.json({ ok: true, key: clean, chars: String(content).length });
+  }
+
+  if (url.pathname === "/api/profile-read") {
+    const key = url.searchParams.get("key") || "";
+    const row = await env.DB.prepare("SELECT key, content FROM profile WHERE key = ?").bind(key).first();
+    return row ? Response.json(row) : Response.json({ error: "no such document" }, { status: 404 });
+  }
+
+  if (url.pathname === "/api/memory-reconcile") {
+    // Audit memories against each other for contradictions and duplicates.
+    // ?dry=1 first — this one deletes.
+    return Response.json(await reconcile(env, { dry: url.searchParams.get("dry") === "1" }));
   }
   if (url.pathname === "/api/mail-status") {
     // What the IMAP job has delivered to D1, and what's waiting to be classified.
@@ -675,7 +851,7 @@ export default {
       }
     }
     if (url.pathname === "/telegram" && request.method === "POST") return handleTelegram(request, env, ctx);
-    if (url.pathname.startsWith("/api/")) return handleApi(url, env);
+    if (url.pathname.startsWith("/api/")) return handleApi(url, env, request);
     // The dashboard is one HTML file that changes every deploy — never let a browser
     // or edge cache serve a stale copy, or a UI fix looks broken until a hard reload.
     const res = await env.ASSETS.fetch(request);

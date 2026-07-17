@@ -9,6 +9,7 @@
 // that would spend neurons for no reason.
 
 import { extractJson, llm } from "./llm.js";
+import { getPersona } from "./persona.js";
 
 async function gather(env) {
   const q = sql => env.DB.prepare(sql).first();
@@ -58,7 +59,12 @@ async function gather(env) {
   };
 }
 
-const PROMPT = data => `You are Intelly, a personal agent. Your owner asked, bluntly: "what do you
+// The persona's NAME is used here but deliberately NOT its voice. This prompt asks
+// "what do you actually think of me — skip the flattery", and a voice the owner
+// picked is them grading their own exam. Measured, not theoretical: a flattering
+// persona rewrote this and silently dropped "he hasn't applied to anything yet",
+// the one finding the whole product exists to surface.
+const PROMPT = (persona, data) => `You are ${persona.name}, a personal agent. Your owner asked, bluntly: "what do you
 actually think of me?" Answer with your HONEST perception — the real read a sharp assistant would
 give if told to skip the flattery. Candid, not cruel; specific, not generic.
 
@@ -87,7 +93,7 @@ Return ONLY this JSON:
 
 export async function generatePerception(env) {
   const data = await gather(env);
-  const { text, salvaged } = await llm(env, PROMPT(data));
+  const { text, salvaged } = await llm(env, PROMPT(await getPersona(env), data));
   let obj = extractJson(text);
   // extractJson only accepts {reply|tool}; parse the perception shape directly.
   if (!obj || !obj.headline) {

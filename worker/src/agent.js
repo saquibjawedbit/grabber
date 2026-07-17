@@ -1,83 +1,15 @@
 import { APPLY_TOOLS } from "./apply.js";
 import { LIFE_TOOLS } from "./life.js";
 import { extractJson, llm } from "./llm.js";
+import { CATEGORIES as MEMORY_CATEGORIES, embedMemory, extract, forgetMemory, recallMemories, saveMemory } from "./memory.js";
+import { getPersona, voiceBlock } from "./persona.js";
 
-export { llm };
+export { llm, embedMemory };
 
-const EMBED_MODEL = "@cf/baai/bge-small-en-v1.5";  // 384-dim, plenty for short facts
 const MAX_STEPS = 8;
 const HISTORY_ACTIVE = 24;      // recent chat_history rows kept verbatim in the prompt
 const HISTORY_COMPACT_AT = 48;  // beyond this, oldest rows fold into the rolling summary
 const HISTORY_HARD_CAP = 140;   // safety valve if summarization keeps failing
-const RECALL_K = 14;            // memories retrieved per turn (v3: by meaning, not all of them)
-
-// ---------- Memory v3: vectors packed as base64 Float32, normalised at write time
-// so recall is a dot product. JSON arrays would blow the Worker's CPU budget. ----------
-
-async function embed(env, text) {
-  const res = await env.AI.run(EMBED_MODEL, { text: [String(text).slice(0, 1200)] });
-  const v = res?.data?.[0];
-  if (!Array.isArray(v) || !v.length) throw new Error("embedding came back empty");
-  let norm = Math.hypot(...v) || 1;
-  return Float32Array.from(v, x => x / norm);
-}
-
-function packVec(f32) {
-  const bytes = new Uint8Array(f32.buffer);
-  let s = "";
-  for (let i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i]);
-  return btoa(s);
-}
-
-function unpackVec(b64) {
-  const bin = atob(b64);
-  const bytes = new Uint8Array(bin.length);
-  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
-  return new Float32Array(bytes.buffer);
-}
-
-function dot(a, b) {
-  let s = 0;
-  const n = Math.min(a.length, b.length);
-  for (let i = 0; i < n; i++) s += a[i] * b[i];
-  return s;
-}
-
-async function recallMemories(env, query) {
-  const { results } = await env.DB.prepare(
-    "SELECT id, category, fact, embedding FROM memories ORDER BY id DESC LIMIT 400").all();
-  if (!results.length) return [];
-  const embedded = results.filter(r => r.embedding);
-  // Un-embedded rows (saved before v3, or embedding failed) always ride along —
-  // better a slightly bigger prompt than silently forgetting a fact.
-  const plain = results.filter(r => !r.embedding).slice(0, 12);
-  if (!embedded.length) return plain;
-  let q;
-  try {
-    q = await embed(env, query);
-  } catch {
-    return results.slice(0, RECALL_K);
-  }
-  const scored = embedded.map(r => {
-    let sim = -1;
-    try { sim = dot(q, unpackVec(r.embedding)); } catch { /* corrupt vector */ }
-    return { ...r, sim };
-  });
-  scored.sort((a, b) => b.sim - a.sim);
-  return [...plain, ...scored.slice(0, RECALL_K)];
-}
-
-export async function embedMemory(env, id, fact) {
-  try {
-    const v = await embed(env, fact);
-    await env.DB.prepare("UPDATE memories SET embedding = ? WHERE id = ?")
-      .bind(packVec(v), id).run();
-    return true;
-  } catch (e) {
-    console.log("embedMemory failed:", String(e).slice(0, 120));
-    return false;
-  }
-}
 
 function stripHtml(html) {
   return html
@@ -91,8 +23,6 @@ function stripHtml(html) {
 }
 
 // ---------- Tools ----------
-
-const MEMORY_CATEGORIES = ["identity", "preference", "skill", "goal", "project", "contact", "fact"];
 
 export const TOOLS = {
   search_corpus: {
@@ -287,13 +217,9 @@ export const TOOLS = {
     desc: `store a durable fact about the owner. args: {"fact": "...", "category": one of ${MEMORY_CATEGORIES.join("|")}}`,
     run: async (env, args) => {
       if (!args.fact) return { error: "empty fact" };
-      const cat = MEMORY_CATEGORIES.includes(args.category) ? args.category : "fact";
-      const fact = String(args.fact).slice(0, 500);
-      const row = await env.DB.prepare(
-        "INSERT INTO memories (fact, category, created_at) VALUES (?, ?, ?) RETURNING id")
-        .bind(fact, cat, new Date().toISOString()).first();
-      await embedMemory(env, row.id, fact);   // so it's recallable by meaning, not just recency
-      return { ok: true, id: row.id };
+      const r = await saveMemory(env, String(args.fact).slice(0, 500), args.category, { source: "chat" });
+      if (r.status === "duplicate") return { ok: true, id: r.id, note: "already known, kept the existing one" };
+      return r.status === "saved" ? { ok: true, id: r.id } : { error: "empty fact" };
     },
   },
 
@@ -301,8 +227,7 @@ export const TOOLS = {
     desc: 'delete a memory that is wrong or superseded. args: {"id": <number from the memory list>}',
     run: async (env, args) => {
       if (!args.id) return { error: "need the memory id" };
-      const r = await env.DB.prepare("DELETE FROM memories WHERE id = ?").bind(Number(args.id)).run();
-      return r.meta.changes ? { ok: true } : { error: "no memory with that id" };
+      return await forgetMemory(env, args.id) ? { ok: true } : { error: "no memory with that id" };
     },
   },
 
@@ -566,7 +491,7 @@ function toolList() {
 // ---------- Prompt assembly ----------
 
 async function context(env, userText) {
-  const [mem, hist, bio, summary, docs, counts] = await Promise.all([
+  const [mem, hist, bio, summary, docs, counts, persona] = await Promise.all([
     recallMemories(env, userText),   // v3: relevant to THIS message, not simply the newest
     env.DB.prepare("SELECT role, content FROM chat_history ORDER BY id DESC LIMIT ?")
       .bind(HISTORY_ACTIVE).all(),
@@ -577,6 +502,7 @@ async function context(env, userText) {
         (SELECT COUNT(*) FROM memories) AS memories,
         (SELECT COUNT(*) FROM watchers WHERE active = 1) AS watchers,
         (SELECT COUNT(*) FROM research WHERE status IN ('queued','running')) AS research_running`).first(),
+    getPersona(env),
   ]);
   return {
     memories: mem.map(r => `- [#${r.id}|${r.category}] ${r.fact}`).join("\n"),
@@ -586,6 +512,7 @@ async function context(env, userText) {
     summary: summary?.content?.slice(0, 2000) || "",
     docs: docs.results.map(r => r.key).join(", "),
     counts,
+    persona,
   };
 }
 
@@ -607,7 +534,8 @@ function buildPrompt(ctx, userText, transcript, mustReply) {
   const tools = toolList();
   const nowUtc = new Date().toISOString().slice(0, 16) + "Z";
   const local = localNow();
-  return `You are Intelly, the personal AI agent of exactly one owner, living in their Telegram. You handle anything they need: answer questions, research the web, track their applications, set reminders, remember their life. Your standing mission behind it all: find, research, and win opportunities (jobs, internships, hackathons, fellowships, grants, contracts) for them. Be concise and direct — short paragraphs, no corporate fluff, no markdown headers.
+  return `You are ${ctx.persona.name}, the personal AI agent of exactly one owner, living in their Telegram. You handle anything they need: answer questions, research the web, track their applications, set reminders, remember their life. Your standing mission behind it all: find, research, and win opportunities (jobs, internships, hackathons, fellowships, grants, contracts) for them.${ctx.persona.custom ? "" : " Be concise and direct — short paragraphs, no corporate fluff, no markdown headers."}
+${voiceBlock(ctx.persona)}
 Right now it is ${local.text} where the owner is (today's date for them is ${local.iso}). In UTC that is ${nowUtc}.
 Always reason about days and weekdays from THEIR local date above — never from the UTC date, which is often the previous day. When they say a weekday, count forward from ${local.text.split(" ")[0]}; "Friday" means the next Friday on or after today, never simply tomorrow.
 
@@ -629,7 +557,7 @@ ${ctx.history || "(none)"}
 ${tools}
 
 ## Rules
-- When the owner states a fact, preference, or constraint about themselves, call save_memory with the right category BEFORE doing anything else. Never rely on chat history to retain it.
+- Every exchange is swept for durable facts after you reply, so you do NOT need to spend a step saving what the owner just told you — it is already being kept. Use save_memory only when the owner explicitly asks you to remember something, or for a fact you derived that the sweep could not see from the text alone.
 - Saved memories also steer the opportunity-ranking pipeline (recall terms + rank context) — the more the owner tells you about their skills and goals, the better their alerts get. Encourage it when natural.
 - If a new fact contradicts or supersedes a memory, forget_memory the old id, then save the new one.
 - Reminder due_at must be UTC ISO — subtract 5:30 from Indian times.
@@ -691,7 +619,7 @@ export async function runAgent(env, userText) {
   // Out of steps. Never ship loop prose (it can be raw deliberation) — make one
   // protocol-free call that composes an owner-facing answer from the transcript.
   const { text: final, salvaged } = await llm(env,
-    `You are Intelly, a personal agent. You ran out of tool budget answering the owner's message. From the transcript below, write the best final message you can — answer what you learned, say plainly what you couldn't confirm. Plain text only, no JSON, 1-4 sentences.\n\nOwner's message: ${userText}\n\nTranscript:${transcript || " (none)"}`);
+    `You are ${ctx.persona.name}, a personal agent. You ran out of tool budget answering the owner's message. From the transcript below, write the best final message you can — answer what you learned, say plainly what you couldn't confirm. Plain text only, no JSON, 1-4 sentences.${voiceBlock(ctx.persona)}\n\nOwner's message: ${userText}\n\nTranscript:${transcript || " (none)"}`);
   if (final.trim() && !salvaged) return final.slice(0, 3800);
   return "I hit my step limit on that one — ask me a bit more specifically?";
 }
@@ -729,6 +657,9 @@ export async function rememberExchange(env, userText, reply) {
   const now = new Date().toISOString();
   await env.DB.prepare("INSERT INTO chat_history (role, content, at) VALUES ('user', ?, ?), ('assistant', ?, ?)")
     .bind(userText.slice(0, 1000), now, reply.slice(0, 1000), now).run();
+  // The reply is already with the owner, so this costs them nothing — and unlike
+  // save_memory inside the loop, it never loses a race against answering.
+  await extract(env, userText, reply);
   try {
     await compactHistory(env);
   } catch (e) {

@@ -6,6 +6,7 @@ progress markers and the URLs fetched — never the owner's profile, memories, o
 report body. The question travels via D1, not the dispatch payload.
 """
 import json
+import re
 from datetime import datetime, timezone
 
 from .. import config
@@ -234,4 +235,12 @@ def run(db: D1, job_id: int) -> None:
     if config.DASH_URL:
         tail += f' · <a href="{config.DASH_URL}/#research">full report</a>'
     telegram.send(head + body + tail)
+    if len(report) > 3200:
+        # The chat only ever shows the first 3200 chars. Send the whole thing as a
+        # file too, so the report is readable without going to the dashboard.
+        slug = re.sub(r"[^a-z0-9]+", "-", job["question"][:60].lower()).strip("-") or "research"
+        sources_md = "\n".join(f"- {s}" for s in sources)
+        telegram.send_document(
+            f"# {job['question']}\n\n{report}\n\n## Sources\n\n{sources_md}\n",
+            caption="📄 Full report", filename=f"{slug}.md")
     print(f"research #{job_id}: done — {len(sources)} sources, report {len(report)} chars")

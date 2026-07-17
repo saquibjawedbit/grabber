@@ -22,6 +22,8 @@
     --cat-goal:       #eda100;
     --cat-project:    #1baf7a;
     --cat-contact:    #eb6834;
+    --cat-health:     #0f9b9b;
+    --cat-money:      #7a6a1f;
     --cat-fact:       #4a3aa7;
     --cat-doc:        #898781;
   }
@@ -46,6 +48,8 @@
       --cat-goal:       #c98500;
       --cat-project:    #199e70;
       --cat-contact:    #d95926;
+      --cat-health:     #2ab3b3;
+      --cat-money:      #b3a04a;
       --cat-fact:       #9085e9;
     }
   }
@@ -96,6 +100,28 @@
   .chip::before { content: ""; display: inline-block; width: 7px; height: 7px; border-radius: 50%;
     background: var(--c); margin-right: 4px; }
   .mem .id { color: var(--muted); font-size: 0.75rem; margin-left: 0.4rem; }
+  /* Provenance: when it was learned, and whether the agent chose to save it or
+     the post-reply sweep picked it up. Quiet by default — it's for auditing. */
+  .mem .prov { display: block; color: var(--muted); font-size: 0.72rem; margin-top: 0.15rem; }
+  .mem .prov .heard { font-style: italic; }
+  .mem .swept { color: var(--seq); }
+
+  /* Conversation: the raw material the memory layer distils. Dense, not a chat UI. */
+  #chat { max-height: 24rem; overflow-y: auto; }
+  .turn { display: flex; gap: 0.6rem; padding: 0.4rem 0; border-bottom: 1px solid var(--grid); font-size: 0.88rem; }
+  .turn:last-child { border-bottom: 0; }
+  .turn .who {
+    flex: none; width: 3.6rem; font-size: 0.7rem; color: var(--ink-2);
+    text-transform: uppercase; letter-spacing: 0.04em; padding-top: 0.15rem;
+  }
+  .turn.user .who { color: var(--cat-identity); }
+  .turn .said { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+  .turn .at { flex: none; color: var(--muted); font-size: 0.72rem; font-variant-numeric: tabular-nums; }
+  .day-rule {
+    display: flex; align-items: center; gap: 0.6rem; margin: 0.7rem 0 0.2rem;
+    color: var(--muted); font-size: 0.72rem; text-transform: uppercase; letter-spacing: 0.05em;
+  }
+  .day-rule::after { content: ""; flex: 1; height: 1px; background: var(--grid); }
   .rem { display: flex; gap: 0.7rem; padding: 0.5rem 0; border-bottom: 1px solid var(--grid); font-size: 0.9rem; align-items: baseline; }
   .rem:last-child { border-bottom: 0; }
   .rem .when { flex: none; width: 9.5rem; color: var(--ink-2); font-size: 0.8rem; font-variant-numeric: tabular-nums; }
@@ -114,6 +140,43 @@
   }
   .ghost-btn:hover:not(:disabled) { color: var(--ink); border-color: var(--baseline); }
   .ghost-btn:disabled { opacity: 0.5; cursor: default; }
+  .ghost-btn.primary { color: var(--ink); border-color: var(--baseline); font-weight: 550; }
+  .ghost-btn.primary:hover:not(:disabled) { background: var(--seq-fill); border-color: var(--seq); }
+
+  /* Writing to the brain, not just reading it. */
+  .card-head { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; }
+  .card-head h2 { margin-bottom: 0.4rem; }
+  .teach-hint { color: var(--ink-2); font-size: 0.86rem; margin: 0.2rem 0 0.7rem; max-width: 62ch; }
+  textarea, input[type="text"], input:not([type]), select {
+    width: 100%; font: inherit; font-size: 0.9rem; color: var(--ink);
+    background: var(--page); border: 1px solid var(--border); border-radius: 7px;
+    padding: 0.5rem 0.6rem; resize: vertical;
+  }
+  textarea:focus-visible, input:focus-visible, select:focus-visible,
+  .ghost-btn:focus-visible, button:focus-visible {
+    outline: 2px solid var(--seq); outline-offset: 1px;
+  }
+  select { width: auto; }
+  .teach-actions, .row { display: flex; align-items: center; gap: 0.5rem; margin-top: 0.55rem; flex-wrap: wrap; }
+  .teach-status { font-size: 0.82rem; color: var(--ink-2); }
+  .teach-status.bad { color: var(--critical); }
+  #teach-out:not(:empty) { margin-top: 0.8rem; border-top: 1px solid var(--grid); padding-top: 0.6rem; }
+  .learned-head { font-size: 0.78rem; color: var(--ink-2); text-transform: uppercase; letter-spacing: 0.05em; margin-bottom: 0.4rem; }
+  #mem-add, #doc-edit, #persona-form { margin: 0.2rem 0 0.8rem; display: grid; gap: 0.4rem; }
+  .field-label { font-size: 0.75rem; color: var(--ink-2); text-transform: uppercase; letter-spacing: 0.05em; margin-top: 0.3rem; }
+  #persona-name { max-width: 22rem; }
+  /* display:grid above outranks the UA rule that makes [hidden] work — without this
+     the forms are open before you ask for them. */
+  #mem-add[hidden], #doc-edit[hidden] { display: none; }
+  /* Forget stays hidden until you mean it — deleting a memory is not a browse action. */
+  .mem .x {
+    flex: none; background: none; border: 0; color: var(--muted); cursor: pointer;
+    font: inherit; font-size: 0.95rem; line-height: 1; padding: 0 0.2rem; opacity: 0;
+  }
+  .mem:hover .x, .mem .x:focus-visible { opacity: 1; }
+  .mem .x:hover { color: var(--critical); }
+  .doc-row { display: flex; align-items: baseline; gap: 0.6rem; }
+  .doc-row button { background: none; border: 0; padding: 0; font: inherit; color: var(--seq); cursor: pointer; }
   .perc-headline { font-size: 1.15rem; font-weight: 600; letter-spacing: -0.01em; margin: 0.7rem 0 0.5rem; text-wrap: balance; }
   .perc-read { color: var(--ink-2); margin: 0 0 0.9rem; }
   .perc-cols { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem 1.6rem; }
@@ -191,17 +254,78 @@
       <div id="briefing"></div>
     </div>
     <div class="card">
+      <div class="card-head">
+        <h2>Persona <span class="sub" id="persona-state"></span></h2>
+        <button id="persona-reset" class="ghost-btn">Reset to default</button>
+      </div>
+      <p class="teach-hint">Who it is when it talks — in Telegram, in your morning briefing, the weekly review, and overnight research. It will not invent facts or claim it saved something it didn't, whatever you write here. But tone is yours, and tone carries: ask for encouraging and you will get encouraging, including about a role that doesn't deserve it. <b>"How I see you" takes the name and ignores the voice</b> — it's the one place that stays blunt, because a read you tuned yourself isn't worth reading.</p>
+      <form id="persona-form">
+        <label class="field-label" for="persona-name">Name</label>
+        <input id="persona-name" maxlength="40" placeholder="Intelly">
+        <label class="field-label" for="persona-voice">How it should talk to you</label>
+        <textarea id="persona-voice" rows="5" maxlength="1500" placeholder="Blunt and dry. Skip the preamble. If I'm kidding myself about a role, say so before the cover note. Never cheerlead."></textarea>
+        <div class="row">
+          <button type="submit" class="ghost-btn primary">Save persona</button>
+          <span class="teach-status" id="persona-status"></span>
+        </div>
+      </form>
+    </div>
+    <div class="card teach">
+      <h2>Tell it something</h2>
+      <p class="teach-hint">Paste anything — notes, a bio, a job post, a brain-dump. It keeps the facts worth keeping and ignores the rest. Everything it learns here steers your rankings, drafts and chats.</p>
+      <textarea id="teach-text" rows="4" placeholder="I'm switching focus to backend infra roles. Ankit at Zepto said their SDE hiring reopens in August…"></textarea>
+      <div class="teach-actions">
+        <button id="teach-preview" class="ghost-btn">Show me what you'd learn</button>
+        <button id="teach-save" class="ghost-btn primary">Remember this</button>
+        <span class="teach-status" id="teach-status"></span>
+      </div>
+      <div id="teach-out"></div>
+    </div>
+    <div class="card">
       <h2>Knowledge graph</h2>
       <canvas id="graph"></canvas>
       <div class="legend" id="legend"></div>
     </div>
     <div class="cols">
       <div>
-        <div class="card"><h2>Memories</h2><div id="memories"></div></div>
-        <div class="card"><h2>Profile documents</h2><div id="docs"></div></div>
+        <div class="card">
+          <div class="card-head">
+            <h2>Memories</h2>
+            <button id="mem-add-toggle" class="ghost-btn">Add a fact</button>
+          </div>
+          <form id="mem-add" hidden>
+            <input id="mem-fact" placeholder="One durable fact, in your own words" maxlength="500">
+            <div class="row">
+              <select id="mem-cat"></select>
+              <button type="submit" class="ghost-btn primary">Save</button>
+              <span class="teach-status" id="mem-status"></span>
+            </div>
+          </form>
+          <div id="memories"></div>
+        </div>
+        <div class="card">
+          <div class="card-head">
+            <h2>Profile documents</h2>
+            <button id="doc-new" class="ghost-btn">New document</button>
+          </div>
+          <div id="docs"></div>
+          <form id="doc-edit" hidden>
+            <input id="doc-key" placeholder="resume, bio, skills, or notes:anything">
+            <textarea id="doc-body" rows="10" placeholder="Paste the full text. It becomes corpus the ranker and the agent read."></textarea>
+            <div class="row">
+              <button type="submit" class="ghost-btn primary">Save document</button>
+              <button type="button" id="doc-cancel" class="ghost-btn">Cancel</button>
+              <span class="teach-status" id="doc-status"></span>
+            </div>
+          </form>
+        </div>
       </div>
       <div>
         <div class="card"><h2>Reminders</h2><div id="reminders"></div></div>
+        <div class="card">
+          <h2>Conversation <span class="sub" id="chat-count"></span></h2>
+          <div id="chat"></div>
+        </div>
         <div class="card">
           <h2>Conversation summary <span class="sub" id="sum-at"></span></h2>
           <div id="summary"></div>
@@ -275,15 +399,19 @@
 "use strict";
 const $ = id => document.getElementById(id);
 const esc = s => String(s ?? "").replace(/[&<>"]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
-const CATS = ["identity", "preference", "skill", "goal", "project", "contact", "fact"];
+const CATS = ["identity", "preference", "skill", "goal", "project", "contact", "health", "money", "fact"];
 const catColor = c => getComputedStyle(document.documentElement)
   .getPropertyValue(CATS.includes(c) ? `--cat-${c}` : "--cat-doc").trim();
 const IST = new Intl.DateTimeFormat("en-IN", { timeZone: "Asia/Kolkata", dateStyle: "medium", timeStyle: "short" });
 
 let token = localStorage.getItem("dash_token") || "";
 
-async function api(path) {
-  const r = await fetch(`${path}${path.includes("?") ? "&" : "?"}t=${encodeURIComponent(token)}`);
+async function api(path, { method = "GET", body } = {}) {
+  const r = await fetch(`${path}${path.includes("?") ? "&" : "?"}t=${encodeURIComponent(token)}`, {
+    method,
+    headers: body ? { "Content-Type": "application/json" } : undefined,
+    body: body ? JSON.stringify(body) : undefined,
+  });
   if (r.status === 403) throw new Error("token");
   return r.json();
 }
@@ -322,14 +450,198 @@ function renderMemories(mems) {
   const order = c => { const i = CATS.indexOf(c); return i < 0 ? CATS.length : i; };
   $("memories").innerHTML = [...mems].sort((a, b) => order(a.category) - order(b.category) || a.id - b.id)
     .map(m => `<div class="mem"><span class="chip" style="--c:${catColor(m.category)}">${esc(m.category)}</span>
-      <span>${esc(m.fact)}<span class="id">#${m.id}</span></span></div>`).join("");
+      <span>${esc(m.fact)}<span class="id">#${m.id}</span>${provenance(m)}</span>
+      <button class="x" type="button" title="Forget this" aria-label="Forget memory ${m.id}"
+        onclick="forgetMemory(${m.id})">×</button></div>`).join("");
+}
+
+// Where a memory came from. "Heard" quotes the message it was learned from, so a
+// wrong fact can be traced to what was actually said rather than argued about.
+function provenance(m) {
+  const when = m.created_at ? day(m.created_at) : "";
+  const how = m.source === "auto" ? `<span class="swept">picked up from conversation</span>`
+    : m.source === "backfill" ? `<span class="swept">read back from history</span>`
+    : "saved on request";
+  const heard = m.context ? ` · <span class="heard">“${esc(String(m.context).slice(0, 90))}”</span>` : "";
+  return `<span class="prov">${when} · ${how}${heard}</span>`;
+}
+
+const DAY = new Intl.DateTimeFormat("en-IN", { timeZone: "Asia/Kolkata", day: "numeric", month: "short" });
+const CLOCK = new Intl.DateTimeFormat("en-IN", { timeZone: "Asia/Kolkata", hour: "2-digit", minute: "2-digit", hour12: false });
+const day = s => { const d = new Date(s); return isNaN(d) ? "" : DAY.format(d); };
+const clock = s => { const d = new Date(s); return isNaN(d) ? "" : CLOCK.format(d); };
+
+function renderChat(turns) {
+  if (!turns?.length) {
+    $("chat").innerHTML = `<div class="empty">No conversation yet — say hi to the bot on Telegram.</div>`;
+    return;
+  }
+  $("chat-count").textContent = `last ${turns.length} messages`;
+  let seen = "";
+  const rows = turns.map(t => {
+    const d = day(t.at);
+    const rule = d && d !== seen ? (seen = d, `<div class="day-rule">${esc(d)}</div>`) : "";
+    return `${rule}<div class="turn ${t.role === "user" ? "user" : ""}">
+      <span class="who">${t.role === "user" ? "You" : esc(agentName)}</span>
+      <span class="said">${esc(t.content)}</span>
+      <span class="at">${esc(clock(t.at))}</span>
+    </div>`;
+  }).join("");
+  $("chat").innerHTML = rows;
+  $("chat").scrollTop = $("chat").scrollHeight;   // land on the newest, like the chat itself
+}
+
+// ---------- Persona ----------
+
+let agentName = "Intelly";   // what the Conversation panel labels its replies
+
+function renderPersona(p) {
+  if (!p) return;
+  agentName = p.name || p.default_name || "Intelly";
+  $("persona-name").value = p.name || "";
+  $("persona-voice").value = p.voice || "";
+  $("persona-name").placeholder = p.default_name || "Intelly";
+  $("persona-state").textContent = p.custom ? "custom" : "default";
+  $("persona-reset").disabled = !p.custom;
+  say("persona-status", "");
+  $("persona-form").onsubmit = async e => {
+    e.preventDefault();
+    say("persona-status", "Saving…");
+    try {
+      const r = await api("/api/persona", {
+        method: "POST",
+        body: { name: $("persona-name").value, voice: $("persona-voice").value },
+      });
+      if (r.error) { say("persona-status", r.error, true); return; }
+      say("persona-status", `Saved — ${esc(r.name)} sounds like this from the next message on.`);
+      boot();
+    } catch { say("persona-status", "That didn't save.", true); }
+  };
+  $("persona-reset").onclick = async () => {
+    say("persona-status", "Resetting…");
+    try {
+      await api("/api/persona", { method: "POST", body: { reset: true } });
+      boot();
+    } catch { say("persona-status", "That didn't reset.", true); }
+  };
+}
+
+// ---------- Teaching it from here ----------
+
+function say(el, msg, bad) {
+  $(el).textContent = msg;
+  $(el).classList.toggle("bad", !!bad);
+}
+
+function renderLearned(facts, previewOnly) {
+  if (!facts.length) {
+    $("teach-out").innerHTML = `<div class="empty">Nothing in there worth keeping forever — it's already known, or it's chatter. Try a concrete fact.</div>`;
+    return;
+  }
+  $("teach-out").innerHTML = `<div class="learned-head">${previewOnly ? "Would remember" : "Remembered"}</div>` +
+    facts.map(f => `<div class="mem"><span class="chip" style="--c:${catColor(f.category)}">${esc(f.category || "fact")}</span>
+      <span>${esc(f.fact)}</span></div>`).join("");
+}
+
+async function teach(dry) {
+  const text = $("teach-text").value.trim();
+  if (!text) { say("teach-status", "Write something first."); return; }
+  const btn = dry ? $("teach-preview") : $("teach-save");
+  const label = btn.textContent;
+  btn.disabled = true; btn.textContent = "Reading…";
+  say("teach-status", "");
+  try {
+    const r = await api("/api/teach", { method: "POST", body: { text, dry } });
+    if (r.error) { say("teach-status", r.error, true); }
+    else {
+      renderLearned(r.saved || [], dry);
+      if (!dry && r.saved?.length) { $("teach-text").value = ""; boot(); }
+    }
+  } catch (e) {
+    say("teach-status", e.message === "token" ? "Session expired — reload." : "That didn't go through. Try again.", true);
+  }
+  btn.disabled = false; btn.textContent = label;
+}
+
+async function forgetMemory(id) {
+  try {
+    await api(`/api/memory?id=${id}`, { method: "DELETE" });
+    boot();
+  } catch { /* the row stays; the next load tells the truth */ }
+}
+
+// boot() re-runs on every save, so wiring must be idempotent — assigning onclick
+// (not addEventListener) means a re-wire replaces the handler instead of stacking.
+function wireTeach() {
+  $("teach-preview").onclick = () => teach(true);
+  $("teach-save").onclick = () => teach(false);
+  wireMemoryForm();
+  wireDocForm();
+}
+
+function wireMemoryForm() {
+  $("mem-cat").innerHTML = CATS.map(c => `<option value="${c}">${c}</option>`).join("");
+  $("mem-add-toggle").onclick = () => {
+    const f = $("mem-add");
+    f.hidden = !f.hidden;
+    if (!f.hidden) $("mem-fact").focus();
+  };
+  $("mem-add").onsubmit = async e => {
+    e.preventDefault();
+    const fact = $("mem-fact").value.trim();
+    if (!fact) return;
+    say("mem-status", "Saving…");
+    try {
+      const r = await api("/api/memory", { method: "POST", body: { fact, category: $("mem-cat").value } });
+      if (r.status === "duplicate") { say("mem-status", "Already known — kept the one it had."); return; }
+      $("mem-fact").value = "";
+      say("mem-status", "");
+      boot();
+    } catch { say("mem-status", "That didn't save.", true); }
+  };
+}
+
+function wireDocForm() {
+  const form = $("doc-edit");
+  const open = (key = "", body = "") => {
+    form.hidden = false;
+    $("doc-key").value = key;
+    $("doc-body").value = body;
+    $("doc-key").readOnly = !!key;
+    $(key ? "doc-body" : "doc-key").focus();
+    say("doc-status", "");
+  };
+  $("doc-new").onclick = () => open();
+  $("doc-cancel").onclick = () => { form.hidden = true; };
+  window.editDoc = async key => {
+    say("doc-status", "");
+    open(key, "");
+    try {
+      const r = await api(`/api/profile-read?key=${encodeURIComponent(key)}`);
+      $("doc-body").value = r.content || "";
+    } catch { say("doc-status", "Couldn't open that one.", true); }
+  };
+  form.onsubmit = async e => {
+    e.preventDefault();
+    say("doc-status", "Saving…");
+    try {
+      const r = await api("/api/profile", {
+        method: "POST",
+        body: { key: $("doc-key").value.trim(), content: $("doc-body").value },
+      });
+      if (r.error) { say("doc-status", r.error, true); return; }
+      form.hidden = true;
+      boot();
+    } catch { say("doc-status", "That didn't save.", true); }
+  };
 }
 
 function renderDocs(docs) {
   $("docs").innerHTML = docs.length
     ? docs.map(d => `<div class="mem"><span class="chip" style="--c:${catColor("doc")}">${esc(d.key)}</span>
-        <span class="meta">${d.chars.toLocaleString()} chars · updated ${esc((d.updated_at || "").slice(0, 10))}</span></div>`).join("")
-    : `<div class="empty">No documents — send the bot your resume/bio as .md or .txt in Telegram.</div>`;
+        <span class="doc-row"><span class="meta">${d.chars.toLocaleString()} chars · updated ${esc((d.updated_at || "").slice(0, 10))}</span>
+        <button type="button" onclick="editDoc('${esc(d.key)}')">Edit</button></span></div>`).join("")
+    : `<div class="empty">No documents yet. Add one here, or send the bot a .md/.txt file in Telegram.</div>`;
 }
 
 function renderSummary(s) {
@@ -853,9 +1165,12 @@ async function boot() {
     renderPerception(brain.perception);
     $("perc-refresh").onclick = refreshPerception;
     renderBriefing(brain.briefing);
+    renderPersona(brain.persona);
     renderMemories(brain.memories);
+    renderChat(brain.chat);
     renderDocs(brain.documents);
     renderSummary(brain.summary);
+    wireTeach();
     renderLife(brain.life);
     renderPeople(brain.life?.people);
     renderTransactions(brain.life?.transactions);
