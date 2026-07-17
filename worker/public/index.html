@@ -16,6 +16,8 @@
     --seq-fill:    rgba(42, 120, 214, 0.13);
     --critical:    #d03b3b;
     --good:        #0ca30c;
+    --warn:        #c98500;
+    --accent:      #2a78d6;
     --cat-identity:   #2a78d6;
     --cat-preference: #008300;
     --cat-skill:      #e87ba4;
@@ -42,6 +44,8 @@
       --seq-fill:    rgba(57, 135, 229, 0.16);
       --critical:    #ef6b64;
       --good:        #3fbf68;
+      --warn:        #d59b2a;
+      --accent:      #3987e5;
       --cat-identity:   #3987e5;
       --cat-preference: #008300;
       --cat-skill:      #d55181;
@@ -84,7 +88,6 @@
   .tile .k { color: var(--ink-2); font-size: 0.8rem; }
   .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; align-items: start; }
   @media (max-width: 800px) { .cols { grid-template-columns: 1fr; } }
-  #graph { width: 100%; height: 430px; display: block; cursor: grab; touch-action: none; }
   .legend { display: flex; flex-wrap: wrap; gap: 0.35rem 0.9rem; margin-top: 0.5rem; font-size: 0.78rem; color: var(--ink-2); }
   .legend span::before {
     content: ""; display: inline-block; width: 9px; height: 9px; border-radius: 50%;
@@ -216,6 +219,36 @@
     box-shadow: 0 4px 18px rgba(0,0,0,0.18);
   }
   #tip .t-cat { color: var(--muted); font-size: 0.72rem; }
+  /* ---------- Knowledge graph (explorable) ---------- */
+  .graph-card { padding-bottom: 0.8rem; }
+  .graph-tools { display: flex; gap: 0.4rem; align-items: center; }
+  .graph-search {
+    width: 12rem; max-width: 42vw; font-size: 0.82rem; padding: 0.35rem 0.6rem;
+    border-radius: 7px; border: 1px solid var(--border); background: var(--page); color: var(--ink);
+  }
+  .graph-wrap { position: relative; margin-top: 0.5rem; border-radius: 10px; overflow: hidden;
+    background: color-mix(in srgb, var(--ink) 2.5%, transparent); border: 1px solid var(--grid); }
+  #graph { width: 100%; height: 520px; display: block; cursor: grab; touch-action: none; }
+  #graph:active { cursor: grabbing; }
+  .graph-hint {
+    position: absolute; left: 0.7rem; bottom: 0.6rem; font-size: 0.72rem; color: var(--muted);
+    pointer-events: none; background: color-mix(in srgb, var(--surface) 82%, transparent);
+    padding: 0.15rem 0.45rem; border-radius: 6px;
+  }
+  .graph-detail {
+    position: absolute; top: 0.7rem; right: 0.7rem; width: min(19rem, 60%);
+    background: var(--surface); border: 1px solid var(--border); border-radius: 10px;
+    padding: 0.7rem 0.8rem; font-size: 0.85rem; box-shadow: 0 6px 22px rgba(0,0,0,0.16);
+  }
+  .graph-detail .gd-cat { font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.06em; color: var(--muted); }
+  .graph-detail .gd-fact { margin: 0.25rem 0 0.4rem; font-weight: 550; overflow-wrap: anywhere; }
+  .graph-detail .gd-meta { color: var(--ink-2); font-size: 0.78rem; }
+  .graph-detail .gd-close { position: absolute; top: 0.4rem; right: 0.55rem; cursor: pointer;
+    background: none; border: 0; color: var(--muted); font-size: 1rem; line-height: 1; }
+  .legend span { cursor: pointer; user-select: none; padding: 0.05rem 0.2rem; border-radius: 5px; }
+  .legend span:hover { background: color-mix(in srgb, var(--ink) 7%, transparent); }
+  .legend span.off { opacity: 0.32; text-decoration: line-through; }
+
   /* ---------- The System ---------- */
   .rank-card {
     background:
@@ -288,60 +321,31 @@
     <button data-tab="life">Life</button>
     <button data-tab="research">Research</button>
     <button data-tab="senses">Senses</button>
+    <button data-tab="settings">Settings</button>
   </nav>
 
   <!-- BRAIN -->
-  <section data-panel="brain">
-    <div class="card perception" id="perception-card">
-      <div class="perc-head">
-        <h2>How I see you <span class="sub" id="perc-conf"></span></h2>
-        <button id="perc-refresh" class="ghost-btn">Refresh</button>
-      </div>
-      <div id="perception"></div>
-      <div class="sub" id="perc-at"></div>
-    </div>
-    <div class="card" id="briefing-card" hidden>
-      <h2>Latest briefing <span class="sub" id="brief-at"></span></h2>
-      <div id="briefing"></div>
-    </div>
-    <div class="card">
+  <section data-panel="brain" hidden>
+    <div class="card graph-card">
       <div class="card-head">
-        <h2>Persona <span class="sub" id="persona-state"></span></h2>
-        <button id="persona-reset" class="ghost-btn">Reset to default</button>
-      </div>
-      <p class="teach-hint">Who it is when it talks — in Telegram, when it issues your quests, and at the nightly reckoning. The default is <b>The System</b>: a strict mentor. It will not invent facts, fake XP, or claim it did something it didn't, whatever you write here. But tone is yours, and tone carries: ask for gentle and you'll get gentle, even about a slipping streak. <b>"How I see you" takes the name and ignores the voice</b> — it's the one place that stays blunt, because a read you tuned yourself isn't worth reading.</p>
-      <form id="persona-form">
-        <label class="field-label" for="persona-name">Name</label>
-        <input id="persona-name" maxlength="40" placeholder="Intelly">
-        <label class="field-label" for="persona-voice">How it should talk to you</label>
-        <textarea id="persona-voice" rows="5" maxlength="1500" placeholder="Blunt and dry. Skip the preamble. If I'm kidding myself about a role, say so before the cover note. Never cheerlead."></textarea>
-        <div class="row">
-          <button type="submit" class="ghost-btn primary">Save persona</button>
-          <span class="teach-status" id="persona-status"></span>
+        <h2>Knowledge graph <span class="sub">what it knows, and how it connects</span></h2>
+        <div class="graph-tools">
+          <input id="graph-search" class="graph-search" type="text" placeholder="Search memories…" autocomplete="off">
+          <button id="graph-reset" class="ghost-btn" title="Reset view">Reset view</button>
         </div>
-      </form>
-    </div>
-    <div class="card teach">
-      <h2>Tell it something</h2>
-      <p class="teach-hint">Paste anything — notes, a bio, a job post, a brain-dump. It keeps the facts worth keeping and ignores the rest. Everything it learns here steers your rankings, drafts and chats.</p>
-      <textarea id="teach-text" rows="4" placeholder="I'm switching focus to backend infra roles. Ankit at Zepto said their SDE hiring reopens in August…"></textarea>
-      <div class="teach-actions">
-        <button id="teach-preview" class="ghost-btn">Show me what you'd learn</button>
-        <button id="teach-save" class="ghost-btn primary">Remember this</button>
-        <span class="teach-status" id="teach-status"></span>
       </div>
-      <div id="teach-out"></div>
-    </div>
-    <div class="card">
-      <h2>Knowledge graph</h2>
-      <canvas id="graph"></canvas>
       <div class="legend" id="legend"></div>
+      <div class="graph-wrap">
+        <canvas id="graph"></canvas>
+        <div class="graph-hint" id="graph-hint">scroll to zoom · drag to pan · click a node to focus · click a legend colour to filter</div>
+        <div class="graph-detail" id="graph-detail" hidden></div>
+      </div>
     </div>
     <div class="cols">
       <div>
         <div class="card">
           <div class="card-head">
-            <h2>Memories</h2>
+            <h2>Memories <span class="sub" id="mem-count"></span></h2>
             <button id="mem-add-toggle" class="ghost-btn">Add a fact</button>
           </div>
           <form id="mem-add" hidden>
@@ -354,25 +358,9 @@
           </form>
           <div id="memories"></div>
         </div>
-        <div class="card">
-          <div class="card-head">
-            <h2>Profile documents</h2>
-            <button id="doc-new" class="ghost-btn">New document</button>
-          </div>
-          <div id="docs"></div>
-          <form id="doc-edit" hidden>
-            <input id="doc-key" placeholder="resume, bio, skills, or notes:anything">
-            <textarea id="doc-body" rows="10" placeholder="Paste the full text. It becomes corpus the ranker and the agent read."></textarea>
-            <div class="row">
-              <button type="submit" class="ghost-btn primary">Save document</button>
-              <button type="button" id="doc-cancel" class="ghost-btn">Cancel</button>
-              <span class="teach-status" id="doc-status"></span>
-            </div>
-          </form>
-        </div>
+        <div class="card"><h2>Reminders</h2><div id="reminders"></div></div>
       </div>
       <div>
-        <div class="card"><h2>Reminders</h2><div id="reminders"></div></div>
         <div class="card">
           <h2>Conversation <span class="sub" id="chat-count"></span></h2>
           <div id="chat"></div>
@@ -397,6 +385,14 @@
   <!-- SYSTEM -->
   <section data-panel="system">
     <div class="card rank-card" id="rank-card"></div>
+    <div class="card perception" id="perception-card">
+      <div class="perc-head">
+        <h2>How I see you <span class="sub" id="perc-conf"></span></h2>
+        <button id="perc-refresh" class="ghost-btn">Refresh</button>
+      </div>
+      <div id="perception"></div>
+      <div class="sub" id="perc-at"></div>
+    </div>
     <div class="cols">
       <div>
         <div class="card">
@@ -439,10 +435,64 @@
       <div><div class="card"><h2>Learned merchants</h2><div id="merchants"></div></div></div>
     </div>
   </section>
+
+  <!-- SETTINGS -->
+  <section data-panel="settings" hidden>
+    <div class="card">
+      <div class="card-head">
+        <h2>Persona <span class="sub" id="persona-state"></span></h2>
+        <button id="persona-reset" class="ghost-btn">Reset to default</button>
+      </div>
+      <p class="teach-hint">Who it is when it talks — in Telegram, when it issues your quests, and at the nightly reckoning. The default is <b>The System</b>: a strict mentor. It will not invent facts, fake XP, or claim it did something it didn't, whatever you write here. But tone is yours, and tone carries: ask for gentle and you'll get gentle, even about a slipping streak. <b>"How I see you" takes the name and ignores the voice</b> — it's the one place that stays blunt, because a read you tuned yourself isn't worth reading.</p>
+      <form id="persona-form">
+        <label class="field-label" for="persona-name">Name</label>
+        <input id="persona-name" maxlength="40" placeholder="The System">
+        <label class="field-label" for="persona-voice">How it should talk to you</label>
+        <textarea id="persona-voice" rows="5" maxlength="1500" placeholder="Blunt and dry. Skip the preamble. Push me hard on a slipping streak; never cheerlead."></textarea>
+        <div class="row">
+          <button type="submit" class="ghost-btn primary">Save persona</button>
+          <span class="teach-status" id="persona-status"></span>
+        </div>
+      </form>
+    </div>
+    <div class="card teach">
+      <h2>Tell it something</h2>
+      <p class="teach-hint">Paste anything — notes, a bio, a job post, a brain-dump. It keeps the facts worth keeping and ignores the rest. Everything it learns here sharpens your quests and its read of you.</p>
+      <textarea id="teach-text" rows="4" placeholder="I'm switching focus to backend infra roles. Ankit at Zepto said their SDE hiring reopens in August…"></textarea>
+      <div class="teach-actions">
+        <button id="teach-preview" class="ghost-btn">Show me what you'd learn</button>
+        <button id="teach-save" class="ghost-btn primary">Remember this</button>
+        <span class="teach-status" id="teach-status"></span>
+      </div>
+      <div id="teach-out"></div>
+    </div>
+    <div class="card">
+      <div class="card-head">
+        <h2>Profile documents</h2>
+        <button id="doc-new" class="ghost-btn">New document</button>
+      </div>
+      <p class="teach-hint">Résumé, bio, skills, or any notes — the corpus the agent reads when it drafts applications and reasons about you.</p>
+      <div id="docs"></div>
+      <form id="doc-edit" hidden>
+        <input id="doc-key" placeholder="resume, bio, skills, or notes:anything">
+        <textarea id="doc-body" rows="10" placeholder="Paste the full text. It becomes corpus the agent reads."></textarea>
+        <div class="row">
+          <button type="submit" class="ghost-btn primary">Save document</button>
+          <button type="button" id="doc-cancel" class="ghost-btn">Cancel</button>
+          <span class="teach-status" id="doc-status"></span>
+        </div>
+      </form>
+    </div>
+    <div class="card">
+      <h2>Session</h2>
+      <p class="teach-hint">This dashboard is unlocked with your <code>DASH_TOKEN</code>, stored only in this browser.</p>
+      <button id="signout" class="ghost-btn">Sign out of this browser</button>
+    </div>
+  </section>
 </main>
 
 <div id="gate" hidden>
-  <h1>🧠 grabber</h1>
+  <h1>⚔️ The System</h1>
   <p class="sub">Enter the dashboard token (DASH_TOKEN)</p>
   <input id="tok" type="password" autocomplete="off">
   <br><button id="go">Open</button>
@@ -505,6 +555,7 @@ function renderTiles(sys, t) {
 }
 
 function renderMemories(mems) {
+  const cnt = $("mem-count"); if (cnt) cnt.textContent = mems.length ? `${mems.length} held` : "";
   if (!mems.length) { $("memories").innerHTML = `<div class="empty">Nothing saved yet — tell the bot about yourself.</div>`; return; }
   const order = c => { const i = CATS.indexOf(c); return i < 0 ? CATS.length : i; };
   $("memories").innerHTML = [...mems].sort((a, b) => order(a.category) - order(b.category) || a.id - b.id)
@@ -994,12 +1045,15 @@ function buildGraph(data) {
 
 function runGraph(data) {
   const canvas = $("graph"), dpr = devicePixelRatio || 1;
-  const W = canvas.clientWidth, H = 430;
+  const W = canvas.clientWidth, H = 520;
   canvas.width = W * dpr; canvas.height = H * dpr;
   const ctx = canvas.getContext("2d");
-  ctx.scale(dpr, dpr);
   const { nodes, links } = buildGraph(data);
   const css = v => getComputedStyle(document.documentElement).getPropertyValue(v).trim();
+
+  // adjacency, for focus highlighting
+  const adj = new Map(nodes.map(n => [n, new Set()]));
+  for (const l of links) { adj.get(l.a).add(l.b); adj.get(l.b).add(l.a); }
 
   nodes.forEach((n, i) => {
     const a = (i / nodes.length) * Math.PI * 2;
@@ -1008,7 +1062,20 @@ function runGraph(data) {
     n.vx = n.vy = 0;
   });
 
-  let heat = 1, dragging = null, hover = null;
+  const view = { k: 1, x: 0, y: 0 };
+  const hiddenCats = new Set();          // categories toggled off via the legend
+  let heat = 1, dragNode = null, hover = null, focus = null, search = "";
+  let panning = false, panLast = null, downNode = null, moved = 0;
+
+  const catOf = n => n.type === "doc" ? "doc" : (n.cat || (n.type === "owner" ? null : "fact"));
+  const isHidden = n => n.type !== "owner" && hiddenCats.has(catOf(n));
+  const matches = n => search && n.type === "memory" && n.full.fact.toLowerCase().includes(search);
+  const dimMode = () => focus || search;
+  const isLit = n => {
+    if (!dimMode()) return true;
+    if (focus) return n === focus || adj.get(focus).has(n);
+    return matches(n) || n.type === "owner";
+  };
 
   function tick() {
     for (let i = 0; i < nodes.length; i++) for (let j = i + 1; j < nodes.length; j++) {
@@ -1028,7 +1095,7 @@ function runGraph(data) {
     }
     for (const n of nodes) {
       n.vx += (W / 2 - n.x) * 0.006; n.vy += (H / 2 - n.y) * 0.006;
-      if (n === dragging) { n.vx = n.vy = 0; continue; }
+      if (n === dragNode) { n.vx = n.vy = 0; continue; }
       n.vx = Math.max(-30, Math.min(30, n.vx * 0.86));
       n.vy = Math.max(-30, Math.min(30, n.vy * 0.86));
       n.x += n.vx * heat; n.y += n.vy * heat;
@@ -1039,60 +1106,134 @@ function runGraph(data) {
   }
 
   function draw() {
-    ctx.clearRect(0, 0, W, H);
-    ctx.lineWidth = 1;
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.translate(view.x, view.y); ctx.scale(view.k, view.k);
+    const few = nodes.length <= 60;
+
     for (const l of links) {
+      if (isHidden(l.a) || isHidden(l.b)) continue;
+      const lit = !dimMode() || (focus ? (l.a === focus || l.b === focus) : (matches(l.a) || matches(l.b)));
       ctx.strokeStyle = css("--grid");
-      ctx.globalAlpha = l.weak ? 0.55 : 1;
+      ctx.globalAlpha = lit ? (l.weak ? 0.5 : 0.9) : 0.07;
+      ctx.lineWidth = (l.weak ? 1 : 1.4) / view.k;
       ctx.beginPath(); ctx.moveTo(l.a.x, l.a.y); ctx.lineTo(l.b.x, l.b.y); ctx.stroke();
-      ctx.globalAlpha = 1;
     }
+    ctx.globalAlpha = 1;
     for (const n of nodes) {
+      if (isHidden(n)) continue;
+      const lit = isLit(n);
+      ctx.globalAlpha = lit ? 1 : 0.14;
       ctx.beginPath(); ctx.arc(n.x, n.y, n.r, 0, Math.PI * 2);
-      ctx.fillStyle = n.type === "owner" ? css("--ink") : catColor(n.cat || (n.type === "doc" ? "doc" : "fact"));
+      ctx.fillStyle = n.type === "owner" ? css("--ink") : catColor(catOf(n));
       ctx.fill();
-      ctx.lineWidth = 2; ctx.strokeStyle = css("--surface"); ctx.stroke(); // 2px surface ring
-      if (n === hover) { ctx.strokeStyle = css("--ink-2"); ctx.stroke(); }
-      ctx.fillStyle = n.type === "owner" ? css("--ink") : css("--ink-2");
-      ctx.font = (n.type === "owner" || n.type === "hub" ? "600 " : "") + "11px system-ui, sans-serif";
-      ctx.textAlign = "center";
-      const label = n.type === "memory"
-        ? (nodes.length <= 60 ? n.label.slice(0, 18) + (n.label.length > 18 ? "…" : "") : "")
-        : n.label;
-      if (label) ctx.fillText(label, n.x, n.y + n.r + 13);
+      ctx.lineWidth = 2 / view.k; ctx.strokeStyle = css("--surface"); ctx.stroke();
+      if (n === hover || n === focus) { ctx.lineWidth = 2 / view.k; ctx.strokeStyle = css("--ink-2"); ctx.stroke(); }
+      const showLabel = n.type !== "memory" || few || (dimMode() && lit) || n === hover;
+      if (showLabel && lit) {
+        ctx.fillStyle = n.type === "owner" ? css("--ink") : css("--ink-2");
+        ctx.font = (n.type === "owner" || n.type === "hub" ? "600 " : "") + "11px system-ui, sans-serif";
+        ctx.textAlign = "center";
+        const label = n.type === "memory" ? n.label.slice(0, 22) + (n.label.length > 22 ? "…" : "") : n.label;
+        ctx.fillText(label, n.x, n.y + n.r + 12);
+      }
     }
+    ctx.globalAlpha = 1;
   }
 
   (function loop() { tick(); draw(); requestAnimationFrame(loop); })();
 
-  const at = e => {
+  const toWorld = e => {
     const r = canvas.getBoundingClientRect();
-    const x = e.clientX - r.left, y = e.clientY - r.top;
-    return nodes.findLast(n => (n.x - x) ** 2 + (n.y - y) ** 2 < (n.r + 6) ** 2);
+    return { x: (e.clientX - r.left - view.x) / view.k, y: (e.clientY - r.top - view.y) / view.k };
+  };
+  const at = e => {
+    const w = toWorld(e);
+    return nodes.findLast(n => !isHidden(n) && (n.x - w.x) ** 2 + (n.y - w.y) ** 2 < (n.r + 6) ** 2);
+  };
+
+  function showDetail(n) {
+    const box = $("graph-detail");
+    if (n.type === "memory") {
+      const conns = adj.get(n).size;
+      box.innerHTML = `<button class="gd-close" aria-label="Close">×</button>
+        <div class="gd-cat" style="color:${catColor(n.cat)}">${esc(n.cat)} · #${n.full.id}</div>
+        <div class="gd-fact">${esc(n.full.fact)}</div>
+        <div class="gd-meta">${esc((n.full.created_at || "").slice(0, 10))} · ${conns} connection${conns === 1 ? "" : "s"}${n.full.context ? `<br>heard: “${esc(String(n.full.context).slice(0, 100))}”` : ""}</div>`;
+    } else if (n.type === "doc") {
+      box.innerHTML = `<button class="gd-close" aria-label="Close">×</button>
+        <div class="gd-cat">profile document</div>
+        <div class="gd-fact">${esc(n.label)}</div>
+        <div class="gd-meta">${n.full.chars.toLocaleString()} chars — edit it in Settings</div>`;
+    } else if (n.type === "hub") {
+      const kids = adj.get(n).size;
+      box.innerHTML = `<button class="gd-close" aria-label="Close">×</button>
+        <div class="gd-cat" style="color:${catColor(n.cat)}">${esc(n.cat)}</div>
+        <div class="gd-meta">${kids} ${esc(n.cat)} ${kids === 1 ? "fact" : "facts"} — click to isolate this cluster.</div>`;
+    } else {
+      box.innerHTML = `<button class="gd-close" aria-label="Close">×</button><div class="gd-fact">You</div>
+        <div class="gd-meta">Everything the System knows radiates from here.</div>`;
+    }
+    box.hidden = false;
+    box.querySelector(".gd-close").onclick = clearFocus;
+  }
+  function clearFocus() { focus = null; $("graph-detail").hidden = true; }
+
+  canvas.onpointerdown = e => {
+    downNode = at(e); moved = 0;
+    if (downNode) { dragNode = downNode; canvas.setPointerCapture(e.pointerId); }
+    else { panning = true; panLast = { x: e.clientX, y: e.clientY }; }
   };
   canvas.onpointermove = e => {
-    if (dragging) {
-      const r = canvas.getBoundingClientRect();
-      dragging.x = e.clientX - r.left; dragging.y = e.clientY - r.top;
-      heat = Math.max(heat, 0.5);
-      return;
-    }
+    if (dragNode) { const w = toWorld(e); dragNode.x = w.x; dragNode.y = w.y; heat = Math.max(heat, 0.5); moved += 3; return; }
+    if (panning) { view.x += e.clientX - panLast.x; view.y += e.clientY - panLast.y; panLast = { x: e.clientX, y: e.clientY }; moved += 3; return; }
     hover = at(e);
     canvas.style.cursor = hover ? "pointer" : "grab";
-    if (hover?.type === "memory") {
-      tipShow(`<div class="t-cat">${esc(hover.cat)} · #${hover.full.id} · ${esc((hover.full.created_at || "").slice(0, 10))}</div>${esc(hover.full.fact)}`, e.clientX, e.clientY);
-    } else if (hover?.type === "doc") {
-      tipShow(`<div class="t-cat">profile document</div><b>${esc(hover.label)}</b> — ${hover.full.chars.toLocaleString()} chars`, e.clientX, e.clientY);
-    } else tipHide();
+    if (hover?.type === "memory") tipShow(`<div class="t-cat">${esc(hover.cat)} · #${hover.full.id}</div>${esc(hover.full.fact)}`, e.clientX, e.clientY);
+    else if (hover?.type === "doc") tipShow(`<div class="t-cat">document</div><b>${esc(hover.label)}</b> — ${hover.full.chars.toLocaleString()} chars`, e.clientX, e.clientY);
+    else tipHide();
   };
-  canvas.onpointerdown = e => { dragging = at(e); if (dragging) canvas.setPointerCapture(e.pointerId); };
-  canvas.onpointerup = () => { dragging = null; };
-  canvas.onpointerleave = () => { hover = null; tipHide(); };
+  canvas.onpointerup = e => {
+    if (moved < 6) {
+      const n = downNode || at(e);
+      if (n) { focus = n; showDetail(n); }
+      else clearFocus();
+    }
+    dragNode = null; panning = false; downNode = null;
+  };
+  canvas.onpointerleave = () => { hover = null; panning = false; tipHide(); };
+  canvas.onwheel = e => {
+    e.preventDefault();
+    const r = canvas.getBoundingClientRect();
+    const sx = e.clientX - r.left, sy = e.clientY - r.top;
+    const k2 = Math.max(0.3, Math.min(4, view.k * (e.deltaY < 0 ? 1.12 : 0.89)));
+    view.x = sx - ((sx - view.x) / view.k) * k2;
+    view.y = sy - ((sy - view.y) / view.k) * k2;
+    view.k = k2;
+  };
 
-  $("legend").innerHTML =
-    `<span style="--c:${css("--ink")}">you</span>` +
-    CATS.map(c => `<span style="--c:${catColor(c)}">${c}</span>`).join("") +
-    `<span style="--c:${catColor("doc")}">document</span>`;
+  // legend — clickable category filters
+  const legendItems = [["owner", "you", css("--ink")], ...CATS.map(c => [c, c, catColor(c)]), ["doc", "document", catColor("doc")]];
+  $("legend").innerHTML = legendItems.map(([key, label, color]) =>
+    `<span data-cat="${key}" style="--c:${color}">${label}</span>`).join("");
+  $("legend").querySelectorAll("span").forEach(el => {
+    el.onclick = () => {
+      const c = el.dataset.cat;
+      if (c === "owner") return;
+      if (hiddenCats.has(c)) hiddenCats.delete(c); else hiddenCats.add(c);
+      el.classList.toggle("off", hiddenCats.has(c));
+      heat = Math.max(heat, 0.4);
+    };
+  });
+
+  $("graph-search").oninput = e => { search = e.target.value.trim().toLowerCase(); if (search) clearFocus(); };
+  $("graph-reset").onclick = () => {
+    view.k = 1; view.x = 0; view.y = 0; clearFocus();
+    hiddenCats.clear(); search = ""; $("graph-search").value = "";
+    $("legend").querySelectorAll("span").forEach(el => el.classList.remove("off"));
+    heat = 0.9;
+  };
 }
 
 function renderPerception(p) {
@@ -1128,15 +1269,6 @@ async function refreshPerception() {
     renderPerception({ error: "that didn't go through — try again" });
   }
   btn.disabled = false; btn.textContent = "Refresh";
-}
-
-function renderBriefing(b) {
-  if (!b?.text) return;
-  $("briefing-card").hidden = false;
-  // The briefing is authored with simple <b>/<i>; render those, escape the rest.
-  const safe = esc(b.text).replace(/&lt;(\/?(?:b|i))&gt;/g, "<$1>");
-  $("briefing").innerHTML = `<div style="white-space:pre-wrap;font-size:0.92rem">${safe}</div>`;
-  if (b.at) $("brief-at").textContent = "· " + b.at.slice(0, 10);
 }
 
 function renderPeople(people) {
@@ -1210,21 +1342,17 @@ async function boot() {
     renderTiles(sys, brain.totals);
     // System tab
     renderRank(sys.rank);
+    renderPerception(brain.perception);
+    $("perc-refresh").onclick = refreshPerception;
     renderQuests(sys.quests_today);
     renderGoals(sys.goals);
     renderActivity(sys.activity);
     renderApplications(brain.applications);
     // Brain tab
-    renderPerception(brain.perception);
-    $("perc-refresh").onclick = refreshPerception;
-    renderBriefing(brain.briefing);
-    renderPersona(brain.persona);
     renderMemories(brain.memories);
     renderChat(brain.chat);
-    renderDocs(brain.documents);
-    renderSummary(brain.summary);
-    wireTeach();
     renderReminders(brain.reminders);
+    renderSummary(brain.summary);
     // Life tab
     renderLife(brain.life);
     renderPeople(brain.life?.people);
@@ -1234,8 +1362,13 @@ async function boot() {
     renderAllowlist(brain.senses?.allowlist);
     renderMerchants(brain.merchants);
     renderResearch(brain.research);
+    // Settings tab
+    renderPersona(brain.persona);
+    renderDocs(brain.documents);
+    wireTeach();
+    $("signout").onclick = () => { localStorage.removeItem("dash_token"); location.reload(); };
     const start = (location.hash || "").slice(1);
-    showTab(["system", "brain", "life", "research", "senses"].includes(start) ? start : "system");
+    showTab(["system", "brain", "life", "research", "senses", "settings"].includes(start) ? start : "system");
   } catch (e) {
     localStorage.removeItem("dash_token");
     gate(e.message === "token" && token ? "Wrong token — try again." : "");

@@ -164,8 +164,11 @@ nightly reckoning, a research job spawned (`agent.js`), an application drafted
 (rank + goals + today's quests + the newest 60 activity rows) and renders it as a
 "what I'm doing to hit your goals" feed — so the owner can see, at a glance, what the
 agent has actually done for them. The dashboard (`worker/public/index.html`) opens on the
-System tab (rank hero, quests, goals, activity, applications); the old Opportunities tab
-was removed.
+**System** tab (rank hero, the honest "How I see you" read, quests, goals, activity,
+applications). Other tabs: **Brain** (an explorable knowledge graph — zoom/pan/click-to-
+focus/legend-filter/search — plus memories, conversation, reminders), **Life**,
+**Research**, **Senses**, and **Settings** (persona, teach, profile documents). The old
+Opportunities tab was removed.
 
 ## 5.9 What changed from the opportunity engine
 
