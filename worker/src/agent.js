@@ -23,11 +23,47 @@ function stripHtml(html) {
     .replace(/\s+/g, " ").trim();
 }
 
+// ---------- Typed tool args: validate at the boundary, not inside the tool ----------
+// A tool may carry an `args` schema: { field: {type, required, enum} }. Before this,
+// the loop trusted whatever JSON the model emitted — a bad arg only failed inside the
+// tool, or silently did the wrong thing. A failure here feeds back through the
+// transcript exactly like a tool error, so the model corrects itself on the next step;
+// it never throws (mirroring the protocol-nudge behavior). Coercions are deliberate:
+// the model often sends {"id": "5"} and every tool already tolerated that via Number().
+
+export function validateArgs(schema, args) {
+  for (const [field, spec] of Object.entries(schema)) {
+    const v = args[field];
+    if (v == null || v === "") {
+      if (spec.required) {
+        return `missing required arg "${field}" (${spec.enum ? spec.enum.join("|") : spec.type})`;
+      }
+      continue;
+    }
+    if (spec.type === "number" && typeof v !== "number") {
+      const n = Number(v);
+      if (!isFinite(n)) return `arg "${field}" must be a number, got ${JSON.stringify(v).slice(0, 60)}`;
+      args[field] = n;
+    } else if (spec.type === "string" && typeof v !== "string") {
+      if (typeof v === "number" || typeof v === "boolean") args[field] = String(v);
+      else return `arg "${field}" must be a string, got ${JSON.stringify(v).slice(0, 60)}`;
+    } else if (spec.type === "boolean" && typeof v !== "boolean") {
+      if (v === "true" || v === "false") args[field] = v === "true";
+      else return `arg "${field}" must be true or false`;
+    }
+    if (spec.enum && !spec.enum.includes(args[field])) {
+      return `arg "${field}" must be one of: ${spec.enum.join(", ")}`;
+    }
+  }
+  return null;
+}
+
 // ---------- Tools ----------
 
 export const TOOLS = {
   web_search: {
     desc: 'search the live web for anything. args: {"query": "..."}',
+    args: { query: { type: "string", required: true } },
     run: async (env, args) => {
       const q = String(args.query || "").trim();
       if (!q) return { error: "empty query" };
@@ -86,6 +122,7 @@ export const TOOLS = {
 
   web_fetch: {
     desc: 'read a web page as text. args: {"url": "https://..."}',
+    args: { url: { type: "string", required: true } },
     run: async (_env, args) => {
       const url = String(args.url || "");
       if (!/^https?:\/\//.test(url)) return { error: "need a full http(s) url" };
@@ -124,6 +161,7 @@ export const TOOLS = {
 
   save_memory: {
     desc: `store a durable fact about the owner. args: {"fact": "...", "category": one of ${MEMORY_CATEGORIES.join("|")}}`,
+    args: { fact: { type: "string", required: true }, category: { type: "string", enum: MEMORY_CATEGORIES } },
     run: async (env, args) => {
       if (!args.fact) return { error: "empty fact" };
       const r = await saveMemory(env, String(args.fact).slice(0, 500), args.category, { source: "chat" });
@@ -134,6 +172,7 @@ export const TOOLS = {
 
   forget_memory: {
     desc: 'delete a memory that is wrong or superseded. args: {"id": <number from the memory list>}',
+    args: { id: { type: "number", required: true } },
     run: async (env, args) => {
       if (!args.id) return { error: "need the memory id" };
       return await forgetMemory(env, args.id) ? { ok: true } : { error: "no memory with that id" };
@@ -142,6 +181,7 @@ export const TOOLS = {
 
   set_reminder: {
     desc: 'schedule a reminder message. args: {"text": "...", "due_at": "UTC ISO datetime"} — delivered on the hour',
+    args: { text: { type: "string", required: true }, due_at: { type: "string", required: true } },
     run: async (env, args) => {
       const due = Date.parse(args.due_at || "");
       if (!args.text || isNaN(due)) return { error: 'need text and due_at as UTC ISO like "2026-07-17T04:30:00Z"' };
@@ -162,6 +202,7 @@ export const TOOLS = {
 
   cancel_reminder: {
     desc: 'cancel or complete a reminder. args: {"id": <number>}',
+    args: { id: { type: "number", required: true } },
     run: async (env, args) => {
       if (!args.id) return { error: "need the reminder id" };
       const r = await env.DB.prepare("UPDATE reminders SET done = 1 WHERE id = ?").bind(Number(args.id)).run();
@@ -173,6 +214,7 @@ export const TOOLS = {
 
   spawn_research: {
     desc: 'launch a background research agent for a question that needs real digging (browsing many pages, reading articles, watching talks). Takes ~5-15 min and reports back on its own. Use for "what does X ask in interviews", "who is this founder", "is Y worth doing". args: {"question": "...", "depth": "quick|normal|deep"}',
+    args: { question: { type: "string", required: true }, depth: { type: "string", enum: ["quick", "normal", "deep"] } },
     run: async (env, args) => {
       const question = String(args.question || "").trim();
       if (!question) return { error: "empty question" };
@@ -273,6 +315,7 @@ export const TOOLS = {
 
   watch_app: {
     desc: 'allow a phone app\'s notifications to be stored (they are dropped unless allowed). args: {"pattern": "lowercase app name fragment", "kind": "bank|recruiter|calendar|delivery|other"}',
+    args: { pattern: { type: "string", required: true }, kind: { type: "string", enum: ["bank", "recruiter", "calendar", "delivery", "other"] } },
     run: async (env, args) => {
       const pattern = String(args.pattern || "").toLowerCase().trim();
       if (!pattern) return { error: "empty pattern" };
@@ -323,11 +366,19 @@ const TOOL_GROUPS = {
   watch_app: "Senses",
 };
 
+// Render a schema as a compact signature so the prompt and the enforced contract can
+// never drift apart (the prose desc still carries examples; this carries the law).
+function argSig(schema) {
+  const parts = Object.entries(schema).map(([f, s]) =>
+    `${f}${s.required ? "" : "?"}:${s.enum ? s.enum.join("|") : s.type}`);
+  return ` [checked args: ${parts.join(", ")}]`;
+}
+
 function toolList() {
   const groups = {};
   for (const [name, t] of Object.entries(TOOLS)) {
     const g = t.group || TOOL_GROUPS[name] || "Other";
-    (groups[g] ||= []).push(`- ${name}: ${t.desc}`);
+    (groups[g] ||= []).push(`- ${name}: ${t.desc}${t.args ? argSig(t.args) : ""}`);
   }
   return Object.entries(groups)
     .map(([g, lines]) => `### ${g}\n${lines.join("\n")}`).join("\n");
@@ -456,10 +507,18 @@ export async function runAgent(env, userText) {
     if (!tool) {
       result = { error: `unknown tool '${action.tool}'` };
     } else {
-      try {
-        result = await tool.run(env, action.args || {});
-      } catch (e) {
-        result = { error: String(e).slice(0, 200) };
+      action.args ||= {};
+      // Validate at the boundary; a bad arg becomes a tool-error the model can fix
+      // on its next step, never a thrown step or a silently-wrong write.
+      const bad = tool.args ? validateArgs(tool.args, action.args) : null;
+      if (bad) {
+        result = { error: `invalid args: ${bad}` };
+      } else {
+        try {
+          result = await tool.run(env, action.args);
+        } catch (e) {
+          result = { error: String(e).slice(0, 200) };
+        }
       }
     }
     transcript += `\nYou called ${action.tool}(${JSON.stringify(action.args || {})}) -> ${JSON.stringify(result).slice(0, 2500)}`;

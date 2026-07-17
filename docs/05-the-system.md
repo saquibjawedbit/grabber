@@ -171,6 +171,33 @@ focus/legend-filter/search — plus memories, conversation, reminders), **Life**
 **Research**, **Senses**, and **Settings** (persona, teach, profile documents). The old
 Opportunities tab was removed.
 
+## 5.85 Planner, autonomy & progress (the roadmap upgrade)
+
+The System no longer regenerates a fresh to-do list each morning — a goal now has a
+persistent, time-aware plan it drives. Four capabilities, all in `system.js`:
+
+- **Temporal context** — `clockContext(env, goal)` returns code-computed facts (today in
+  IST, `goal_age_days` from `created_at`, `days_to_deadline`, `runway_used_pct`,
+  `days_since_last_cleared`, streak) and is spread into *every* reasoning prompt (planner,
+  quest generation, the ponder tick, the reckoning). Never guessed by the model.
+- **Persistent roadmap** — `planGoal()` decomposes a goal into 3–6 ordered `milestones`
+  with `target_date`s across the runway (runs once on goal-create, lazily at issuance, or
+  via `replan_goal`). `generateDailyQuests` targets each goal's **active** milestone;
+  clearing its quests auto-advances the milestone (`advanceMilestones`).
+- **Goal-level progress** — `computeProgress` writes `goals.progress` = (done milestones +
+  active-milestone quest ratio) / total; `paceOf` compares it to runway elapsed →
+  `ahead / on-track / behind / at-risk` + a projected completion date. Pure SQL + arithmetic.
+- **Autonomous action** — `autonomyTick` (cron at `AUTONOMY_HOUR = 13` IST) is a bounded
+  self-directed reasoning pass: it picks **one** move (research a blocker, surface a
+  finding, nudge, or propose a re-plan), gated by mode (`off | suggest | act`, default
+  suggest), a daily `AUTONOMY_BUDGET = 3`, quiet hours (`22:00–07:00`), and research dedup.
+  Every move is logged `actor='system'` with its `reasoning`, shown `AUTO`-tagged in the
+  feed. Owner controls the mode from **Settings** (`POST /api/settings`).
+
+`runSystem` now fires three self-gated slots: issue (07:00), ponder (13:00), reckoning
+(21:00). The dashboard renders each goal's progress bar, pace chip, projected date, and
+its milestone roadmap. Full design: the roadmap artifact linked from the project notes.
+
 ## 5.9 What changed from the opportunity engine
 
 | Removed | Replaced by |

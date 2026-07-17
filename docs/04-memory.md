@@ -13,6 +13,16 @@ Each memory row carries an `embedding`: a **384-dim Float32 vector** from
 product** — no per-query normalisation, no JSON array parsing (which would blow the
 Worker's CPU budget).
 
+Vectors live in **two places**: the D1 row (source of truth, rebuild source) and a
+**Cloudflare Vectorize index** (`grabber-memories`, 384-dim cosine, binding
+`VECTORIZE`) used for search. The index removed a real ceiling: the original JS scan
+read only the newest 400 rows, so past 400 memories old facts silently stopped being
+recalled *and* stopped blocking duplicates. Every Vectorize call **fails soft**
+(`vecQuery`/`vecUpsert`/`vecDelete`, `memory.js`): on error — or on an *empty* index,
+which is what a deployed-but-not-backfilled binding looks like — callers fall back to
+the old D1 scan, so recall and dedup degrade instead of failing. The index is
+disposable: `/api/vector-backfill` rebuilds it from the D1 vectors at any time.
+
 ```mermaid
 flowchart LR
   fact["fact text"] --> embed["embed(): AI.run(bge) → v"]
@@ -29,36 +39,42 @@ Constants (`memory.js:16-18`): `RECALL_K = 14`, `NEAR_DUPLICATE = 0.90`.
 
 ## 4.2 Recall — by meaning, per turn
 
-`recallMemories(env, query)` (`memory.js:54`) is called on every agent turn (and inside
+`recallMemories(env, query)` (`memory.js`) is called on every agent turn (and inside
 `extract`). It:
 
-1. Pulls the newest 400 memory rows.
-2. Splits into **embedded** and **un-embedded** rows. Un-embedded rows (embedding failed,
-   or predate v3) **always ride along** (up to 12) — "better a slightly bigger prompt
-   than silently forgetting a fact."
-3. Embeds the query; on failure, degrades gracefully to the newest `RECALL_K`.
-4. Scores embedded rows by dot product, sorts, and returns `plain + top-K`.
+1. Embeds the query, then asks **Vectorize** for the top `RECALL_K` matches across the
+   *whole* memory set, and hydrates the facts from D1 by id (ids whose D1 row is gone —
+   a desync — simply drop out of the hydration).
+2. Un-embedded rows (embedding failed, or predate v3) **always ride along** (up to 12) —
+   "better a slightly bigger prompt than silently forgetting a fact."
+3. If Vectorize is unbound, empty, or erroring, it falls back to the **pre-Vectorize
+   scan**: newest 400 rows, cosine in JS. If even the query embedding fails, it degrades
+   to the newest `RECALL_K`.
 
 ```mermaid
 flowchart TB
-  all["SELECT … LIMIT 400"] --> split{"embedding?"}
-  split -->|yes| emb["embedded rows"]
-  split -->|no| plain["un-embedded (max 12) — always included"]
-  emb --> qok{"embed(query) ok?"}
-  qok -->|no| newest["fallback: newest RECALL_K"]
-  qok -->|yes| score["dot(q, row) each"]
-  score --> sort["sort desc, take K=14"]
-  sort --> out["plain ++ top-K → prompt"]
-  plain --> out
+  q["embed(query)"] -->|ok| vq{"Vectorize query ok\n(and index non-empty)?"}
+  vq -->|yes| hyd["hydrate top-K facts from D1 by id"]
+  hyd --> out["plain (≤12 un-embedded) ++ top-K → prompt"]
+  vq -->|no| all["fallback: SELECT … LIMIT 400"]
+  q -->|fails| newest["fallback: newest RECALL_K"]
+  all --> score["dot(q, row) each, sort desc, take K=14"]
+  score --> out
 ```
 
 ## 4.3 Write & dedupe
 
-`saveMemory` (`memory.js:97`) embeds the fact, then **dedupes on meaning, not string
-equality**: if any existing embedded memory scores `≥ 0.90` cosine, it returns
-`{status:"duplicate"}` instead of inserting (so "22 years old" and "is 22" collapse to
-one). An `exclude` list lets a *reconciled* fact ignore its own sources when checking for
-duplicates. If embedding fails, the fact is still stored **un-embedded** rather than lost.
+`saveMemory` (`memory.js`) embeds the fact, then **dedupes on meaning, not string
+equality**: it asks Vectorize for the nearest neighbours (falling back to the 400-row
+scan if the index can't answer), and if any existing memory scores `≥ 0.90` cosine it
+returns `{status:"duplicate"}` instead of inserting (so "22 years old" and "is 22"
+collapse to one). A near-duplicate hit whose D1 row no longer exists is treated as a
+stale index entry and deleted from Vectorize on the spot. An `exclude` list lets a
+*reconciled* fact ignore its own sources when checking for duplicates. If embedding
+fails, the fact is still stored **un-embedded** rather than lost. On insert, the vector
+is written to the D1 row *and* upserted into the index; `forgetMemory` deletes from
+both — so the two stores can't drift apart in normal operation (this covers
+`reconcile`'s merge/forget flows too, which route through these same functions).
 
 ## 4.4 Extract — the post-reply sweep
 
@@ -141,6 +157,10 @@ extractor. It walks user→assistant **pairs** (the same unit `extract` sees liv
 each through `extract` with `allowForget:false` (additive only). Contradictions among what
 it learns are left to `reconcile`. Reached via `/api/memory-backfill` then
 `/api/memory-reconcile` (see [08-api-and-ops.md](./08-api-and-ops.md)).
+
+A third backfill, `/api/vector-backfill` (`index.js`), pushes every D1-held vector into
+the Vectorize index in batches of 100 — run it once after creating the index, and again
+any time the index is wiped or recreated. Idempotent (upserts), safe to re-run.
 
 ```mermaid
 flowchart LR

@@ -49,23 +49,81 @@ export function dot(a, b) {
   return s;
 }
 
+// ---------- Vectorize: the index that removes the 400-row ceiling ----------
+// The scan below (`ORDER BY id DESC LIMIT 400`) was correct but capped: past 400
+// memories, old facts silently stopped being recalled AND stopped blocking
+// duplicates. Vectorize searches the whole set. D1 stays the source of truth —
+// facts and packed vectors both — so the index is disposable and rebuildable
+// (/api/vector-backfill). Every call here fails soft: a down index must never
+// lose a write or a recall, so callers fall back to the D1 scan on null.
+
+async function vecQuery(env, f32, topK) {
+  if (!env.VECTORIZE) return null;
+  try {
+    const r = await env.VECTORIZE.query(Array.from(f32), { topK });
+    // Zero matches means an EMPTY index (query returns nearest-K regardless of
+    // similarity), i.e. deployed-but-not-backfilled. Treat as unavailable so the
+    // scan answers instead of "no memories" / "no duplicate".
+    return r?.matches?.length ? r.matches : null;
+  } catch (e) {
+    console.log("vectorize query failed:", String(e).slice(0, 120));
+    return null;
+  }
+}
+
+async function vecUpsert(env, id, f32, category) {
+  if (!env.VECTORIZE) return false;
+  try {
+    await env.VECTORIZE.upsert([{ id: String(id), values: Array.from(f32), metadata: { category: category || "fact" } }]);
+    return true;
+  } catch (e) {
+    console.log("vectorize upsert failed:", String(e).slice(0, 120));
+    return false;
+  }
+}
+
+async function vecDelete(env, ids) {
+  if (!env.VECTORIZE || !ids.length) return;
+  try {
+    await env.VECTORIZE.deleteByIds(ids.map(String));
+  } catch (e) {
+    console.log("vectorize delete failed:", String(e).slice(0, 120));
+  }
+}
+
 // ---------- Recall ----------
 
 export async function recallMemories(env, query) {
+  let q = null;
+  try { q = await embed(env, query); } catch { /* scan path falls back to newest */ }
+
+  // Primary: Vectorize over the WHOLE set, then hydrate facts from D1 (the source
+  // of truth). Ids whose D1 row is gone (desync) just drop out of the hydration.
+  const matches = q ? await vecQuery(env, q, RECALL_K) : null;
+  if (matches) {
+    // Un-embedded rows (embedding failed, or saved before v3) always ride along —
+    // better a slightly bigger prompt than silently forgetting a fact.
+    const { results: plain } = await env.DB.prepare(
+      "SELECT id, category, fact FROM memories WHERE embedding IS NULL ORDER BY id DESC LIMIT 12").all();
+    const ids = matches.map(m => Number(m.id)).filter(Boolean);
+    const { results } = await env.DB.prepare(
+      `SELECT id, category, fact FROM memories WHERE id IN (${ids.map(() => "?").join(",")})`)
+      .bind(...ids).all();
+    const byId = new Map(results.map(r => [r.id, r]));
+    const rows = matches.map(m => byId.has(Number(m.id))
+      ? { ...byId.get(Number(m.id)), sim: m.score } : null).filter(Boolean);
+    return [...plain, ...rows];
+  }
+
+  // Fallback: the pre-Vectorize scan — newest 400 rows, cosine in JS. Correct but
+  // capped; only reached when the index is unbound, empty, or erroring.
   const { results } = await env.DB.prepare(
     "SELECT id, category, fact, embedding FROM memories ORDER BY id DESC LIMIT 400").all();
   if (!results.length) return [];
   const embedded = results.filter(r => r.embedding);
-  // Un-embedded rows (embedding failed, or saved before v3) always ride along —
-  // better a slightly bigger prompt than silently forgetting a fact.
   const plain = results.filter(r => !r.embedding).slice(0, 12);
   if (!embedded.length) return plain;
-  let q;
-  try {
-    q = await embed(env, query);
-  } catch {
-    return results.slice(0, RECALL_K);
-  }
+  if (!q) return results.slice(0, RECALL_K);
   const scored = embedded.map(r => {
     let sim = -1;
     try { sim = dot(q, unpackVec(r.embedding)); } catch { /* corrupt vector */ }
@@ -80,6 +138,8 @@ export async function embedMemory(env, id, fact) {
     const v = await embed(env, fact);
     await env.DB.prepare("UPDATE memories SET embedding = ? WHERE id = ?")
       .bind(packVec(v), id).run();
+    const row = await env.DB.prepare("SELECT category FROM memories WHERE id = ?").bind(id).first();
+    await vecUpsert(env, id, v, row?.category);   // mirror into the index (fail-soft)
     return true;
   } catch (e) {
     console.log("embedMemory failed:", String(e).slice(0, 120));
@@ -108,13 +168,26 @@ export async function saveMemory(env, fact, category, { source = "chat", context
     // Dedupe on meaning, not string equality — "22 years old" and "is 22" are
     // one fact, and v3 happily stored both spellings side by side.
     const skip = new Set(exclude.map(Number));
-    const { results } = await env.DB.prepare(
-      "SELECT id, fact, embedding FROM memories WHERE embedding IS NOT NULL ORDER BY id DESC LIMIT 400").all();
-    for (const r of results) {
-      if (skip.has(r.id)) continue;
-      let sim = -1;
-      try { sim = dot(vec, unpackVec(r.embedding)); } catch { continue; }
-      if (sim >= NEAR_DUPLICATE) return { id: r.id, status: "duplicate", of: r.fact };
+    // Primary: ask Vectorize for the nearest neighbours across the WHOLE set.
+    const matches = await vecQuery(env, vec, 8);
+    if (matches) {
+      for (const m of matches) {
+        const id = Number(m.id);
+        if (skip.has(id) || m.score < NEAR_DUPLICATE) continue;
+        const row = await env.DB.prepare("SELECT id, fact FROM memories WHERE id = ?").bind(id).first();
+        if (row) return { id: row.id, status: "duplicate", of: row.fact };
+        await vecDelete(env, [id]);   // stale: in the index but gone from D1 — clean it up
+      }
+    } else {
+      // Fallback scan — capped at the newest 400; only when the index can't answer.
+      const { results } = await env.DB.prepare(
+        "SELECT id, fact, embedding FROM memories WHERE embedding IS NOT NULL ORDER BY id DESC LIMIT 400").all();
+      for (const r of results) {
+        if (skip.has(r.id)) continue;
+        let sim = -1;
+        try { sim = dot(vec, unpackVec(r.embedding)); } catch { continue; }
+        if (sim >= NEAR_DUPLICATE) return { id: r.id, status: "duplicate", of: r.fact };
+      }
     }
   }
 
@@ -126,12 +199,16 @@ export async function saveMemory(env, fact, category, { source = "chat", context
   if (vec) {
     await env.DB.prepare("UPDATE memories SET embedding = ? WHERE id = ?")
       .bind(packVec(vec), row.id).run();
+    await vecUpsert(env, row.id, vec, category);   // mirror into the index (fail-soft)
   }
   return { id: row.id, status: "saved" };
 }
 
 export async function forgetMemory(env, id) {
   const r = await env.DB.prepare("DELETE FROM memories WHERE id = ?").bind(Number(id)).run();
+  // Keep the index in step — reconcile()'s merge/forget flows both route through
+  // here and saveMemory, so the two stores can't drift apart in normal operation.
+  if (r.meta.changes > 0) await vecDelete(env, [Number(id)]);
   return r.meta.changes > 0;
 }
 

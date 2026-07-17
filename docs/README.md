@@ -24,7 +24,7 @@ LLMs, and remembers the owner in a vector-recalled memory.
 | 1 | [01-architecture.md](./01-architecture.md) | **HLD.** The two-runtime topology, the shared database, every request and cron flow, the security/privacy boundaries, deployment. |
 | 2 | [02-data-model.md](./02-data-model.md) | All 25 D1 tables, the ER diagram, which runtime owns what, and the schema-drift history. |
 | 3 | [03-agent.md](./03-agent.md) | The conversational agent: the JSON tool-loop, prompt assembly, the tool catalog, the LLM call layer and the gpt-oss salvage trap. |
-| 4 | [04-memory.md](./04-memory.md) | The memory subsystem: embeddings, semantic recall, the post-reply extraction sweep, reconcile, backfill. |
+| 4 | [04-memory.md](./04-memory.md) | The memory subsystem: embeddings, Vectorize-backed semantic recall (D1 scan fallback), the post-reply extraction sweep, reconcile, backfill. |
 | 5 | [05-the-system.md](./05-the-system.md) | **The motive engine.** Goals → daily quests → tap-to-resolve → XP/level/streak → nightly reckoning; the strict-mentor voice. Replaces the old opportunity engine. |
 | 6 | [06-research-agent.md](./06-research-agent.md) | The deep-research agent that runs on a real machine in GitHub Actions: dispatch, gather/write phases, IP borrowing. |
 | 7 | [07-senses-life-initiative.md](./07-senses-life-initiative.md) | Senses (phone, Gmail, calendar), money/body/people, and the persona/perception that shape the mentor's voice. |

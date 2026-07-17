@@ -22,6 +22,14 @@ binding = "DB"
 database_name = "grabber"
 database_id = "f3e409f6-bac3-4606-8f3b-0737b57a5660"
 
+# Vectorize: memory recall/dedup across the WHOLE memory set (the old JS scan capped
+# at the newest 400 rows). D1 stays the source of truth; this index holds only vectors
+# and is rebuildable via /api/vector-backfill. Create it once with:
+#   npx wrangler vectorize create grabber-memories --dimensions=384 --metric=cosine
+[[vectorize]]
+binding = "VECTORIZE"
+index_name = "grabber-memories"
+
 # Hourly: reminders fire on the hour; deadline nags escalate at most once per level.
 [triggers]
 crons = ["0 * * * *"]

@@ -33,24 +33,27 @@ Cloudflare **Vectorize** is on the same free tier and removes the ceiling.
 
 ## Plan
 
-### Phase 1 — Vectorize-backed recall & dedup (removes the ceiling)
-- [ ] Create a Vectorize index (384-dim, cosine) — matches `bge-small-en-v1.5`.
-      Add the binding to `worker/wrangler.toml`.
-- [ ] On `saveMemory`: after the D1 insert, upsert `{id, values, metadata:{category}}`
+### Phase 1 — Vectorize-backed recall & dedup (removes the ceiling) ✅
+- [x] Create a Vectorize index (384-dim, cosine) — matches `bge-small-en-v1.5`.
+      Add the binding to `worker/wrangler.toml`. *(index `grabber-memories` created)*
+- [x] On `saveMemory`: after the D1 insert, upsert `{id, values, metadata:{category}}`
       into Vectorize. Keep writing the packed vector to D1 too (rebuild source).
-- [ ] Rewrite dedup check in `saveMemory` to `query()` Vectorize top-K instead of the
+- [x] Rewrite dedup check in `saveMemory` to `query()` Vectorize top-K instead of the
       400-row scan; keep the ≥ 0.90 near-duplicate rule and the `exclude` set.
-- [ ] Rewrite `recallMemories` to `query()` Vectorize (topK = `RECALL_K`), then hydrate
+      *(also: a near-dup hit whose D1 row is gone = stale index entry, deleted on the spot)*
+- [x] Rewrite `recallMemories` to `query()` Vectorize (topK = `RECALL_K`), then hydrate
       facts from D1 by id. Keep un-embedded rows riding along (fetch a few `WHERE
       embedding IS NULL`).
-- [ ] `forgetMemory` / reconcile deletes must also delete from Vectorize by id.
-- [ ] **Fallback:** wrap every Vectorize call; on error, fall back to the existing D1
+- [x] `forgetMemory` / reconcile deletes must also delete from Vectorize by id.
+- [x] **Fallback:** wrap every Vectorize call; on error — or an *empty* index, which is
+      what deployed-but-not-backfilled looks like — fall back to the existing D1
       cosine scan so recall/dedup degrade instead of failing.
 
-### Phase 2 — Backfill & consistency
-- [ ] One-shot `/api/*` admin endpoint (gated by `DASH_TOKEN`) to backfill all existing
-      D1 vectors into Vectorize.
-- [ ] Extend `reconcile()` so a merge/forget keeps D1 and Vectorize in sync.
+### Phase 2 — Backfill & consistency ✅
+- [x] One-shot `/api/vector-backfill` admin endpoint (gated by `DASH_TOKEN`) to backfill
+      all existing D1 vectors into Vectorize (batches of 100, idempotent).
+- [x] Extend `reconcile()` so a merge/forget keeps D1 and Vectorize in sync — free:
+      reconcile routes through `saveMemory`/`forgetMemory`, which both mirror the index.
 
 ### Phase 3 — Retrieval quality (optional, after the ceiling is gone)
 - [ ] Hybrid ranking: blend cosine with recency (`updated_at`) and an importance score,
@@ -60,11 +63,18 @@ Cloudflare **Vectorize** is on the same free tier and removes the ceiling.
 
 ## Verification (no test suite in this repo)
 
-- [ ] `wrangler dev` + `/api/tool?name=save_memory&args=...` — save a near-duplicate,
-      confirm it dedupes via Vectorize.
-- [ ] `/api/tool?name=...` recall path returns relevant facts with > 400 rows present.
-- [ ] Kill/misconfigure the Vectorize binding → confirm graceful fallback to D1 scan.
-- [ ] `wrangler tail` shows no unhandled errors on save/recall/forget.
+- [x] Offline harness (mocked AI/DB/Vectorize bindings): save mirrors into the index;
+      identical fact dedupes via the index; recall hydrates from D1 in score order;
+      **empty index falls back to the D1 scan** (pre-backfill window); forget deletes
+      from both stores; a throwing index degrades soft on save *and* recall. 6/6 pass.
+- [x] **Deployed** (version c5a474a3, 2026-07-18) with the `VECTORIZE` binding live.
+      Backfill done via `wrangler vectorize insert` (19/19 D1 vectors; index reports
+      vectorCount 19). Round-trip verified: querying by a stored id returns itself at
+      score 0.99999, neighbours at ~0.72 — below the 0.90 dedup threshold, as expected.
+      (`/api/vector-backfill` remains the tokened rebuild path for the future.)
+- [ ] Owner spot-check: save a near-duplicate via
+      `/api/tool?t=…&name=save_memory&args=...` → expect `status:"duplicate"`, and
+      watch `wrangler tail` for `vectorize … failed` lines in normal chat.
 
 ## Files in scope
 
@@ -98,17 +108,22 @@ loop — it's the right call for one owner + one model + a JSON-text protocol.
 does the wrong thing silently. A lightweight schema catches it at the boundary and
 lets us hand the model a precise error to self-correct.
 
-- [ ] Add an optional `args` schema to each tool entry (plain object: field → `{type,
+- [x] Add an optional `args` schema to each tool entry (plain object: field → `{type,
       required, enum?}`), alongside the existing `desc`. No new dependency.
-- [ ] In `runAgent`, before calling `tool.run`, validate `action.args` against the
-      schema. On failure, append the validation error to the `transcript` (same channel
-      the protocol-nudge uses) so the model retries with corrected args — do NOT crash
-      the step.
-- [ ] Auto-render arg types into the prompt's tool list (`toolList()`, `agent.js:326`)
-      from the schema, so `desc` and the real contract can't drift apart.
-- [ ] Roll out incrementally: schema is optional, so untyped tools keep working — add
-      schemas to the highest-traffic tools first (`save_memory`, `set_reminder`,
-      `add_quest`, the LIFE_TOOLS money writers where a bad number is expensive).
+      *(validator coerces leniently: `"5"` → `5`, `"true"` → `true` — the model does this
+      constantly and every tool already tolerated it via `Number()`)*
+- [x] In `runAgent`, before calling `tool.run`, validate `action.args` against the
+      schema. On failure, the error becomes an `{error: "invalid args: …"}` tool result
+      in the `transcript` so the model retries with corrected args — never a crashed
+      step. Same check added to `/api/tool` so manual testing exercises it.
+- [x] Auto-render arg types into the prompt's tool list (`toolList()`) as a compact
+      `[checked args: …]` signature, so `desc` and the real contract can't drift apart.
+- [x] Roll out incrementally: schemas added to `web_search`, `web_fetch`, `save_memory`,
+      `forget_memory`, `set_reminder`, `cancel_reminder`, `spawn_research`, `watch_app`,
+      the goal/quest writers, the money/body/people writers, and the apply tools.
+      Untyped tools keep working. `list_goals.status` and `log_transaction.category`
+      deliberately unchecked (both have smarter fallbacks than an enum error).
+      Validator: 10/10 offline cases pass (required/coercion/enum/empty-string).
 
 **Guardrail.** Validation failure must degrade to a retry with feedback, never a
 thrown step — mirror the existing "broke protocol → nudge, keep going" behavior.
@@ -132,10 +147,13 @@ or serving more than one owner. Until then, hand-rolled wins.
 
 ## Verification
 
-- [ ] `wrangler dev`: call a tool with a missing/wrong-typed arg via
-      `/api/tool?name=set_reminder&args=...` → confirm it returns a validation error and,
-      in a real chat, the model self-corrects on the next step (`wrangler tail`).
-- [ ] Confirm untyped tools still run unchanged (schema is opt-in).
+- [x] `validateArgs` exercised offline: missing-required, numeric-string coercion,
+      bad-number rejection, enum rejection, optional-enum absent, boolean coercion,
+      empty-string-as-missing — 10/10 pass. Untyped tools bypass validation (opt-in).
+- [ ] Owner spot-check (deployed, needs `DASH_TOKEN`):
+      `/api/tool?t=…&name=set_reminder&args={"text":"x"}` → expect
+      `invalid args: missing required arg "due_at"`; then watch a real chat self-correct
+      in `wrangler tail`.
 
 ## Files in scope
 

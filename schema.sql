@@ -283,15 +283,33 @@ CREATE TABLE IF NOT EXISTS goals (
   target     TEXT,                          -- measurable definition of success
   deadline   TEXT,                          -- ISO date if any
   status     TEXT NOT NULL DEFAULT 'active',-- active | achieved | dropped
+  progress   REAL NOT NULL DEFAULT 0,       -- cached 0..1, recomputed on quest/milestone change
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL
 );
 
--- Concrete, done-tonight tasks the System issues toward a goal. A quest is a
+-- The persistent roadmap: a goal decomposes into ordered milestones (the planner writes
+-- these). Daily quests aim at the current 'active' milestone, so progress is real.
+CREATE TABLE IF NOT EXISTS milestones (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  goal_id     INTEGER NOT NULL REFERENCES goals(id),
+  seq         INTEGER NOT NULL,               -- order 1..N
+  title       TEXT NOT NULL,
+  done_when   TEXT,                           -- definition of done
+  target_date TEXT,                           -- ISO date, spaced across the runway
+  status      TEXT NOT NULL DEFAULT 'pending',-- pending | active | done | skipped
+  created_at  TEXT NOT NULL,
+  done_at     TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_milestones_goal ON milestones(goal_id);
+
+-- Concrete, done-tonight tasks the System issues toward a goal/milestone. A quest is a
 -- prediction+commitment; its resolution is the label (cf. the old alerts/outcomes).
 CREATE TABLE IF NOT EXISTS quests (
   id            INTEGER PRIMARY KEY AUTOINCREMENT,
   goal_id       INTEGER REFERENCES goals(id),   -- nullable: standalone quests allowed
+  milestone_id  INTEGER REFERENCES milestones(id), -- nullable: the milestone it advances
   text          TEXT NOT NULL,
   kind          TEXT NOT NULL DEFAULT 'daily',  -- daily | milestone | urgent
   status        TEXT NOT NULL DEFAULT 'issued', -- issued | doing | done | failed | skipped
@@ -306,15 +324,17 @@ CREATE INDEX IF NOT EXISTS idx_quests_issued ON quests(issued_at);
 CREATE INDEX IF NOT EXISTS idx_quests_goal ON quests(goal_id);
 
 -- The agent's work log: what The System did to move the owner's goals — quests issued
--- and resolved, reckonings, research spawned, applications drafted. This is what the
--- dashboard's "what I'm doing to hit your goals" feed reads.
+-- and resolved, reckonings, research spawned, applications drafted, and its own
+-- autonomous moves. This is what the dashboard's "what I'm doing" feed reads.
 CREATE TABLE IF NOT EXISTS activity (
-  id      INTEGER PRIMARY KEY AUTOINCREMENT,
-  at      TEXT NOT NULL,
-  kind    TEXT NOT NULL,    -- goal | quest_issued | quest_done | quest_failed | reckoning | research | application | note
-  summary TEXT NOT NULL,    -- one line, owner-facing
-  detail  TEXT,             -- optional longer body
-  goal_id INTEGER,
+  id       INTEGER PRIMARY KEY AUTOINCREMENT,
+  at       TEXT NOT NULL,
+  kind     TEXT NOT NULL,   -- goal | plan | quest_issued | quest_done | quest_failed | reckoning | milestone_done | research | application | autonomous | note
+  actor    TEXT NOT NULL DEFAULT 'system',  -- owner | system
+  summary  TEXT NOT NULL,   -- one line, owner-facing
+  detail   TEXT,            -- optional longer body
+  reasoning TEXT,           -- for autonomous moves: why it did this
+  goal_id  INTEGER,
   quest_id INTEGER
 );
 

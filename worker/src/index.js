@@ -1,10 +1,10 @@
 // Grabber edge worker: conversational agent, Telegram webhook (taps -> labels),
 // deadline nags, dashboard API.
 
-import { embedMemory, rememberExchange, runAgent, TOOLS } from "./agent.js";
-import { backfill, extract, forgetMemory, reconcile, saveMemory } from "./memory.js";
+import { embedMemory, rememberExchange, runAgent, TOOLS, validateArgs } from "./agent.js";
+import { backfill, extract, forgetMemory, reconcile, saveMemory, unpackVec } from "./memory.js";
 import { DEFAULT_PERSONA, getPersona, resetPersona, setPersona } from "./persona.js";
-import { createGoal, debrief, getSystemState, issueDaily, listGoals, listQuests, resolveQuest, runSystem, updateGoal } from "./system.js";
+import { createGoal, debrief, getSettings, getSystemState, issueDaily, listGoals, listMilestones, listQuests, planGoal, resolveQuest, runSystem, setAutonomyMode, updateGoal } from "./system.js";
 import { classifyInbox, googleConnected, ingestNotification, pollCalendar, remindEvents } from "./senses.js";
 import { processBankNotifications } from "./life.js";
 import { generatePerception, getPerception } from "./perception.js";
@@ -592,6 +592,32 @@ async function handleApi(url, env, request) {
     for (const m of results) if (await embedMemory(env, m.id, m.fact)) ok++;
     return Response.json({ pending: results.length, embedded: ok });
   }
+  if (url.pathname === "/api/vector-backfill") {
+    // One-shot: push every D1-held vector into Vectorize. D1 is the source of truth,
+    // so this is also the rebuild path if the index is ever wiped or recreated.
+    // Upserts are idempotent — safe to re-run.
+    if (!env.VECTORIZE) {
+      return Response.json({ error: "no VECTORIZE binding — create the index (see wrangler.toml) and redeploy" }, { status: 400 });
+    }
+    const { results } = await env.DB.prepare(
+      "SELECT id, category, embedding FROM memories WHERE embedding IS NOT NULL").all();
+    let pushed = 0, failed = 0;
+    for (let i = 0; i < results.length; i += 100) {
+      const batch = results.slice(i, i + 100).map(r => ({
+        id: String(r.id),
+        values: Array.from(unpackVec(r.embedding)),
+        metadata: { category: r.category || "fact" },
+      }));
+      try {
+        await env.VECTORIZE.upsert(batch);
+        pushed += batch.length;
+      } catch (e) {
+        failed += batch.length;
+        console.log("vector-backfill batch failed:", String(e).slice(0, 150));
+      }
+    }
+    return Response.json({ vectors: results.length, pushed, failed });
+  }
   if (url.pathname === "/api/memory-backfill") {
     // Sweep chat_history that predates the post-reply extractor. Additive and
     // near-duplicate-checked, so re-running is safe, but it is not a no-op: the
@@ -688,6 +714,9 @@ async function handleApi(url, env, request) {
     if (!tool) return Response.json({ error: "unknown tool" }, { status: 404 });
     let args = {};
     try { args = JSON.parse(url.searchParams.get("args") || "{}"); } catch { /* empty */ }
+    // Same boundary check the agent loop applies, so manual testing exercises it too.
+    const bad = tool.args ? validateArgs(tool.args, args) : null;
+    if (bad) return Response.json({ error: `invalid args: ${bad}` });
     try {
       return Response.json(await tool.run(env, args));
     } catch (e) {
@@ -705,7 +734,7 @@ async function handleApi(url, env, request) {
     let system = "skipped";
     if (q("issue")) system = { issue: await issueDaily(env, tg, { force: true }) };
     else if (q("debrief")) system = { debrief: await debrief(env, tg, { force: true }) };
-    else if (q("system")) system = await runSystem(env, tg, { force: q("force") });
+    else if (q("system")) system = await runSystem(env, tg, { force: q("force"), spawn: (en, args) => TOOLS.spawn_research.run(en, args) });
     return Response.json({ ok: true, money, senses, system });
   }
   if (url.pathname === "/api/rank") {
@@ -713,8 +742,13 @@ async function handleApi(url, env, request) {
   }
   if (url.pathname === "/api/goal" && request.method === "POST") {
     // Set a goal from the dashboard (same createGoal the agent's set_goal tool uses),
-    // or change one's status. {title,why,target,deadline} creates; {id,status} updates.
+    // change its status, or re-map its roadmap. {title,…} creates; {id,status} updates;
+    // {id,replan:true} maps a fresh route.
     const body = await request.json().catch(() => ({}));
+    if (body.id && body.replan) {
+      await env.DB.prepare("DELETE FROM milestones WHERE goal_id = ?").bind(Number(body.id)).run();
+      return Response.json(await planGoal(env, body.id));
+    }
     if (body.id) {
       const status = ["active", "achieved", "dropped"].includes(body.status) ? body.status : null;
       if (!status) return Response.json({ error: "status must be active|achieved|dropped" }, { status: 400 });
@@ -723,27 +757,30 @@ async function handleApi(url, env, request) {
     const r = await createGoal(env, body);
     return Response.json(r, { status: r.error ? 400 : 200 });
   }
+  if (url.pathname === "/api/settings" && request.method === "POST") {
+    const body = await request.json().catch(() => ({}));
+    if (body.autonomy_mode) return Response.json(await setAutonomyMode(env, body.autonomy_mode));
+    return Response.json({ error: "nothing to set" }, { status: 400 });
+  }
   if (url.pathname === "/api/system") {
-    // Everything the dashboard's System tab shows: rank, goals, today's quests, and the
-    // agent's work log ("what I'm doing to hit your goals").
-    const [rank, goals, questsToday, activity] = await Promise.all([
+    // Everything the dashboard's System tab shows: rank, goals (with roadmap + pace),
+    // today's quests, the work log, and the autonomy setting.
+    const [rank, goalsR, questsToday, activity, settings] = await Promise.all([
       getSystemState(env),
+      listGoals(env, { status: "all" }),   // already carries progress + pace
       env.DB.prepare(`
-        SELECT g.id, g.title, g.why, g.target, g.deadline, g.status, g.created_at,
-               (SELECT COUNT(*) FROM quests q WHERE q.goal_id = g.id AND q.status = 'done') AS quests_done,
-               (SELECT COUNT(*) FROM quests q WHERE q.goal_id = g.id AND q.status = 'failed') AS quests_failed
-        FROM goals g ORDER BY CASE g.status WHEN 'active' THEN 0 ELSE 1 END, g.id`).all(),
-      env.DB.prepare(`
-        SELECT id, goal_id, text, kind, status, xp, due_at, issued_at, resolved_at
+        SELECT id, goal_id, milestone_id, text, kind, status, xp, due_at, issued_at, resolved_at
         FROM quests WHERE date(issued_at, '+330 minutes') = date('now', '+330 minutes')
         ORDER BY CASE status WHEN 'issued' THEN 0 WHEN 'doing' THEN 1 ELSE 2 END, id`).all(),
       env.DB.prepare(`
-        SELECT id, at, kind, summary, detail, goal_id, quest_id
+        SELECT id, at, kind, actor, summary, detail, reasoning, goal_id, quest_id
         FROM activity ORDER BY id DESC LIMIT 60`).all(),
+      getSettings(env),
     ]);
+    // Attach each goal's roadmap.
+    const goals = await Promise.all(goalsR.goals.map(async g => ({ ...g, milestones: await listMilestones(env, g.id) })));
     return Response.json({
-      rank,
-      goals: goals.results,
+      rank, goals, settings,
       quests_today: questsToday.results,
       activity: activity.results,
     });
@@ -798,7 +835,7 @@ export default {
       ["money", processBankNotifications],   // bank alerts Phase 4 filed -> transactions
       // The System last: it issues the day's quests and holds the nightly reckoning,
       // self-gating on the IST hour (issue 07:00, debrief 21:00).
-      ["system", e => runSystem(e, tg)],
+      ["system", e => runSystem(e, tg, { spawn: (en, args) => TOOLS.spawn_research.run(en, args) })],
     ]) {
       try {
         const out = await fn(env);

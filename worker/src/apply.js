@@ -76,6 +76,7 @@ export const APPLY_TOOLS = {
   draft_application: {
     group: "Applications",
     desc: 'build a ready-to-send application pack for an opportunity. args: {"opportunity": "a full http(s) url, OR the pasted job description, OR a plain description of the role"}. Fetches the page if given a url.',
+    args: { opportunity: { type: "string", required: true } },
     run: async (env, args) => {
       let jd = String(args.opportunity || "").trim();
       if (!jd) return { error: "give me a url, a pasted job description, or a description of the role" };
@@ -135,6 +136,7 @@ export const APPLY_TOOLS = {
   set_application_status: {
     group: "Applications",
     desc: `move an application through the pipeline. args: {"id": <number>, "status": one of ${STATUSES.join("|")}}`,
+    args: { id: { type: "number", required: true }, status: { type: "string", required: true, enum: STATUSES } },
     run: async (env, args) => {
       if (!args.id) return { error: "need the application id" };
       const status = STATUSES.includes(args.status) ? args.status : null;

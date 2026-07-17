@@ -41,6 +41,7 @@ npm i -g wrangler && wrangler login
 wrangler d1 create grabber                  # note database_id
 # put database_id into worker/wrangler.toml
 wrangler d1 execute grabber --file=schema.sql --remote
+wrangler vectorize create grabber-memories --dimensions=384 --metric=cosine   # memory search index
 cd worker
 wrangler secret put TELEGRAM_BOT_TOKEN
 wrangler secret put TELEGRAM_CHAT_ID

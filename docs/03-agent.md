@@ -13,7 +13,9 @@ flowchart TB
   call --> parse["extractJson(out) — last balanced {…}"]
   parse -->|no JSON| nudge["append 'broke protocol' note, keep clean prose as fallback"] --> loop
   parse -->|"{reply}"| done["return reply (≤3800 chars)"]
-  parse -->|"{tool,args}"| run["TOOLS[tool].run(env, args)"]
+  parse -->|"{tool,args}"| val{"validateArgs(tool.args, args) ok?"}
+  val -->|no| verr["result = {error: invalid args …}"] --> append
+  val -->|yes| run["TOOLS[tool].run(env, args)"]
   run --> append["transcript += call → result (≤2500 chars)"]
   append --> loop
   loop -->|"budget exhausted"| final["one protocol-free call:<br/>compose owner-facing answer from transcript"]
@@ -158,8 +160,17 @@ flowchart LR
   end
 ```
 
-Each tool is `{ desc, run(env, args) }`; `desc` is a one-liner including the exact args
-shape, since the model reads it to decide the call. Highlights:
+Each tool is `{ desc, run(env, args) }` plus an optional **`args` schema**
+(`{field: {type, required, enum}}`). When present, `validateArgs` (`agent.js`) checks —
+and leniently coerces (`"5"` → `5`, `"true"` → `true`) — the model's args *before*
+`run` is called; a failure becomes a `{error: "invalid args: …"}` tool result fed back
+through the transcript so the model corrects itself on its next step, never a thrown
+step (mirroring the protocol-nudge behaviour). The same check runs in the `/api/tool`
+debug endpoint. `toolList()` renders each schema as a compact `[checked args: …]`
+signature after the prose `desc`, so the prompt and the enforced contract can't drift
+apart. Schemas are **opt-in per tool** — currently on the high-traffic and
+expensive-if-wrong tools (memory, reminders, goals/quests, money/people writers,
+applications); untyped tools behave exactly as before. Highlights:
 
 - **`web_search`** (`agent.js:55`) has a 3-tier fallback: Google CSE (if keyed) →
   DuckDuckGo HTML/lite endpoints (often block datacenter IPs) → Wikipedia opensearch as

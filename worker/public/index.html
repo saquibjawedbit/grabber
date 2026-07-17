@@ -178,6 +178,36 @@
   }
   .goal-actions button:hover { color: var(--ink); border-color: var(--baseline); }
   .goal-actions .ok:hover { color: var(--good); border-color: var(--good); }
+  /* progress + pace + roadmap */
+  .goal-prog { display: flex; align-items: center; gap: 0.6rem; margin: 0.4rem 0 0.2rem; }
+  .prog-track { flex: 1; height: 7px; border-radius: 999px; background: var(--grid); overflow: hidden; }
+  .prog-fill { height: 100%; border-radius: 999px; background: var(--seq); transition: width 0.5s ease; }
+  .pace { font-size: 0.68rem; font-family: ui-monospace, Menlo, monospace; padding: 0.05rem 0.45rem;
+    border-radius: 999px; border: 1px solid currentColor; white-space: nowrap; text-transform: uppercase; letter-spacing: 0.04em; }
+  .pace-ahead { color: var(--good); } .pace-on-track { color: var(--seq); }
+  .pace-behind { color: var(--warn); } .pace-at-risk { color: var(--critical); }
+  .pace-no-deadline { color: var(--muted); }
+  .goal-when { font-size: 0.74rem; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .roadmap { margin: 0.5rem 0 0.2rem; border-left: 2px solid var(--grid); padding-left: 0.7rem; }
+  .ms { display: flex; gap: 0.5rem; padding: 0.25rem 0; font-size: 0.85rem; align-items: baseline; }
+  .ms .dot { flex: none; width: 0.9rem; text-align: center; }
+  .ms.done .mt { color: var(--muted); text-decoration: line-through; }
+  .ms.active .mt { font-weight: 600; }
+  .ms.active .dot { color: var(--seq); }
+  .ms .mt { flex: 1; }
+  .ms .md { flex: none; color: var(--muted); font-size: 0.72rem; font-variant-numeric: tabular-nums; }
+  .goal-roadmap-toggle { background: none; border: 0; color: var(--seq); cursor: pointer; font: inherit;
+    font-size: 0.76rem; padding: 0.1rem 0; }
+  .act .auto-chip { font-size: 0.6rem; font-family: ui-monospace, Menlo, monospace; color: var(--accent);
+    border: 1px solid currentColor; border-radius: 999px; padding: 0 0.35rem; margin-left: 0.35rem;
+    letter-spacing: 0.08em; vertical-align: middle; }
+  .act .why { display: block; color: var(--muted); font-size: 0.76rem; font-style: italic; margin-top: 0.15rem; }
+  /* autonomy control */
+  .seg { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+  .seg button { background: none; border: 0; padding: 0.35rem 0.8rem; font: inherit; font-size: 0.82rem;
+    color: var(--ink-2); cursor: pointer; border-right: 1px solid var(--border); }
+  .seg button:last-child { border-right: 0; }
+  .seg button.on { background: var(--seq); color: #fff; font-weight: 600; }
   /* Forget stays hidden until you mean it — deleting a memory is not a browse action. */
   .mem .x {
     flex: none; background: none; border: 0; color: var(--muted); cursor: pointer;
@@ -463,6 +493,16 @@
 
   <!-- SETTINGS -->
   <section data-panel="settings" hidden>
+    <div class="card">
+      <h2>Autonomy <span class="sub" id="autonomy-sub"></span></h2>
+      <p class="teach-hint">How much the System does on its own — one bounded “ponder” each day at 1&nbsp;pm&nbsp;IST that can research a blocker, surface findings, or nudge you when you're slipping. Every autonomous move is capped (a few a day), respects quiet hours, and is logged with its reasoning in the activity feed. <b>Off</b>: only the morning quests and nightly reckoning. <b>Suggest</b> (default): it researches and messages findings, and proposes plan changes — but never changes your tasks silently. <b>Act</b>: it may also add a task toward your current milestone.</p>
+      <div class="seg" id="autonomy-seg">
+        <button data-mode="off">Off</button>
+        <button data-mode="suggest">Suggest</button>
+        <button data-mode="act">Act</button>
+      </div>
+      <span class="teach-status" id="autonomy-status" style="margin-left:.6rem"></span>
+    </div>
     <div class="card">
       <div class="card-head">
         <h2>Persona <span class="sub" id="persona-state"></span></h2>
@@ -990,44 +1030,71 @@ function renderQuests(quests) {
     </div>`).join("");
 }
 
+const PACE_LABEL = { "ahead": "ahead", "on-track": "on track", "behind": "behind", "at-risk": "at risk", "no-deadline": "no deadline" };
+const MS_DOT = { done: "✅", active: "◉", skipped: "⤫", pending: "○" };
+
 function renderGoals(goals) {
   const active = (goals || []).filter(g => g.status === "active");
   $("goals-sub").textContent = active.length ? `${active.length} active` : "";
   if (!goals?.length) {
-    $("goals").innerHTML = `<div class="empty">No goals yet. Tell the bot what you're trying to become — the role, the number, the deadline — and everything the System does will aim at it.</div>`;
+    $("goals").innerHTML = `<div class="empty">No goals yet. Set one above (or tell the bot) — the role, the number, the deadline — and the System maps a route and starts driving you at it.</div>`;
     return;
   }
   $("goals").innerHTML = goals.map(g => {
-    const days = g.deadline ? Math.ceil((new Date(g.deadline) - Date.now()) / 86400000) : null;
-    const when = days == null ? "" : days < 0 ? ` · <span class="overdue">deadline passed</span>`
-      : days === 0 ? ` · <span class="overdue">due today</span>` : ` · ${days}d left`;
+    const pct = Math.round((g.progress || 0) * 100);
     const actions = g.status === "active"
-      ? `<span class="goal-actions"><button class="ok" onclick="goalStatus(${g.id},'achieved')" title="Mark achieved">✓ done</button><button onclick="goalStatus(${g.id},'dropped')" title="Drop this goal">drop</button></span>`
+      ? `<span class="goal-actions"><button class="ok" onclick="goalStatus(${g.id},'achieved')" title="Mark achieved">✓ done</button><button onclick="replanGoal(${g.id})" title="Re-map the roadmap">re-plan</button><button onclick="goalStatus(${g.id},'dropped')" title="Drop this goal">drop</button></span>`
       : "";
+    const prog = g.status === "active" ? `<div class="goal-prog">
+      <div class="prog-track"><div class="prog-fill" style="width:${Math.max(2, pct)}%"></div></div>
+      <span class="pace pace-${esc(g.pace || "no-deadline")}">${PACE_LABEL[g.pace] || "—"}</span>
+      <span class="goal-when">${pct}%${g.projected ? ` · ~${esc(g.projected.slice(5))}` : ""}${g.days_left != null ? ` · ${g.days_left}d left` : ""}</span></div>` : "";
+    const ms = g.milestones || [];
+    const roadmap = ms.length ? `<details><summary class="goal-roadmap-toggle">${ms.filter(m => m.status === "done").length}/${ms.length} milestones →</summary>
+      <div class="roadmap">${ms.map(m => `<div class="ms ${esc(m.status)}"><span class="dot">${MS_DOT[m.status] || "○"}</span><span class="mt">${esc(m.title)}</span>${m.target_date ? `<span class="md">${esc(m.target_date.slice(5))}</span>` : ""}</div>`).join("")}</div></details>` : "";
     return `<div class="goal ${esc(g.status)}">
       <div class="gt">${esc(g.title)}${g.status !== "active" ? ` <span class="meta">(${esc(g.status)})</span>` : ""}${actions}</div>
       ${g.target ? `<div class="gm">${esc(g.target)}</div>` : ""}
-      <div class="gp"><span>✅ ${g.quests_done} cleared</span>${g.quests_failed ? `<span>❌ ${g.quests_failed} failed</span>` : ""}${when}</div>
+      ${prog}${roadmap}
+      <div class="gp"><span>✅ ${g.quests_done} cleared</span>${g.quests_failed ? `<span>❌ ${g.quests_failed} failed</span>` : ""}</div>
     </div>`;
   }).join("");
 }
+window.replanGoal = async id => {
+  if (!confirm("Re-map this goal's roadmap? The current milestones will be replaced.")) return;
+  try { await api("/api/goal", { method: "POST", body: { id, replan: true } }); boot(); }
+  catch { /* next load reflects the truth */ }
+};
 
 const ACT_ICON = {
-  goal: "⚔️", quest_issued: "📜", quest_done: "✅", quest_failed: "❌",
-  reckoning: "🌑", research: "🔎", application: "📄", note: "•",
+  goal: "⚔️", plan: "🗺️", quest_issued: "📜", quest_done: "✅", quest_failed: "❌",
+  reckoning: "🌑", milestone_done: "🏁", research: "🔎", application: "📄", autonomous: "⚡", note: "•",
 };
 
 function renderActivity(items) {
   if (!items?.length) {
-    $("activity").innerHTML = `<div class="empty">Nothing yet. As the System issues quests, holds reckonings, drafts applications and digs into research for you, every move it makes shows up here.</div>`;
+    $("activity").innerHTML = `<div class="empty">Nothing yet. As the System maps routes, issues quests, holds reckonings, and acts on its own for you, every move it makes shows up here.</div>`;
     return;
   }
   $("activity").innerHTML = items.map(a => `
     <div class="act">
       <span class="ic">${ACT_ICON[a.kind] || "•"}</span>
-      <span class="ab">${esc(a.summary)}${a.detail ? `<span class="ad">${esc(a.detail)}</span>` : ""}</span>
+      <span class="ab">${esc(a.summary)}${a.kind === "autonomous" ? `<span class="auto-chip">AUTO</span>` : ""}${a.detail ? `<span class="ad">${esc(a.detail)}</span>` : ""}${a.reasoning ? `<span class="why">“${esc(a.reasoning)}”</span>` : ""}</span>
       <span class="at">${esc(day(a.at))} ${esc(clock(a.at))}</span>
     </div>`).join("");
+}
+
+function renderSettings(s) {
+  if (!s) return;
+  $("autonomy-sub").textContent = `${s.autonomy_left_today}/${s.autonomy_budget} actions left today`;
+  document.querySelectorAll("#autonomy-seg button").forEach(b => {
+    b.classList.toggle("on", b.dataset.mode === s.autonomy_mode);
+    b.onclick = async () => {
+      say("autonomy-status", "Saving…");
+      try { await api("/api/settings", { method: "POST", body: { autonomy_mode: b.dataset.mode } }); say("autonomy-status", ""); boot(); }
+      catch { say("autonomy-status", "That didn't save.", true); }
+    };
+  });
 }
 
 // Set / manage goals right from the dashboard (same createGoal the bot's set_goal uses).
@@ -1424,6 +1491,7 @@ async function boot() {
     renderMerchants(brain.merchants);
     renderResearch(brain.research);
     // Settings tab
+    renderSettings(sys.settings);
     renderPersona(brain.persona);
     renderDocs(brain.documents);
     wireTeach();

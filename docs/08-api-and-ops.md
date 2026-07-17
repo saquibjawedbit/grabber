@@ -39,14 +39,16 @@ flowchart TB
 | `/api/profile-read` | GET | Read one profile doc by `?key`. |
 | `/api/memory-backfill` | GET | Replay `chat_history` into memory. `?limit`, `?dry=1`. |
 | `/api/memory-reconcile` | GET | Whole-set contradiction/duplicate audit. `?dry=1`. |
-| `/api/embed-backfill` | GET | Give pre-v3 memories their vectors (batch of 50). |
+| `/api/embed-backfill` | GET | Give pre-v3 memories their vectors (batch of 50); also mirrors them into Vectorize. |
+| `/api/vector-backfill` | GET | Push every D1-held vector into the Vectorize index (batches of 100). Run once after creating the index; idempotent rebuild path (doc 04 §4.1). |
 | `/api/perception` | GET | Cached read, or `?refresh=1` to regenerate. |
 | `/api/mail-status` | GET | What the IMAP job delivered + awaiting classification. |
-| `/api/tool` | GET | **Run one agent tool directly** — `?name=&args=<json>`. This is also what the CI research agent calls to borrow the Worker's IP for `web_search` (doc 06). |
+| `/api/tool` | GET | **Run one agent tool directly** — `?name=&args=<json>`, applying the same `validateArgs` boundary check as the agent loop (doc 03 §3.5). This is also what the CI research agent calls to borrow the Worker's IP for `web_search` (doc 06). |
 | `/api/cron` | GET | Manually trigger cron work — flags `?senses=1&system=1&issue=1&debrief=1&force=1` (`issue`/`debrief` force one half of The System). |
 | `/api/rank` | GET | The System's level/XP/streak + active goals. |
-| `/api/system` | GET | The dashboard **System tab** payload: `rank` (level/XP/streak), `goals` (with per-goal quest counts), `quests_today`, and `activity` (the work log, newest 60). |
-| `/api/goal` | POST | Set a goal (`{title,why,target,deadline}` → `createGoal`) or change its status (`{id,status}` → active/achieved/dropped). This is how the dashboard's "Set a goal" form and per-goal buttons work. |
+| `/api/system` | GET | The dashboard **System tab** payload: `rank` (level/XP/streak), `goals` (each with `progress`, `pace`, `projected`, and its `milestones` roadmap), `quests_today`, `activity` (the work log, newest 60, with `actor`/`reasoning`), and `settings` (autonomy mode + budget). |
+| `/api/goal` | POST | Set a goal (`{title,…}` → `createGoal`, which also maps the roadmap), change status (`{id,status}`), or re-map the roadmap (`{id,replan:true}`). Powers the dashboard's "Set a goal" form and per-goal buttons. |
+| `/api/settings` | POST | `{autonomy_mode: off\|suggest\|act}` — the dashboard's autonomy control. |
 
 > **Security note:** `DASH_TOKEN` gates *both* the read dashboard and mutating endpoints
 > (`/api/teach`, `/api/memory`, `/api/persona`, `/api/cron`, `/api/tool`). It is a

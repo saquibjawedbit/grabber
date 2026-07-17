@@ -95,6 +95,7 @@ export const LIFE_TOOLS = {
   set_account: {
     group: "Money",
     desc: 'record or update an account balance. args: {"name": "HDFC savings", "kind": "bank|wallet|investment|card", "balance": 96400}',
+    args: { name: { type: "string", required: true }, balance: { type: "number", required: true }, kind: { type: "string", enum: ["bank", "wallet", "investment", "card"] } },
     run: async (env, args) => {
       const name = String(args.name || "").trim();
       const kind = ["bank", "wallet", "investment", "card"].includes(args.kind) ? args.kind : "bank";
@@ -112,6 +113,7 @@ export const LIFE_TOOLS = {
   set_holding: {
     group: "Money",
     desc: 'record an asset or a debt. args: {"name": "Zerodha portfolio", "kind": "asset|liability", "category": "investment|property|vehicle|loan|card_debt|other", "value": 92800}',
+    args: { name: { type: "string", required: true }, value: { type: "number", required: true }, kind: { type: "string", enum: ["asset", "liability"] } },
     run: async (env, args) => {
       const name = String(args.name || "").trim();
       const kind = args.kind === "liability" ? "liability" : "asset";
@@ -130,6 +132,8 @@ export const LIFE_TOOLS = {
   log_transaction: {
     group: "Money",
     desc: 'record money moving when no notification caught it. args: {"amount": 480, "direction": "debit|credit", "counterparty": "Swiggy", "category": "food", "note": "lunch"}',
+    // category deliberately unchecked: an unknown value falls through to categorise().
+    args: { amount: { type: "number", required: true }, direction: { type: "string", enum: ["debit", "credit"] }, counterparty: { type: "string" } },
     run: async (env, args) => {
       const amount = Number(args.amount);
       if (!isFinite(amount) || amount <= 0) return { error: "need a positive amount" };
@@ -184,6 +188,7 @@ export const LIFE_TOOLS = {
   log_health: {
     group: "Body",
     desc: 'record a body metric. args: {"metric": "weight|waist|sleep|run_km|workout", "value": 71.2, "unit": "kg", "note": "..."}',
+    args: { metric: { type: "string", required: true }, value: { type: "number" } },
     run: async (env, args) => {
       const metric = String(args.metric || "").toLowerCase().trim();
       if (!metric) return { error: "need a metric name" };
@@ -232,6 +237,7 @@ export const LIFE_TOOLS = {
   remember_person: {
     group: "People",
     desc: `record or update someone in the owner's life. Pass spoke_today when the owner just saw or heard from them. args: {"name": "Ankit", "relation": "${RELATIONS.join("|")}", "how_met": "...", "notes": "...", "next_step": "send resume", "status": "active|cold|closed", "spoke_today": true}`,
+    args: { name: { type: "string", required: true }, spoke_today: { type: "boolean" } },
     run: async (env, args) => {
       const name = String(args.name || "").trim();
       if (!name) return { error: "need a name" };
@@ -263,6 +269,7 @@ export const LIFE_TOOLS = {
   log_interaction: {
     group: "People",
     desc: 'record that the owner spoke with someone — this is what keeps threads from going cold unnoticed. args: {"name": "Ankit", "what": "he asked for my resume"}',
+    args: { name: { type: "string", required: true }, what: { type: "string", required: true } },
     run: async (env, args) => {
       const name = String(args.name || "").trim();
       const what = String(args.what || "").trim();
