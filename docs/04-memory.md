@@ -151,19 +151,18 @@ flowchart LR
 
 ## 4.7 Where memory feeds back into the system
 
-Memory isn't just recalled in chat — it's an input to the opportunity engine, which is
-what makes "tell the agent about yourself → get better alerts" true:
+Memory isn't just recalled in chat — it's an input to The System, which is what makes
+"tell the agent about yourself → get sharper quests" true:
 
 ```mermaid
 flowchart LR
   mem[("memories")] --> recall["agent prompt recall (doc 03)"]
-  mem --> edge["watch.js edgeTerms() — recall scoring (doc 05)"]
-  mem --> prof["ownerProfile() — ranker + draft + apply + research"]
+  mem --> gen["quest generation ownerProfile() (doc 05)"]
+  mem --> prof["apply.js + research owner profile"]
   mem --> perc["perception 'How I see you' (doc 07)"]
-  mem --> over["overnight research question pick (doc 07)"]
 ```
 
-`edgeTerms` (`watch.js:111`) tokenises every memory fact (plus skills) and weights each
-term by measured IDF — so the more the owner tells the agent, the sharper the recall
-stage of ranking becomes. This is stated in the agent's own rules
-(`agent.js:561`).
+Quest generation (`system.js` `ownerProfile`) reads goal/skill/project/identity memories
+to pick concrete next steps, and the agent's own rules push the owner to tell it more so
+the quests get sharper (`agent.js` Rules block). This is the same "the more it knows you,
+the better it serves you" loop the old ranker had — now pointed at goals, not job boards.

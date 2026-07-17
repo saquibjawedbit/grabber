@@ -4,6 +4,7 @@
 // pipeline. One honest fit score up front so no time is wasted on bad matches.
 
 import { llm } from "./llm.js";
+import { logActivity } from "./system.js";
 
 const STATUSES = ["ready", "applied", "responded", "interview", "offer", "rejected", "dropped"];
 
@@ -102,6 +103,11 @@ export const APPLY_TOOLS = {
               url ? "manual-url" : "manual", Number(v.fit) || 0,
               String(v.cover_note).slice(0, 4000), pack.slice(0, 12000),
               new Date().toISOString(), new Date().toISOString()).first();
+      await logActivity(env, {
+        kind: "application",
+        summary: `Drafted application: ${String(v.title || "role").slice(0, 140)}`,
+        detail: `honest fit ${Number(v.fit) || 0}/10 — ${String(v.fit_reason || "").slice(0, 200)}`,
+      });
       return {
         ok: true, id: row.id, title: v.title, fit: v.fit, fit_reason: v.fit_reason,
         cover_note: v.cover_note,

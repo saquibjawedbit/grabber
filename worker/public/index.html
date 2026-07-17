@@ -1,6 +1,6 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>grabber — brain</title>
+<title>The System — grabber</title>
 <style>
   :root {
     color-scheme: light;
@@ -216,6 +216,57 @@
     box-shadow: 0 4px 18px rgba(0,0,0,0.18);
   }
   #tip .t-cat { color: var(--muted); font-size: 0.72rem; }
+  /* ---------- The System ---------- */
+  .rank-card {
+    background:
+      radial-gradient(120% 140% at 100% 0%, var(--seq-fill), transparent 60%),
+      var(--surface);
+    border-color: color-mix(in srgb, var(--seq) 28%, var(--border));
+  }
+  .rank-top { display: flex; align-items: center; gap: 1.1rem; flex-wrap: wrap; }
+  .rank-lv {
+    flex: none; display: grid; place-items: center; width: 4.2rem; height: 4.2rem;
+    border-radius: 16px; background: var(--seq); color: #fff; line-height: 1;
+    box-shadow: 0 6px 20px color-mix(in srgb, var(--seq) 35%, transparent);
+  }
+  .rank-lv .n { font-size: 1.9rem; font-weight: 700; letter-spacing: -0.03em; }
+  .rank-lv .l { font-size: 0.6rem; text-transform: uppercase; letter-spacing: 0.12em; opacity: 0.85; }
+  .rank-main { flex: 1; min-width: 12rem; }
+  .rank-xp-row { display: flex; justify-content: space-between; align-items: baseline; font-size: 0.82rem; color: var(--ink-2); margin-bottom: 0.3rem; }
+  .xp-track { height: 10px; border-radius: 999px; background: var(--grid); overflow: hidden; }
+  .xp-fill { height: 100%; border-radius: 999px; background: linear-gradient(90deg, color-mix(in srgb, var(--seq) 70%, #fff), var(--seq)); transition: width 0.6s ease; }
+  .rank-streak { flex: none; text-align: center; padding-left: 0.4rem; }
+  .rank-streak .s { font-size: 1.7rem; font-weight: 700; letter-spacing: -0.02em; }
+  .rank-streak .k { font-size: 0.7rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; }
+
+  .quest { display: flex; align-items: flex-start; gap: 0.6rem; padding: 0.55rem 0; border-bottom: 1px solid var(--grid); font-size: 0.9rem; }
+  .quest:last-child { border-bottom: 0; }
+  .quest .qt { flex: 1; min-width: 0; }
+  .quest.done .qt { color: var(--muted); text-decoration: line-through; }
+  .qpill { flex: none; font-size: 0.68rem; font-weight: 600; padding: 0.05rem 0.5rem; border-radius: 999px; text-transform: uppercase; letter-spacing: 0.04em; }
+  .qpill.issued { color: var(--ink-2); border: 1px solid var(--border); }
+  .qpill.doing  { color: var(--seq); border: 1px solid color-mix(in srgb, var(--seq) 40%, var(--border)); }
+  .qpill.done   { color: #fff; background: var(--good); }
+  .qpill.failed { color: #fff; background: var(--critical); }
+  .qpill.skipped{ color: var(--muted); border: 1px solid var(--border); }
+  .quest .qx { flex: none; font-size: 0.74rem; color: var(--muted); font-variant-numeric: tabular-nums; padding-top: 0.1rem; }
+
+  .goal { padding: 0.55rem 0; border-bottom: 1px solid var(--grid); }
+  .goal:last-child { border-bottom: 0; }
+  .goal .gt { font-weight: 600; font-size: 0.92rem; }
+  .goal.achieved .gt { color: var(--good); }
+  .goal.dropped .gt { color: var(--muted); text-decoration: line-through; }
+  .goal .gm { color: var(--ink-2); font-size: 0.8rem; margin-top: 0.1rem; }
+  .goal .gp { display: inline-flex; gap: 0.5rem; margin-top: 0.2rem; font-size: 0.75rem; color: var(--muted); font-variant-numeric: tabular-nums; }
+
+  .act { display: flex; gap: 0.65rem; padding: 0.5rem 0; border-bottom: 1px solid var(--grid); font-size: 0.87rem; }
+  .act:last-child { border-bottom: 0; }
+  .act .ic { flex: none; width: 1.5rem; text-align: center; font-size: 0.95rem; padding-top: 0.05rem; }
+  .act .ab { flex: 1; min-width: 0; }
+  .act .at { flex: none; color: var(--muted); font-size: 0.72rem; font-variant-numeric: tabular-nums; white-space: nowrap; padding-top: 0.15rem; }
+  .act .ad { color: var(--ink-2); font-size: 0.8rem; white-space: pre-wrap; margin-top: 0.15rem; }
+  #activity { max-height: 30rem; overflow-y: auto; }
+
   #gate { max-width: 380px; margin: 4rem auto; text-align: center; padding: 0 1rem; }
   #gate input { width: 100%; padding: 0.55rem 0.8rem; border-radius: 8px; border: 1px solid var(--baseline);
     background: var(--surface); color: var(--ink); font-size: 0.95rem; }
@@ -225,16 +276,16 @@
 
 <main id="app" hidden>
   <header>
-    <h1>🧠 grabber — agent brain</h1>
+    <h1>⚔️ The System</h1>
     <span class="sub" id="asof"></span>
   </header>
 
   <div class="tiles" id="tiles"></div>
 
   <nav class="tabs" id="tabs">
-    <button data-tab="brain" class="on">Brain</button>
+    <button data-tab="system" class="on">System</button>
+    <button data-tab="brain">Brain</button>
     <button data-tab="life">Life</button>
-    <button data-tab="opportunities">Opportunities</button>
     <button data-tab="research">Research</button>
     <button data-tab="senses">Senses</button>
   </nav>
@@ -258,7 +309,7 @@
         <h2>Persona <span class="sub" id="persona-state"></span></h2>
         <button id="persona-reset" class="ghost-btn">Reset to default</button>
       </div>
-      <p class="teach-hint">Who it is when it talks — in Telegram, in your morning briefing, the weekly review, and overnight research. It will not invent facts or claim it saved something it didn't, whatever you write here. But tone is yours, and tone carries: ask for encouraging and you will get encouraging, including about a role that doesn't deserve it. <b>"How I see you" takes the name and ignores the voice</b> — it's the one place that stays blunt, because a read you tuned yourself isn't worth reading.</p>
+      <p class="teach-hint">Who it is when it talks — in Telegram, when it issues your quests, and at the nightly reckoning. The default is <b>The System</b>: a strict mentor. It will not invent facts, fake XP, or claim it did something it didn't, whatever you write here. But tone is yours, and tone carries: ask for gentle and you'll get gentle, even about a slipping streak. <b>"How I see you" takes the name and ignores the voice</b> — it's the one place that stays blunt, because a read you tuned yourself isn't worth reading.</p>
       <form id="persona-form">
         <label class="field-label" for="persona-name">Name</label>
         <input id="persona-name" maxlength="40" placeholder="Intelly">
@@ -343,27 +394,32 @@
     </div>
   </section>
 
-  <!-- OPPORTUNITIES -->
-  <section data-panel="opportunities" hidden>
-    <div class="card" id="apps-card">
-      <h2>Applications <span class="sub" id="apps-sub"></span></h2>
-      <div id="applications"></div>
-    </div>
+  <!-- SYSTEM -->
+  <section data-panel="system">
+    <div class="card rank-card" id="rank-card"></div>
     <div class="cols">
       <div>
-        <div class="card"><h2>Watching</h2><div id="watchers"></div></div>
-        <div class="card"><h2>Win rates by category</h2><div id="calibration"></div></div>
+        <div class="card">
+          <div class="card-head"><h2>Today's quests <span class="sub" id="quests-sub"></span></h2></div>
+          <div id="quests"></div>
+        </div>
+        <div class="card">
+          <h2>Goals <span class="sub" id="goals-sub"></span></h2>
+          <div id="goals"></div>
+        </div>
       </div>
       <div>
         <div class="card">
-          <h2>Rarest terms <span class="sub">measured, not hardcoded</span></h2>
-          <div id="rarity"></div>
+          <h2>What I'm doing to hit your goals <span class="sub">the System's work log</span></h2>
+          <div id="activity"></div>
         </div>
-        <div class="card"><h2>Corpus by source</h2><div id="bysource"></div></div>
       </div>
     </div>
-    <div class="card"><h2>Alerts sent</h2><div id="alerts"></div></div>
-    <div class="card"><h2>Latest ingested</h2><div id="recent"></div></div>
+    <div class="card" id="apps-card">
+      <h2>Applications <span class="sub" id="apps-sub"></span></h2>
+      <p class="teach-hint">The mentor's lever for clearing a barrier to a goal — point the bot at any job and a ready-to-send pack lands here.</p>
+      <div id="applications"></div>
+    </div>
   </section>
 
   <!-- RESEARCH -->
@@ -432,14 +488,17 @@ function tipShow(html, x, y) {
 function tipHide() { $("tip").style.display = "none"; }
 
 // ---------- sections ----------
-function renderTiles(t) {
+function renderTiles(sys, t) {
+  const q = sys.quests_today || [];
+  const doneToday = q.filter(x => x.status === "done").length;
+  const activeGoals = (sys.goals || []).filter(g => g.status === "active").length;
   const tiles = [
+    [`Lv ${sys.rank.level}`, "level"],
+    [sys.rank.streak, "day streak"],
+    [activeGoals, "active goals"],
+    [q.length ? `${doneToday}/${q.length}` : "0", "quests today"],
     [t.memories, "memories"],
-    [t.watchers, "watching"],
     [t.research, "deep dives"],
-    [t.reminders, "open reminders"],
-    [t.packs, "app packs"],
-    [t.sent, "applications sent"],
   ];
   $("tiles").innerHTML = tiles.map(([v, k]) =>
     `<div class="tile"><div class="v">${v ?? 0}</div><div class="k">${k}</div></div>`).join("");
@@ -493,7 +552,7 @@ function renderChat(turns) {
 
 // ---------- Persona ----------
 
-let agentName = "Intelly";   // what the Conversation panel labels its replies
+let agentName = "The System";   // what the Conversation panel labels its replies
 
 function renderPersona(p) {
   if (!p) return;
@@ -816,21 +875,80 @@ function renderResearch(jobs) {
   }).join("");
 }
 
-function renderWatchers(ws) {
-  if (!ws?.length) {
-    $("watchers").innerHTML = `<div class="empty">Watching nothing. There's no scraper — the bot only looks where you point it. Try "watch @kunalb11 for hiring posts".</div>`;
+// ---------- The System ----------
+function renderRank(r) {
+  const into = r.xp_into_level ?? 0, toNext = r.xp_to_next ?? 0;
+  const pct = Math.max(3, Math.round((into / Math.max(1, into + toNext)) * 100));
+  $("rank-card").innerHTML = `
+    <div class="rank-top">
+      <div class="rank-lv"><span class="n">${r.level}</span><span class="l">level</span></div>
+      <div class="rank-main">
+        <div class="rank-xp-row"><span><b>${r.xp}</b> XP</span><span>${toNext} to level ${r.level + 1}</span></div>
+        <div class="xp-track"><div class="xp-fill" style="width:${pct}%"></div></div>
+      </div>
+      <div class="rank-streak">
+        <div class="s">${r.streak}${r.streak ? " 🔥" : ""}</div>
+        <div class="k">day streak</div>
+      </div>
+      <div class="rank-streak">
+        <div class="s">${r.streak_best}</div>
+        <div class="k">best</div>
+      </div>
+    </div>`;
+}
+
+function renderQuests(quests) {
+  const box = $("quests");
+  if (!quests?.length) {
+    $("quests-sub").textContent = "";
+    box.innerHTML = `<div class="empty">No quests issued today yet — they land each morning at 07:00 IST. Set a goal and the System starts driving you at it.</div>`;
     return;
   }
-  $("watchers").innerHTML = ws.map(w => {
-    const label = w.kind === "x" ? "@" + w.target : w.target;
-    const state = w.last_error
-      ? `<span class="overdue">⚠ ${esc(w.last_error.slice(0, 44))}</span>`
-      : `<span class="meta">${w.hits} seen${w.last_checked ? ` · checked ${esc(w.last_checked.slice(5, 16).replace("T", " "))}` : " · not checked yet"}</span>`;
-    return `<div class="mem">
-      <span class="chip" style="--c:${catColor(w.kind === "x" ? "identity" : "project")}">${esc(w.kind)}</span>
-      <span>${esc(label.slice(0, 60))}<span class="id">#${w.id}</span><br>${state}</span>
+  const done = quests.filter(q => q.status === "done").length;
+  $("quests-sub").textContent = `${done}/${quests.length} cleared`;
+  box.innerHTML = quests.map(q => `
+    <div class="quest ${esc(q.status)}">
+      <span class="qpill ${esc(q.status)}">${esc(q.status)}</span>
+      <span class="qt">${esc(q.text)}</span>
+      <span class="qx">+${q.xp}</span>
+    </div>`).join("");
+}
+
+function renderGoals(goals) {
+  const active = (goals || []).filter(g => g.status === "active");
+  $("goals-sub").textContent = active.length ? `${active.length} active` : "";
+  if (!goals?.length) {
+    $("goals").innerHTML = `<div class="empty">No goals yet. Tell the bot what you're trying to become — the role, the number, the deadline — and everything the System does will aim at it.</div>`;
+    return;
+  }
+  $("goals").innerHTML = goals.map(g => {
+    const days = g.deadline ? Math.ceil((new Date(g.deadline) - Date.now()) / 86400000) : null;
+    const when = days == null ? "" : days < 0 ? ` · <span class="overdue">deadline passed</span>`
+      : days === 0 ? ` · <span class="overdue">due today</span>` : ` · ${days}d left`;
+    return `<div class="goal ${esc(g.status)}">
+      <div class="gt">${esc(g.title)}${g.status !== "active" ? ` <span class="meta">(${esc(g.status)})</span>` : ""}</div>
+      ${g.target ? `<div class="gm">${esc(g.target)}</div>` : ""}
+      <div class="gp"><span>✅ ${g.quests_done} cleared</span>${g.quests_failed ? `<span>❌ ${g.quests_failed} failed</span>` : ""}${when}</div>
     </div>`;
   }).join("");
+}
+
+const ACT_ICON = {
+  goal: "⚔️", quest_issued: "📜", quest_done: "✅", quest_failed: "❌",
+  reckoning: "🌑", research: "🔎", application: "📄", note: "•",
+};
+
+function renderActivity(items) {
+  if (!items?.length) {
+    $("activity").innerHTML = `<div class="empty">Nothing yet. As the System issues quests, holds reckonings, drafts applications and digs into research for you, every move it makes shows up here.</div>`;
+    return;
+  }
+  $("activity").innerHTML = items.map(a => `
+    <div class="act">
+      <span class="ic">${ACT_ICON[a.kind] || "•"}</span>
+      <span class="ab">${esc(a.summary)}${a.detail ? `<span class="ad">${esc(a.detail)}</span>` : ""}</span>
+      <span class="at">${esc(day(a.at))} ${esc(clock(a.at))}</span>
+    </div>`).join("");
 }
 
 function renderReminders(rems) {
@@ -843,48 +961,6 @@ function renderReminders(rems) {
       <span>${esc(r.text)}${r.notified ? ` <span class="meta">· delivered</span>` : ""}
       ${over ? ` <span class="overdue">⚠ overdue</span>` : ""}</span></div>`;
   }).join("");
-}
-
-function renderBars(rows) {
-  if (!rows.length) { $("bysource").innerHTML = `<div class="empty">Corpus is empty.</div>`; return; }
-  const max = Math.max(...rows.map(r => r.n));
-  $("bysource").innerHTML = rows.map(r => {
-    const pct = Math.max(1.5, (r.n / max) * 82); // leave room for the value label
-    return `<div class="bar-row" data-n="${r.n}" data-s="${esc(r.source)}">
-      <span class="lbl">${esc(r.source)}</span>
-      <span class="bar-wrap"><span class="bar" style="width:${pct}%"></span>
-      <span class="bar-v" style="left:calc(${pct}% + 7px)">${r.n}</span></span></div>`;
-  }).join("");
-  $("bysource").querySelectorAll(".bar-row").forEach(el => {
-    el.onmousemove = e => tipShow(`<b>${esc(el.dataset.s)}</b><div class="t-cat">${el.dataset.n} postings</div>`, e.clientX, e.clientY);
-    el.onmouseleave = tipHide;
-  });
-}
-
-function renderRecent(posts) {
-  $("recent").innerHTML = posts.length ? posts.map(p => `
-    <div class="post"><a href="${esc(p.url)}" target="_blank" rel="noopener">${esc((p.title || "").slice(0, 90))}</a>
-      <div class="meta">${esc(p.source)}${p.deadline ? " · ⏰ " + esc(String(p.deadline).slice(0, 10)) : ""}</div></div>`).join("")
-    : `<div class="empty">Nothing ingested yet.</div>`;
-}
-
-function renderAlerts(alerts) {
-  if (!Array.isArray(alerts)) return;
-  $("alerts").innerHTML = alerts.length ? alerts.map(a => `
-    <div class="post"><a href="${esc(a.url)}" target="_blank" rel="noopener"><b>${esc(a.title)}</b></a>
-      <div class="meta">
-        <span class="badge">${esc(a.category)}</span>
-        <span class="badge">fit ${a.fit}</span>
-        <span class="badge">P(win) ${Math.round((a.p_convert || 0) * 100)}%</span>
-        ${a.deadline ? `<span class="badge">⏰ ${esc(String(a.deadline).slice(0, 10))}</span>` : ""}
-        ${(a.outcomes || "").split(",").filter(Boolean).map(o => `<span class="badge">${esc(o)}</span>`).join("")}
-        via ${esc(a.source)}
-      </div>
-      ${a.reasons ? `<div class="meta">${esc(a.reasons)}</div>` : ""}
-      ${a.angle ? `<div class="meta"><i>angle: ${esc(a.angle)}</i></div>` : ""}
-      ${a.draft ? `<details><summary>📝 draft</summary><pre class="draft">${esc(a.draft)}</pre></details>` : ""}
-    </div>`).join("")
-    : `<div class="empty">No alerts yet — ranking starts once the profile is seeded.</div>`;
 }
 
 // ---------- knowledge graph (canvas force layout) ----------
@@ -1091,36 +1167,6 @@ function renderTransactions(txs) {
   }).join("");
 }
 
-function renderCalibration(cal) {
-  const decided = cal.filter(c => (c.n_won || 0) + (c.n_rejected || 0) > 0);
-  if (!decided.length) {
-    $("calibration").innerHTML = `<div class="empty">No win rates yet — they're measured from real outcomes, so this fills in after you've applied and heard back. Guessing until then.</div>`;
-    return;
-  }
-  $("calibration").innerHTML = decided.map(c => {
-    const d = (c.n_won || 0) + (c.n_rejected || 0);
-    const pct = c.rate != null ? Math.round(c.rate * 100) : null;
-    const w = pct == null ? 2 : Math.max(2, pct * 0.8);
-    return `<div class="bar-row"><span class="lbl">${esc(c.category)}</span>
-      <span class="bar-wrap"><span class="bar" style="width:${w}%"></span>
-      <span class="bar-v" style="left:calc(${w}% + 7px)">${pct == null ? "?" : pct + "%"} <span class="meta">(${d} decided)</span></span></span></div>`;
-  }).join("");
-}
-
-function renderRarity(terms) {
-  if (!terms?.length) {
-    $("rarity").innerHTML = `<div class="empty">IDF is recomputed nightly over the corpus. A term is rare when few postings contain it — that's what earns it weight in ranking.</div>`;
-    return;
-  }
-  const max = Math.max(...terms.map(t => t.idf));
-  $("rarity").innerHTML = terms.map(t => {
-    const w = Math.max(3, (t.idf / max) * 78);
-    return `<div class="bar-row"><span class="lbl">${esc(t.term)}</span>
-      <span class="bar-wrap"><span class="bar" style="width:${w}%"></span>
-      <span class="bar-v" style="left:calc(${w}% + 7px)">${t.idf} <span class="meta">${t.df} docs</span></span></span></div>`;
-  }).join("");
-}
-
 function renderMerchants(m) {
   if (!m?.length) { $("merchants").innerHTML = `<div class="empty">None learned yet.</div>`; return; }
   const byCat = {};
@@ -1157,11 +1203,18 @@ document.getElementById("tabs").addEventListener("click", e => {
 // ---------- boot ----------
 async function boot() {
   try {
-    const [brain, alerts] = await Promise.all([api("/api/brain"), api("/api/alerts")]);
+    const [brain, sys] = await Promise.all([api("/api/brain"), api("/api/system")]);
     window.__brain = brain;
     $("gate").hidden = true; $("app").hidden = false;
     $("asof").textContent = "as of " + IST.format(new Date());
-    renderTiles(brain.totals);
+    renderTiles(sys, brain.totals);
+    // System tab
+    renderRank(sys.rank);
+    renderQuests(sys.quests_today);
+    renderGoals(sys.goals);
+    renderActivity(sys.activity);
+    renderApplications(brain.applications);
+    // Brain tab
     renderPerception(brain.perception);
     $("perc-refresh").onclick = refreshPerception;
     renderBriefing(brain.briefing);
@@ -1171,23 +1224,18 @@ async function boot() {
     renderDocs(brain.documents);
     renderSummary(brain.summary);
     wireTeach();
+    renderReminders(brain.reminders);
+    // Life tab
     renderLife(brain.life);
     renderPeople(brain.life?.people);
     renderTransactions(brain.life?.transactions);
+    // Senses + Research tabs
     renderSenses(brain.senses);
     renderAllowlist(brain.senses?.allowlist);
     renderMerchants(brain.merchants);
     renderResearch(brain.research);
-    renderWatchers(brain.watchers);
-    renderReminders(brain.reminders);
-    renderBars(brain.by_source);
-    renderRecent(brain.recent);
-    renderApplications(brain.applications);
-    renderRarity(brain.rarity);
-    renderCalibration(brain.calibration);
-    renderAlerts(alerts);
     const start = (location.hash || "").slice(1);
-    showTab(["brain", "life", "opportunities", "research", "senses"].includes(start) ? start : "brain");
+    showTab(["system", "brain", "life", "research", "senses"].includes(start) ? start : "system");
   } catch (e) {
     localStorage.removeItem("dash_token");
     gate(e.message === "token" && token ? "Wrong token — try again." : "");

@@ -4,10 +4,9 @@
 import { embedMemory, rememberExchange, runAgent, TOOLS } from "./agent.js";
 import { backfill, extract, forgetMemory, reconcile, saveMemory } from "./memory.js";
 import { DEFAULT_PERSONA, getPersona, resetPersona, setPersona } from "./persona.js";
-import { runWatchers } from "./watch.js";
+import { debrief, getSystemState, issueDaily, listGoals, listQuests, resolveQuest, runSystem } from "./system.js";
 import { classifyInbox, googleConnected, ingestNotification, pollCalendar, remindEvents } from "./senses.js";
 import { processBankNotifications } from "./life.js";
-import { runBriefing, runOvernightResearch, runWeekly } from "./briefing.js";
 import { generatePerception, getPerception } from "./perception.js";
 
 const TG = (env, method) => `https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/${method}`;
@@ -23,96 +22,55 @@ async function tg(env, method, body) {
 
 // ---------- Bot commands: the tracker you can talk to ----------
 
-const HELP = `Just talk to me. Some things worth knowing I can do:
+const HELP = `I'm your System — a strict mentor with one motive: get you to your goals. I don't wait around.
 
-• <b>Dig properly</b> — "what does Zepto ask in SDE interviews? go deep" spawns a research agent on a real machine. It browses, reads, and watches talks for ~10 min, then pings you.
-• <b>Watch a channel</b> — "watch @kunalb11 for hiring posts". I only interrupt you if something clears the bar.
-• <b>Remember you</b> — tell me anything about yourself; I recall what's relevant when it matters.
+• <b>Declare a goal</b> — tell me what you're trying to become, the target, the deadline. Everything I do runs off your goals.
+• <b>Daily quests</b> — every morning I issue quests toward your goals. Tap ✅/⏳/❌. Every night is a reckoning: unfinished = failed, and failure costs XP and your streak.
+• <b>I get things done for you</b> — paste a job/role and I'll draft the whole application. Ask me to dig ("what does Zepto ask in SDE interviews? go deep") and I put a research agent on a real machine for ~10 min.
+• <b>Remember you</b> — tell me anything; I recall what's relevant when it matters.
 • <b>Reminders</b> — "remind me Friday 6pm to follow up with Ankit".
-• Send me any text/markdown file (resume, bio, notes) and I'll use it in everything.
-• <b>Talk, don't type</b> — send a voice note or a video and I'll listen to it.
-• <b>Show me</b> — screenshot a job post, photograph a whiteboard. I read what's in it and answer.
+• Send any text/markdown file, a voice note, a video, or a screenshot — I read it and use it.
 
 Commands:
-/watchers — what I'm watching
+/goals — your goals and progress
+/quests — today's quests
+/rank — your level, XP and streak
 /research — recent deep dives
-/stats — applications, win rates, corpus
-/pending — alerted, not yet applied
-/applied — everything you applied to
 /memories — what I know about you
 /help — this message`;
 
 const esc = s => String(s ?? "").replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
 
-async function cmdStats(env) {
-  const row = await env.DB.prepare(`
-    SELECT
-      (SELECT COUNT(*) FROM postings) AS corpus,
-      (SELECT COUNT(*) FROM alerts WHERE sent_at IS NOT NULL) AS alerted,
-      (SELECT COUNT(DISTINCT alert_id) FROM outcomes WHERE action = 'applied') AS applied,
-      (SELECT COUNT(DISTINCT alert_id) FROM outcomes WHERE action = 'applied'
-         AND at > datetime('now', '-30 days')) AS applied_30d,
-      (SELECT COUNT(DISTINCT alert_id) FROM outcomes WHERE action = 'won') AS won,
-      (SELECT COUNT(DISTINCT alert_id) FROM outcomes WHERE action = 'rejected') AS rejected,
-      (SELECT COUNT(DISTINCT alert_id) FROM outcomes WHERE action = 'skipped') AS skipped
-  `).first();
-  const decided = row.won + row.rejected;
-  const waiting = row.applied - decided;
-
-  const { results: cats } = await env.DB.prepare(
-    "SELECT * FROM calibration ORDER BY n_applied DESC").all();
-  const catLines = cats.map(c => {
-    const d = (c.n_won || 0) + (c.n_rejected || 0);
-    const rate = c.rate != null ? ` · ${Math.round(c.rate * 100)}% win rate` : " · rate unknown yet";
-    return `  ${c.category}: ${c.n_applied || 0} applied${d ? rate : ""}`;
-  }).join("\n");
-
-  return `📊 <b>Your numbers</b>
-
-Applied: <b>${row.applied}</b> total (${row.applied_30d} in last 30 days)
-Won: <b>${row.won}</b> · Rejected: ${row.rejected} · Awaiting result: ${waiting}
-${decided >= 5 ? `Overall win rate: <b>${Math.round((row.won / decided) * 100)}%</b> of ${decided} decided` : `Overall win rate: unknown (${decided}/5 decided applications — still guessing)`}
-
-Alerted: ${row.alerted} · Skipped: ${row.skipped}
-Corpus: ${row.corpus} postings ingested
-${catLines ? `\nBy category:\n${catLines}` : ""}`;
+async function cmdGoals(env) {
+  const { goals } = await listGoals(env, { status: "active" });
+  if (!goals.length) {
+    return "⚔️ <b>No goals yet.</b>\n\nA hunter without a goal is prey. Tell me what you're trying to become — the role, the number, the deadline — and I'll drive you at it.";
+  }
+  const lines = goals.map(g => {
+    const days = g.deadline ? Math.ceil((new Date(g.deadline) - Date.now()) / 86400000) : null;
+    const when = days == null ? "" : days < 0 ? " · ⚠️ deadline passed" : days === 0 ? " · 🔥 due today" : ` · ${days}d left`;
+    const prog = `${g.quests_done} done${g.quests_failed ? ` · ${g.quests_failed} failed` : ""}`;
+    return `• <b>${esc(g.title)}</b>${g.target ? ` — ${esc(g.target)}` : ""}${when}\n  <i>${prog}</i> <code>#${g.id}</code>`;
+  });
+  return `⚔️ <b>Your goals (${goals.length})</b>\n\n${lines.join("\n")}\n\nSay "achieved #id" or "drop #id", or name a new one.`;
 }
 
-async function cmdPending(env) {
-  const { results } = await env.DB.prepare(`
-    SELECT a.id, p.title, p.url, p.deadline
-    FROM alerts a JOIN postings p ON p.id = a.posting_id
-    WHERE a.sent_at IS NOT NULL
-      AND NOT EXISTS (SELECT 1 FROM outcomes o
-                      WHERE o.alert_id = a.id AND o.action IN ('applied','skipped'))
-    ORDER BY CASE WHEN p.deadline IS NULL OR p.deadline = '' THEN 1 ELSE 0 END,
-             date(p.deadline) LIMIT 15`).all();
-  if (!results.length) return "✨ Nothing pending — every alert has been acted on.";
-  const lines = results.map(a => {
-    const days = a.deadline ? Math.ceil((new Date(a.deadline) - Date.now()) / 86400000) : null;
-    const when = days == null ? "no deadline" : days < 0 ? "⚠️ past deadline" : days === 0 ? "🔥 TODAY" : `${days}d left`;
-    return `• <a href="${esc(a.url)}">${esc(a.title.slice(0, 60))}</a> — ${when}`;
-  });
-  return `⏳ <b>Pending (${results.length})</b> — each unapplied one is a 100% loss:\n\n${lines.join("\n")}`;
+async function cmdQuests(env) {
+  const { quests } = await listQuests(env, { status: "today" });
+  if (!quests.length) return "No quests issued today yet. They land each morning — or say \"issue my quests\".";
+  const icon = { done: "✅", failed: "❌", doing: "⏳", issued: "▫️", skipped: "⤴️" };
+  const lines = quests.map(q =>
+    `${icon[q.status] || "▫️"} <b>${esc(q.text)}</b> <i>(+${q.xp} XP)</i> <code>#${q.id}</code>`);
+  const done = quests.filter(q => q.status === "done").length;
+  return `⚔️ <b>Today's quests — ${done}/${quests.length} cleared</b>\n\n${lines.join("\n")}`;
 }
 
-async function cmdApplied(env) {
-  const { results } = await env.DB.prepare(`
-    SELECT p.title, p.url,
-      MAX(CASE WHEN o.action = 'won' THEN 1 ELSE 0 END) AS won,
-      MAX(CASE WHEN o.action = 'rejected' THEN 1 ELSE 0 END) AS rejected,
-      MIN(CASE WHEN o.action = 'applied' THEN o.at END) AS applied_at
-    FROM outcomes o
-    JOIN alerts a ON a.id = o.alert_id
-    JOIN postings p ON p.id = a.posting_id
-    WHERE o.alert_id IN (SELECT alert_id FROM outcomes WHERE action = 'applied')
-    GROUP BY o.alert_id ORDER BY applied_at DESC LIMIT 20`).all();
-  if (!results.length) return "No applications logged yet. Tap ✅ Applied on an alert to start the count.";
-  const lines = results.map(r => {
-    const status = r.won ? "🏆 won" : r.rejected ? "❌ rejected" : "⏳ waiting";
-    return `• <a href="${esc(r.url)}">${esc(r.title.slice(0, 60))}</a> — ${status} <i>(${(r.applied_at || "").slice(0, 10)})</i>`;
-  });
-  return `✅ <b>Applied (${results.length} most recent)</b>\n\n${lines.join("\n")}`;
+async function cmdRank(env) {
+  const s = await getSystemState(env);
+  const bar = "▰".repeat(Math.round((s.xp_into_level / Math.max(1, s.xp_into_level + s.xp_to_next)) * 10))
+    .padEnd(10, "▱");
+  return `🗿 <b>Level ${s.level}</b>\n${bar}  ${s.xp} XP (${s.xp_to_next} to next)\n\n` +
+    `🔥 Streak: <b>${s.streak}</b> day${s.streak === 1 ? "" : "s"} (best ${s.streak_best})`;
 }
 
 async function cmdMemories(env) {
@@ -127,21 +85,6 @@ async function cmdMemories(env) {
   const docLine = docs.results.length
     ? `\n\n📄 <b>Profile documents:</b> ${docs.results.map(d => esc(d.key)).join(", ")}` : "";
   return `🧠 <b>What I know about you</b>\n\n${memLines || "(no memories yet)"}${docLine}\n\nSay "forget #id" to remove one.`;
-}
-
-async function cmdWatchers(env) {
-  const { results } = await env.DB.prepare(
-    "SELECT id, kind, target, note, last_checked, last_error, hits FROM watchers WHERE active = 1 ORDER BY id").all();
-  if (!results.length) {
-    return "👀 Watching nothing yet.\n\nThere's no scraper anymore — I only look where you point me. Try: <i>\"watch @kunalb11 for hiring posts\"</i> or <i>\"watch the Devfolio blog feed\"</i>.";
-  }
-  const lines = results.map(w => {
-    const label = w.kind === "x" ? "@" + w.target : w.target.slice(0, 50);
-    const status = w.last_error ? `⚠️ ${esc(w.last_error.slice(0, 40))}`
-      : w.last_checked ? `checked ${esc(w.last_checked.slice(5, 16).replace("T", " "))}` : "not checked yet";
-    return `• <b>${esc(label)}</b> <i>(${esc(w.kind)})</i> — ${w.hits} seen · ${status}\n  <i>${esc(w.note || "")}</i> <code>#${w.id}</code>`;
-  });
-  return `👀 <b>Watching ${results.length}</b>\n\n${lines.join("\n")}\n\nSay "stop watching #id" to remove one.`;
 }
 
 async function cmdResearch(env) {
@@ -166,11 +109,10 @@ async function handleCommand(text, chatId, env) {
   if (cmd === "/start") reply = `Your chat_id is <code>${chatId}</code> — set it as TELEGRAM_CHAT_ID.\n\n${esc(HELP)}`;
   else if (!isOwner(chatId, env)) reply = "I'm a personal agent working for one person, and it isn't you. 🙂";
   else if (cmd === "/help") reply = esc(HELP);
-  else if (cmd === "/stats") reply = await cmdStats(env);
-  else if (cmd === "/pending") reply = await cmdPending(env);
-  else if (cmd === "/applied") reply = await cmdApplied(env);
+  else if (cmd === "/goals") reply = await cmdGoals(env);
+  else if (cmd === "/quests") reply = await cmdQuests(env);
+  else if (cmd === "/rank") reply = await cmdRank(env);
   else if (cmd === "/memories") reply = await cmdMemories(env);
-  else if (cmd === "/watchers") reply = await cmdWatchers(env);
   else if (cmd === "/research") reply = await cmdResearch(env);
   else reply = `Unknown command.\n\n${esc(HELP)}`;
   await tg(env, "sendMessage", {
@@ -411,9 +353,9 @@ async function handleTelegram(request, env, ctx) {
   const cb = update.callback_query;
   if (!cb) return new Response("ok");
 
-  const [tag, alertId, action] = (cb.data || "").split(":");
-  if (tag === "r" && alertId) {
-    await env.DB.prepare("UPDATE reminders SET done = 1 WHERE id = ?").bind(Number(alertId)).run();
+  const [tag, id, action] = (cb.data || "").split(":");
+  if (tag === "r" && id) {
+    await env.DB.prepare("UPDATE reminders SET done = 1 WHERE id = ?").bind(Number(id)).run();
     await tg(env, "editMessageReplyMarkup", {
       chat_id: cb.message.chat.id, message_id: cb.message.message_id,
       reply_markup: { inline_keyboard: [] },
@@ -421,75 +363,27 @@ async function handleTelegram(request, env, ctx) {
     await tg(env, "answerCallbackQuery", { callback_query_id: cb.id, text: "Done ✅" });
     return new Response("ok");
   }
-  if (tag !== "a" || !alertId || !action) {
-    await tg(env, "answerCallbackQuery", { callback_query_id: cb.id });
+  // Quest resolution: every tap is a label. done/failed move XP; doing keeps it open.
+  if (tag === "q" && id && action) {
+    const r = await resolveQuest(env, id, action);
+    let toast = r.error ? r.error : `Quest ${action}`;
+    if (!r.error) {
+      if (action === "done") toast = `✅ +${r.xp_delta} XP · Level ${r.level}${r.leveled_up ? " — LEVEL UP" : ""}`;
+      else if (action === "failed") toast = `❌ ${r.xp_delta} XP. Do better tomorrow.`;
+      else if (action === "doing") toast = "In progress. The reckoning is tonight.";
+    }
+    // 'doing' keeps the buttons live; a terminal action clears them.
+    if (action !== "doing") {
+      await tg(env, "editMessageReplyMarkup", {
+        chat_id: cb.message.chat.id, message_id: cb.message.message_id,
+        reply_markup: { inline_keyboard: [] },
+      });
+    }
+    await tg(env, "answerCallbackQuery", { callback_query_id: cb.id, text: toast });
     return new Response("ok");
   }
-
-  await env.DB.prepare("INSERT INTO outcomes (alert_id, action, at) VALUES (?,?,?)")
-    .bind(Number(alertId), action, new Date().toISOString()).run();
-
-  // Applied -> the next question is the real label: did you win it?
-  // Won/rejected/skipped -> close the loop, remove buttons.
-  let markup = { inline_keyboard: [] };
-  let toast = `Logged: ${action}`;
-  if (action === "applied") {
-    markup.inline_keyboard = [[
-      { text: "🏆 Won", callback_data: `a:${alertId}:won` },
-      { text: "❌ Rejected", callback_data: `a:${alertId}:rejected` },
-    ]];
-    toast = "Logged: applied. Tap again when you hear back.";
-  } else if (action === "snoozed") {
-    toast = "Snoozed — the deadline nag will still fire.";
-    markup = undefined; // keep original buttons
-  }
-
-  if (markup !== undefined) {
-    await tg(env, "editMessageReplyMarkup", {
-      chat_id: cb.message.chat.id,
-      message_id: cb.message.message_id,
-      reply_markup: markup,
-    });
-  }
-  await tg(env, "answerCallbackQuery", { callback_query_id: cb.id, text: toast });
+  await tg(env, "answerCallbackQuery", { callback_query_id: cb.id });
   return new Response("ok");
-}
-
-// ---------- Deadline nags (point 6): found -> deadline -> escalating nag ----------
-
-const NAG_LEVELS = [
-  { level: 1, withinDays: 7, label: "a week" },
-  { level: 2, withinDays: 3, label: "3 days" },
-  { level: 3, withinDays: 1, label: "TOMORROW" },
-];
-
-async function runNags(env) {
-  const { results } = await env.DB.prepare(`
-    SELECT a.id, a.nag_level, p.title, p.url, p.deadline
-    FROM alerts a JOIN postings p ON p.id = a.posting_id
-    WHERE a.sent_at IS NOT NULL
-      AND p.deadline IS NOT NULL AND p.deadline != ''
-      AND date(p.deadline) >= date('now')
-      AND NOT EXISTS (
-        SELECT 1 FROM outcomes o
-        WHERE o.alert_id = a.id AND o.action IN ('applied','skipped')
-      )`).all();
-
-  for (const a of results) {
-    const daysLeft = Math.ceil((new Date(a.deadline) - Date.now()) / 86400000);
-    const due = NAG_LEVELS.filter(n => daysLeft <= n.withinDays && n.level > a.nag_level).pop();
-    if (!due) continue;
-    await tg(env, "sendMessage", {
-      chat_id: env.TELEGRAM_CHAT_ID,
-      parse_mode: "HTML",
-      text: `⏰ <b>${due.label} left</b> and you haven't applied:\n${a.title}\n${a.url || ""}\n\nAn opportunity you meant to apply to and didn't is a 100% loss.`,
-      reply_markup: { inline_keyboard: [[
-        { text: "✅ Applied", callback_data: `a:${a.id}:applied` },
-        { text: "🙅 Letting it go", callback_data: `a:${a.id}:skipped` },
-      ]]},
-    });
-    await env.DB.prepare("UPDATE alerts SET nag_level = ? WHERE id = ?").bind(due.level, a.id).run();
-  }
 }
 
 // ---------- Senses on the cron: mail (via IMAP job) + calendar (OAuth, optional) ----------
@@ -802,20 +696,45 @@ async function handleApi(url, env, request) {
   }
   if (url.pathname === "/api/cron") {
     // Manual trigger for testing — same work as the hourly cron.
-    await runReminders(env);
-    await runNags(env);
-    const money = await processBankNotifications(env);
-    const senses = url.searchParams.get("senses") === "1" ? await runSenses(env) : "skipped";
-    const watch = url.searchParams.get("watch") === "1" ? await runWatchers(env, tg) : "skipped";
+    // ?system=1 issues/debriefs now; add &force=1 to bypass the hour + once-a-day gates.
+    // &issue=1 / &debrief=1 force just one half.
     const q = k => url.searchParams.get(k) === "1";
-    const brief = q("brief") ? await runBriefing(env, tg, { force: q("force") }) : "skipped";
-    const weekly = q("weekly") ? await runWeekly(env, tg, { force: q("force") }) : "skipped";
-    return Response.json({ ok: true, money, senses, watch, brief, weekly });
+    await runReminders(env);
+    const money = await processBankNotifications(env);
+    const senses = q("senses") ? await runSenses(env) : "skipped";
+    let system = "skipped";
+    if (q("issue")) system = { issue: await issueDaily(env, tg, { force: true }) };
+    else if (q("debrief")) system = { debrief: await debrief(env, tg, { force: true }) };
+    else if (q("system")) system = await runSystem(env, tg, { force: q("force") });
+    return Response.json({ ok: true, money, senses, system });
   }
-  if (url.pathname === "/api/stats") {
-    const { results } = await env.DB.prepare("SELECT * FROM calibration").all();
-    const corpus = await env.DB.prepare("SELECT COUNT(*) AS n FROM postings").first();
-    return Response.json({ calibration: results, corpus: corpus.n });
+  if (url.pathname === "/api/rank") {
+    return Response.json({ ...await getSystemState(env), ...await listGoals(env, { status: "active" }) });
+  }
+  if (url.pathname === "/api/system") {
+    // Everything the dashboard's System tab shows: rank, goals, today's quests, and the
+    // agent's work log ("what I'm doing to hit your goals").
+    const [rank, goals, questsToday, activity] = await Promise.all([
+      getSystemState(env),
+      env.DB.prepare(`
+        SELECT g.id, g.title, g.why, g.target, g.deadline, g.status, g.created_at,
+               (SELECT COUNT(*) FROM quests q WHERE q.goal_id = g.id AND q.status = 'done') AS quests_done,
+               (SELECT COUNT(*) FROM quests q WHERE q.goal_id = g.id AND q.status = 'failed') AS quests_failed
+        FROM goals g ORDER BY CASE g.status WHEN 'active' THEN 0 ELSE 1 END, g.id`).all(),
+      env.DB.prepare(`
+        SELECT id, goal_id, text, kind, status, xp, due_at, issued_at, resolved_at
+        FROM quests WHERE date(issued_at, '+330 minutes') = date('now', '+330 minutes')
+        ORDER BY CASE status WHEN 'issued' THEN 0 WHEN 'doing' THEN 1 ELSE 2 END, id`).all(),
+      env.DB.prepare(`
+        SELECT id, at, kind, summary, detail, goal_id, quest_id
+        FROM activity ORDER BY id DESC LIMIT 60`).all(),
+    ]);
+    return Response.json({
+      rank,
+      goals: goals.results,
+      quests_today: questsToday.results,
+      activity: activity.results,
+    });
   }
   return Response.json({ error: "not found" }, { status: 404 });
 }
@@ -861,16 +780,13 @@ export default {
   },
   async scheduled(_event, env) {
     await runReminders(env);
-    await runNags(env); // idempotent: nag_level gates each escalation to once
-    // One sense failing must never stop the others.
+    // One job failing must never stop the others.
     for (const [name, fn] of [
       ["senses", runSenses],
       ["money", processBankNotifications],   // bank alerts Phase 4 filed -> transactions
-      ["watchers", e => runWatchers(e, tg)],
-      // Initiative last: it reports on everything above, so it runs after them.
-      ["briefing", e => runBriefing(e, tg)],
-      ["weekly", e => runWeekly(e, tg)],
-      ["overnight", e => runOvernightResearch(e, (en, args) => TOOLS.spawn_research.run(en, args))],
+      // The System last: it issues the day's quests and holds the nightly reckoning,
+      // self-gating on the IST hour (issue 07:00, debrief 21:00).
+      ["system", e => runSystem(e, tg)],
     ]) {
       try {
         const out = await fn(env);

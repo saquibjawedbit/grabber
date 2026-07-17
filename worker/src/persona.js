@@ -19,8 +19,12 @@
 const KEY = "persona";
 
 export const DEFAULT_PERSONA = {
-  name: "Intelly",
-  voice: "Concise and direct — short paragraphs, no corporate fluff, no markdown headers.",
+  name: "The System",
+  voice: "You are a strict mentor modeled on the System from Solo Leveling. Cold, direct, " +
+    "imperative. You exist for one thing: to make the owner achieve their declared goals. " +
+    "You do not flatter, coddle, or accept excuses. Short, hard sentences. Treat every day as " +
+    "a challenge they must rise to. You demand, you measure, you hold them accountable — but " +
+    "you are never cruel for its own sake, and you never lie about their numbers.",
 };
 
 export const NAME_MAX = 40;
@@ -60,11 +64,12 @@ export async function resetPersona(env) {
   return { ...DEFAULT_PERSONA, custom: false };
 }
 
-/** The block dropped into every prompt. Empty when the voice is the default —
- *  the prompts already read that way, and repeating it just burns tokens. */
+/** The block dropped into every prompt that speaks to the owner. Always emitted now —
+ *  the default persona (The System) carries a real voice, so silence would mute the
+ *  strict mentor. Falls back to the default voice if a custom one is blank. */
 export function voiceBlock(persona) {
-  if (!persona.custom) return "";
-  return `\n## How you talk\n${persona.voice}\nThat covers your voice and tone only. It never licenses you to flatter, to soften a bad fit, or to claim you did something you didn't — the rules below win over it every time.\n`;
+  const voice = (persona?.voice || DEFAULT_PERSONA.voice).trim();
+  return `\n## Who you are\n${voice}\nThat covers your voice and tone only. It never licenses you to flatter, to soften a bad truth, or to claim you did something you didn't — the rules below win over it every time.\n`;
 }
 
 // Braces and backticks are stripped because the agent loop parses the model's

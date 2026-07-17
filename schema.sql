@@ -267,3 +267,58 @@ CREATE TABLE IF NOT EXISTS watchers (
   active       INTEGER NOT NULL DEFAULT 1,
   UNIQUE(kind, target)
 );
+
+
+-- ---------------------------------------------------------------------------
+-- The System (Solo-Leveling-style motive engine). Replaces the passive job-board
+-- opportunity engine: the agent drives the owner toward their own declared goals
+-- via daily quests, accountability, penalties and leveling. See docs/05-the-system.md.
+-- ---------------------------------------------------------------------------
+
+-- The owner's real objectives. Everything the System does is judged against these.
+CREATE TABLE IF NOT EXISTS goals (
+  id         INTEGER PRIMARY KEY AUTOINCREMENT,
+  title      TEXT NOT NULL,
+  why        TEXT,                          -- why it matters (fuels the mentor's pushing)
+  target     TEXT,                          -- measurable definition of success
+  deadline   TEXT,                          -- ISO date if any
+  status     TEXT NOT NULL DEFAULT 'active',-- active | achieved | dropped
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+-- Concrete, done-tonight tasks the System issues toward a goal. A quest is a
+-- prediction+commitment; its resolution is the label (cf. the old alerts/outcomes).
+CREATE TABLE IF NOT EXISTS quests (
+  id            INTEGER PRIMARY KEY AUTOINCREMENT,
+  goal_id       INTEGER REFERENCES goals(id),   -- nullable: standalone quests allowed
+  text          TEXT NOT NULL,
+  kind          TEXT NOT NULL DEFAULT 'daily',  -- daily | milestone | urgent
+  status        TEXT NOT NULL DEFAULT 'issued', -- issued | doing | done | failed | skipped
+  xp            INTEGER NOT NULL DEFAULT 10,
+  due_at        TEXT,                           -- UTC ISO; default end of the owner's today
+  issued_at     TEXT NOT NULL,
+  resolved_at   TEXT,
+  tg_message_id INTEGER
+);
+
+CREATE INDEX IF NOT EXISTS idx_quests_issued ON quests(issued_at);
+CREATE INDEX IF NOT EXISTS idx_quests_goal ON quests(goal_id);
+
+-- The agent's work log: what The System did to move the owner's goals — quests issued
+-- and resolved, reckonings, research spawned, applications drafted. This is what the
+-- dashboard's "what I'm doing to hit your goals" feed reads.
+CREATE TABLE IF NOT EXISTS activity (
+  id      INTEGER PRIMARY KEY AUTOINCREMENT,
+  at      TEXT NOT NULL,
+  kind    TEXT NOT NULL,    -- goal | quest_issued | quest_done | quest_failed | reckoning | research | application | note
+  summary TEXT NOT NULL,    -- one line, owner-facing
+  detail  TEXT,             -- optional longer body
+  goal_id INTEGER,
+  quest_id INTEGER
+);
+
+CREATE INDEX IF NOT EXISTS idx_activity_at ON activity(at);
+
+-- XP / level / streak live as rows in `state`:
+--   xp, level, streak, streak_best, system_last_issue, system_last_debrief

@@ -17,29 +17,28 @@ flowchart TB
 
   subgraph ci["GitHub Actions — scheduled / event-driven, heavy"]
     direction TB
-    nightly["nightly.yml<br/>IDF + calibration (CPU)"]
     research["research.yml<br/>Playwright browsing agent (minutes)"]
     email["email.yml<br/>Gmail IMAP poll (protocol Workers lack)"]
   end
 
-  db[("D1 — one SQLite DB<br/>25 tables")]
+  db[("D1 — one SQLite DB")]
 
   edge <-->|"env.DB binding"| db
   ci <-->|"REST API (pipeline/grabber/db.py)"| db
 ```
 
-**Why the Worker holds almost everything.** Watchers, ranking, drafting, alerts, the
-chat agent, memory, senses, money, initiative and the dashboard are all I/O-bound
+**Why the Worker holds almost everything.** The chat agent, **The System** (goals,
+quests, the daily reckoning), memory, senses, money, and the dashboard are all I/O-bound
 (network + DB + LLM calls). A Cloudflare Worker is always on, has zero cold-start cost,
 and gets the `AI` binding for free — so it is the natural home. See
 `worker/src/index.js` and every module it imports.
 
-**Why anything runs in GitHub Actions.** Only three jobs cannot live in a Worker
-(`pipeline/grabber/main.py:1`):
+**Why anything runs in GitHub Actions.** Only two jobs cannot live in a Worker
+(`pipeline/grabber/main.py:1`). (The old nightly IDF/calibration job was removed with the
+opportunity engine — see [05-the-system.md](./05-the-system.md).)
 
 | Job | Why it can't be a Worker |
 |-----|--------------------------|
-| **IDF recompute** | Tokenises the whole `postings` corpus and counts document frequency — more CPU than a Worker invocation gets. `pipeline/grabber/rank/idf.py` |
 | **Deep research** | Browses for 5–15 minutes with a headless Chromium; a Worker has no browser and short wall-clock limits. `pipeline/grabber/research/runner.py` |
 | **Gmail poll** | Speaks **IMAP**, which Workers cannot. `pipeline/grabber/gmail_imap.py` |
 
@@ -56,19 +55,18 @@ flowchart LR
   subgraph W["Worker"]
     w1["agent spawn_research tool<br/>INSERT research(status=queued)"]
     w2["classifyInbox<br/>reads emails WHERE surfaced=0"]
-    w3["runWatchers<br/>reads idf, writes postings/alerts"]
+    w3["runSystem<br/>issues quests, writes XP/streak"]
   end
   subgraph A["Actions"]
     a1["research runner<br/>reads research by id, writes report_md"]
     a2["gmail_imap<br/>writes emails(kind=unclassified)"]
-    a3["idf.recompute<br/>writes idf table"]
   end
   db[("D1")]
   w1 -->|"row id via GH dispatch"| a1
   a1 --> db
   w1 --> db
+  w3 --> db
   a2 --> db --> w2
-  a3 --> db --> w3
 ```
 
 Two access paths to the same DB:
@@ -103,9 +101,8 @@ flowchart TB
   subgraph scheduled["scheduled(event, env) — cron '0 * * * *'"]
     direction TB
     s1["runReminders"]
-    s2["runNags"]
-    s3["loop: senses · money · watchers · briefing · weekly · overnight"]
-    s1 --> s2 --> s3
+    s3["loop: senses · money · system (quests + reckoning)"]
+    s1 --> s3
   end
 ```
 
@@ -135,10 +132,10 @@ sequenceDiagram
   TG->>W: POST /telegram (X-Telegram-Bot-Api-Secret-Token)
   W->>W: verify secret == TG_WEBHOOK_SECRET (else 403)
   alt command "/..."
-    W->>DB: run the command query (stats/pending/applied/…)
+    W->>DB: run the command query (goals/quests/rank/…)
     W-->>TG: sendMessage(reply)
   else button tap (callback_query)
-    W->>DB: INSERT outcomes(alert_id, action)
+    W->>DB: resolveQuest(id, action) → XP / streak
     W-->>TG: edit buttons + answerCallbackQuery
   else voice / video
     W-->>TG: "🎧 listening…" placeholder
@@ -184,27 +181,23 @@ Order matters and is deliberate (`worker/src/index.js:862`):
 flowchart TB
   cron["scheduled() — top of every hour"]
   cron --> rem["runReminders — due reminders fire"]
-  rem --> nag["runNags — deadline escalation 7d/3d/1d"]
-  nag --> loop{"for each, isolated in try/catch"}
+  rem --> loop{"for each, isolated in try/catch"}
   loop --> senses["runSenses — classify mail, poll calendar"]
   loop --> money["processBankNotifications — bank alerts → transactions"]
-  loop --> watch["runWatchers — check channels, rank, alert"]
-  loop --> brief["runBriefing — 08 IST, only if worth it"]
-  loop --> weekly["runWeekly — Sun 19 IST"]
-  loop --> over["runOvernightResearch — 03 IST, picks its own question"]
+  loop --> sys["runSystem — 07 IST issue quests · 21 IST reckoning"]
 ```
 
-- **Failure isolation:** reminders and nags run first (they are cheap and must never be
-  starved), then the six initiative jobs run inside a `for` loop where **each is wrapped
-  so one failing never stops the others** (`worker/src/index.js:866-881`). Briefing runs
-  after senses/money/watchers because it *reports on* them.
-- **Self-gating by clock:** the cron fires hourly, but `runBriefing`/`runWeekly`/
-  `runOvernightResearch` each check the IST hour themselves and no-op unless it's their
-  time (`worker/src/briefing.js:160`, `:222`, `:292`). This is why there is only one
-  cron expression for many differently-timed jobs.
-- **Idempotency:** nags gate each escalation level with `alerts.nag_level`
-  (`worker/src/index.js:466`); briefings gate on a `state` row (`briefing_last = today`)
-  so re-firing the same hour does nothing.
+- **Failure isolation:** reminders run first (cheap, must never be starved), then the
+  jobs run inside a `for` loop where **each is wrapped so one failing never stops the
+  others** (`worker/src/index.js`). The System runs last so its reckoning sees the day's
+  senses and money already processed.
+- **Self-gating by clock:** the cron fires hourly, but `runSystem` checks the IST hour
+  itself and only issues quests at `ISSUE_HOUR=7` / holds the reckoning at
+  `DEBRIEF_HOUR=21` (`worker/src/system.js`). This is why one cron expression covers
+  differently-timed jobs.
+- **Idempotency:** The System gates on `state` rows (`system_last_issue` /
+  `system_last_debrief` = today's IST date) so re-firing the same hour does nothing. See
+  [05-the-system.md](./05-the-system.md).
 
 ## 1.6 Security and privacy boundaries
 
@@ -255,9 +248,9 @@ flowchart LR
 ```
 
 The primary LLM is Workers AI `@cf/openai/gpt-oss-120b` (~10k free neurons/day). Free-tier
-rate is the real budget, which is why the whole opportunity engine is built around
-*spending model calls sparingly*: a cheap non-LLM recall stage cuts candidates before any
-LLM read, and there is a hard 2-alerts/day cap (see [05-opportunity-engine.md](./05-opportunity-engine.md)).
+rate is the real budget, which is why The System spends model calls sparingly — a bounded
+handful of quests generated once a morning, one reckoning at night, and otherwise only when
+the owner is actually talking to it (see [05-the-system.md](./05-the-system.md)).
 
 ## 1.8 Deployment
 

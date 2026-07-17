@@ -31,8 +31,7 @@ flowchart TB
 ### Dashboard API (`/api/*`, all require `?t=DASH_TOKEN`, `handleApi` at `:551`)
 | Route | Method | Purpose |
 |-------|--------|---------|
-| `/api/alerts` | GET | Recent sent alerts + joined draft + outcomes. |
-| `/api/brain` | GET | The whole dashboard payload: memories, persona, chat, reminders, docs, summary, corpus-by-source, totals, watchers, research, life (accounts/holdings/spend/people/health/transactions), rarity, calibration, applications, merchants, briefing, perception, senses. |
+| `/api/brain` | GET | The whole dashboard payload: memories, persona, chat, reminders, docs, summary, research, life (accounts/holdings/spend/people/health/transactions), applications, merchants, perception, senses — plus **legacy** engine fields (watchers, rarity, calibration, alerts) that now return empty until the dashboard is reshaped. |
 | `/api/teach` | POST | Paste text → memory `extract` (doc 04). `{text, dry}`. |
 | `/api/persona` | POST | Set/reset the persona (doc 07). |
 | `/api/memory` | POST / DELETE | Add a fact / delete by `?id`. |
@@ -44,8 +43,9 @@ flowchart TB
 | `/api/perception` | GET | Cached read, or `?refresh=1` to regenerate. |
 | `/api/mail-status` | GET | What the IMAP job delivered + awaiting classification. |
 | `/api/tool` | GET | **Run one agent tool directly** — `?name=&args=<json>`. This is also what the CI research agent calls to borrow the Worker's IP for `web_search` (doc 06). |
-| `/api/cron` | GET | Manually trigger cron work — flags `?senses=1&watch=1&brief=1&weekly=1&force=1`. |
-| `/api/stats` | GET | Calibration + corpus size. |
+| `/api/cron` | GET | Manually trigger cron work — flags `?senses=1&system=1&issue=1&debrief=1&force=1` (`issue`/`debrief` force one half of The System). |
+| `/api/rank` | GET | The System's level/XP/streak + active goals. |
+| `/api/system` | GET | The dashboard **System tab** payload: `rank` (level/XP/streak), `goals` (with per-goal quest counts), `quests_today`, and `activity` (the work log, newest 60). |
 
 > **Security note:** `DASH_TOKEN` gates *both* the read dashboard and mutating endpoints
 > (`/api/teach`, `/api/memory`, `/api/persona`, `/api/cron`, `/api/tool`). It is a
@@ -59,11 +59,10 @@ Handled by `handleCommand` (`index.js:163`); non-owners are refused on everythin
 | Command | Shows |
 |---------|-------|
 | `/start` | Your `chat_id` (to set `TELEGRAM_CHAT_ID`) + help. |
-| `/stats` | applied/won/rejected, win rates, corpus size. |
-| `/pending` | alerted-but-not-acted, sorted by deadline. |
-| `/applied` | application log with 🏆/❌/⏳. |
+| `/goals` | active goals + per-goal quest progress. |
+| `/quests` | today's quests and their status. |
+| `/rank` | level, XP bar, and streak. |
 | `/memories` | what it knows about you + profile docs. |
-| `/watchers` | channels being watched, last check, hits. |
 | `/research` | recent deep dives + status. |
 | `/help` | capability overview. |
 
@@ -81,14 +80,10 @@ sequenceDiagram
   participant DB as D1
   participant TG as Telegram
   C->>DB: runReminders — due & un-notified → send, mark notified
-  C->>DB: runNags — deadline escalation (nag_level gates 7d/3d/1d)
   Note over C: then a try/catch-isolated loop:
   C->>DB: runSenses (mail classify + calendar)
   C->>DB: processBankNotifications (money)
-  C->>DB: runWatchers (opportunity engine, doc 05)
-  C->>TG: runBriefing (08 IST, if worth it)
-  C->>TG: runWeekly (Sun 19 IST)
-  C->>DB: runOvernightResearch (03 IST, dispatches to Actions)
+  C->>TG: runSystem — 07 IST issueDaily · 21 IST debrief (The System, doc 05)
 ```
 
 Each of the six looped jobs is wrapped so one failure logs and continues (`index.js:875`).
@@ -96,13 +91,11 @@ Reminders and nags run *before* the loop because they're cheap and must never be
 
 ## 8.4 GitHub Actions workflows
 
+Two workflows remain — the old `nightly.yml` (IDF + calibration) was removed with the
+opportunity engine.
+
 ```mermaid
 flowchart TB
-  subgraph nightly[".github/workflows/nightly.yml"]
-    n1["cron '47 21 * * *' (~03:15 IST) / manual"]
-    n1 --> n2["python -m grabber.main nightly"]
-    n2 --> n3["idf.recompute + calibrate.recompute"]
-  end
   subgraph email[".github/workflows/email.yml"]
     e1["cron '*/20 * * * *' / manual, concurrency=email cancel-in-progress"]
     e1 --> e2["python -m grabber.main email → gmail_imap.fetch"]
@@ -114,7 +107,6 @@ flowchart TB
   end
 ```
 
-- **nightly** — IDF + calibration. The only *scheduled* pipeline job; timeout 15 min.
 - **email** — every 20 min, `concurrency: {group: email, cancel-in-progress: true}` so
   slow runs don't stack. Passes `GMAIL_ADDRESS`/`GMAIL_APP_PASSWORD`.
 - **research** — event-driven (`repository_dispatch` from the Worker, or manual with a
@@ -122,8 +114,8 @@ flowchart TB
   proxy. Timeout 25 min. **Prints only progress + URLs**, never owner content (public
   logs).
 
-Entry point for all three: `python -m grabber.main <cmd>` (`pipeline/grabber/main.py:21`):
-`nightly` | `email` | `research <job_id>`.
+Entry point for both: `python -m grabber.main <cmd>` (`pipeline/grabber/main.py`):
+`email` | `research <job_id>`.
 
 ## 8.5 The LLM provider chain
 
@@ -166,7 +158,7 @@ flowchart TB
 | `DASH_TOKEN` | Worker secret + Actions | `/api/*` + research IP-borrow. |
 | `NOTIFY_SECRET` | Worker secret | `/ingest/notification` auth. |
 | `GH_TOKEN`, `GH_REPO` | Worker secret + `wrangler.toml` var | `spawn_research` dispatch. |
-| `GOOGLE_CSE_ID` / `GOOGLE_CSE_KEY` | var / secret | `web_search` + search watchers. |
+| `GOOGLE_CSE_ID` / `GOOGLE_CSE_KEY` | var / secret | `web_search` primary backend. |
 | `GMAIL_ADDRESS` / `GMAIL_APP_PASSWORD` | Actions var/secret | IMAP poll. |
 | `GOOGLE_CLIENT_ID/SECRET/REFRESH_TOKEN` | Worker secret | Calendar (optional). |
 | `GEMINI_API_KEY`, `GROQ_API_KEY`, `NVIDIA_API_KEY` | Actions secret | Pipeline LLM fallbacks. |
@@ -184,7 +176,9 @@ flowchart LR
   tool --> aidebug["/ai-debug — is the AI binding alive?"]
 ```
 
-- **Test a cron job now:** `GET /api/cron?t=…&watch=1&senses=1&brief=1&force=1`.
+- **Issue/debrief The System now:** `GET /api/cron?t=…&system=1&force=1` (or `&issue=1` /
+  `&debrief=1` for one half); `&senses=1` for mail/calendar.
+- **Check rank:** `GET /api/rank?t=…`.
 - **Test one agent tool:** `GET /api/tool?t=…&name=web_search&args={"query":"…"}`.
 - **Re-run a research job manually:** Actions → research → Run workflow → the `job_id`.
 - **Re-sync schema from prod:**

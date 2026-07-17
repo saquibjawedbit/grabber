@@ -3,6 +3,7 @@ import { LIFE_TOOLS } from "./life.js";
 import { extractJson, llm } from "./llm.js";
 import { CATEGORIES as MEMORY_CATEGORIES, embedMemory, extract, forgetMemory, recallMemories, saveMemory } from "./memory.js";
 import { getPersona, voiceBlock } from "./persona.js";
+import { SYSTEM_TOOLS, logActivity } from "./system.js";
 
 export { llm, embedMemory };
 
@@ -25,33 +26,6 @@ function stripHtml(html) {
 // ---------- Tools ----------
 
 export const TOOLS = {
-  search_corpus: {
-    desc: 'search all ingested postings. args: {"query": "1-3 short keywords"}',
-    run: async (env, args) => {
-      const tokens = String(args.query || "").split(/\s+/).filter(Boolean).slice(0, 4);
-      if (!tokens.length) return { error: "empty query" };
-      const where = tokens.map(() => "(title LIKE ? OR body LIKE ?)").join(" AND ");
-      const binds = tokens.flatMap(t => [`%${t}%`, `%${t}%`]);
-      const total = await env.DB.prepare(
-        `SELECT COUNT(*) AS n FROM postings WHERE ${where}`).bind(...binds).first();
-      const { results } = await env.DB.prepare(
-        `SELECT title, source, url, deadline, substr(body, 1, 150) AS snippet
-         FROM postings WHERE ${where} ORDER BY ingested_at DESC LIMIT 8`
-      ).bind(...binds).all();
-      return { total_matching: total.n, showing: results.length, results };
-    },
-  },
-
-  corpus_overview: {
-    desc: "posting counts per source plus total — the shape of what has been ingested. args: {}",
-    run: async (env) => {
-      const { results } = await env.DB.prepare(
-        "SELECT source, COUNT(*) AS n FROM postings GROUP BY source ORDER BY n DESC LIMIT 25").all();
-      const total = await env.DB.prepare("SELECT COUNT(*) AS n FROM postings").first();
-      return { total: total.n, by_source: results };
-    },
-  },
-
   web_search: {
     desc: 'search the live web for anything. args: {"query": "..."}',
     run: async (env, args) => {
@@ -134,71 +108,6 @@ export const TOOLS = {
     },
   },
 
-  get_stats: {
-    desc: "application tracker numbers: applied/won/rejected counts, per-category rates, corpus size. args: {}",
-    run: async (env) => {
-      const totals = await env.DB.prepare(`
-        SELECT
-          (SELECT COUNT(*) FROM postings) AS corpus,
-          (SELECT COUNT(*) FROM alerts WHERE sent_at IS NOT NULL) AS alerted,
-          (SELECT COUNT(DISTINCT alert_id) FROM outcomes WHERE action = 'applied') AS applied,
-          (SELECT COUNT(DISTINCT alert_id) FROM outcomes WHERE action = 'won') AS won,
-          (SELECT COUNT(DISTINCT alert_id) FROM outcomes WHERE action = 'rejected') AS rejected`).first();
-      const { results: byCategory } = await env.DB.prepare("SELECT * FROM calibration").all();
-      return { totals, byCategory };
-    },
-  },
-
-  get_pending: {
-    desc: "alerts the owner has not applied to or skipped yet, with deadlines. args: {}",
-    run: async (env) => {
-      const { results } = await env.DB.prepare(`
-        SELECT a.id AS alert_id, p.title, p.url, p.deadline
-        FROM alerts a JOIN postings p ON p.id = a.posting_id
-        WHERE a.sent_at IS NOT NULL
-          AND NOT EXISTS (SELECT 1 FROM outcomes o
-                          WHERE o.alert_id = a.id AND o.action IN ('applied','skipped'))
-        ORDER BY CASE WHEN p.deadline IS NULL OR p.deadline = '' THEN 1 ELSE 0 END,
-                 date(p.deadline) LIMIT 12`).all();
-      return { count: results.length, results };
-    },
-  },
-
-  get_draft: {
-    desc: 'read a prepared application draft. args: {"alert_id": <number>} or {} to list drafts',
-    run: async (env, args) => {
-      if (args.alert_id) {
-        const row = await env.DB.prepare(
-          "SELECT content_md FROM drafts WHERE alert_id = ?").bind(Number(args.alert_id)).first();
-        return row ? { draft: row.content_md.slice(0, 2500) } : { error: "no draft for that alert_id" };
-      }
-      const { results } = await env.DB.prepare(`
-        SELECT d.alert_id, p.title FROM drafts d
-        JOIN alerts a ON a.id = d.alert_id JOIN postings p ON p.id = a.posting_id
-        ORDER BY d.created_at DESC LIMIT 10`).all();
-      return { drafts: results };
-    },
-  },
-
-  redraft: {
-    desc: 'rewrite a draft per instruction. args: {"alert_id": <number>, "instruction": "what to change"}',
-    run: async (env, args) => {
-      const row = await env.DB.prepare(`
-        SELECT d.content_md, p.title, substr(p.body, 1, 2000) AS body
-        FROM drafts d JOIN alerts a ON a.id = d.alert_id JOIN postings p ON p.id = a.posting_id
-        WHERE d.alert_id = ?`).bind(Number(args.alert_id)).first();
-      if (!row) return { error: "no draft for that alert_id" };
-      const { text: rewritten } = await llm(env,
-        `Rewrite this application draft. Instruction from the owner: ${args.instruction}\n\n` +
-        `Opportunity: ${row.title}\n${row.body}\n\nCurrent draft:\n${row.content_md}\n\n` +
-        `Return ONLY the full rewritten draft in the same markdown structure.`);
-      if (!rewritten.trim()) return { error: "rewrite came back empty" };
-      await env.DB.prepare("UPDATE drafts SET content_md = ? WHERE alert_id = ?")
-        .bind(rewritten, Number(args.alert_id)).run();
-      return { ok: true, preview: rewritten.slice(0, 400) };
-    },
-  },
-
   read_profile: {
     desc: 'read the owner\'s profile documents (bio, resume, notes they sent). args: {} to list, {"key": "..."} to read one',
     run: async (env, args) => {
@@ -260,54 +169,6 @@ export const TOOLS = {
     },
   },
 
-  // --- Watchers: the owner names a channel worth watching; nothing else gets crawled ---
-
-  add_watcher: {
-    desc: 'watch a channel for opportunities. args: {"kind": "x|rss|page|search", "target": "handle | feed url | page url | search query", "note": "why it matters"}',
-    run: async (env, args) => {
-      const kind = String(args.kind || "").toLowerCase();
-      if (!["x", "rss", "page", "search"].includes(kind)) {
-        return { error: 'kind must be one of: x (an X/Twitter handle), rss (feed url), page (url to diff), search (query)' };
-      }
-      let target = String(args.target || "").trim();
-      if (!target) return { error: "empty target" };
-      if (kind === "x") target = target.replace(/^@/, "").replace(/^https?:\/\/(x|twitter)\.com\//i, "");
-      if ((kind === "rss" || kind === "page") && !/^https?:\/\//.test(target)) {
-        return { error: `${kind} watchers need a full http(s) url` };
-      }
-      if (kind === "search" && !env.GOOGLE_CSE_KEY) {
-        return { error: "search watchers need GOOGLE_CSE_KEY set — the owner hasn't provided it yet. Suggest an x/rss/page watcher instead." };
-      }
-      try {
-        const row = await env.DB.prepare(
-          "INSERT INTO watchers (kind, target, note, created_at) VALUES (?,?,?,?) RETURNING id")
-          .bind(kind, target.slice(0, 300), String(args.note || "").slice(0, 200),
-                new Date().toISOString()).first();
-        return { ok: true, id: row.id, checked: "hourly", note: "I'll only interrupt if something clears the bar." };
-      } catch (e) {
-        return /UNIQUE/.test(String(e)) ? { error: "already watching that" } : { error: String(e).slice(0, 150) };
-      }
-    },
-  },
-
-  list_watchers: {
-    desc: "what is being watched, with last check and hit counts. args: {}",
-    run: async (env) => {
-      const { results } = await env.DB.prepare(
-        "SELECT id, kind, target, note, last_checked, last_error, hits, active FROM watchers ORDER BY id").all();
-      return { count: results.length, watchers: results };
-    },
-  },
-
-  remove_watcher: {
-    desc: 'stop watching something. args: {"id": <number>}',
-    run: async (env, args) => {
-      if (!args.id) return { error: "need the watcher id" };
-      const r = await env.DB.prepare("DELETE FROM watchers WHERE id = ?").bind(Number(args.id)).run();
-      return r.meta.changes ? { ok: true } : { error: "no watcher with that id" };
-    },
-  },
-
   // --- Deep research: hand the question to an agent with a real machine ---
 
   spawn_research: {
@@ -345,6 +206,11 @@ export const TOOLS = {
           .bind(`dispatch ${r.status}: ${body.slice(0, 150)}`, row.id).run();
         return { error: `could not launch the agent (${r.status})` };
       }
+      await logActivity(env, {
+        kind: "research",
+        summary: `Started deep research: ${question.slice(0, 140)}`,
+        detail: `depth ${depth} · running on a real machine (~5-15 min)`,
+      });
       return {
         ok: true, job_id: row.id, depth,
         note: "Agent is on a real machine now. Tell the owner it'll take ~5-15 min and you'll ping them — do NOT wait for it.",
@@ -439,39 +305,18 @@ export const TOOLS = {
     },
   },
 
-  configure_briefing: {
-    desc: 'change the morning briefing. args: {"enabled": true|false, "hour_ist": 8}',
-    run: async (env, args) => {
-      const set = async (k, v) => env.DB.prepare(
-        `INSERT INTO state (key, value, updated_at) VALUES (?,?,?)
-         ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`)
-        .bind(k, String(v), new Date().toISOString()).run();
-      if (args.enabled !== undefined) await set("briefing_enabled", args.enabled ? "1" : "0");
-      if (args.hour_ist !== undefined) {
-        const h = Number(args.hour_ist);
-        if (!Number.isInteger(h) || h < 0 || h > 23) return { error: "hour_ist must be 0-23" };
-        await set("briefing_hour", h);
-      }
-      const en = await env.DB.prepare("SELECT value FROM state WHERE key='briefing_enabled'").first();
-      const hr = await env.DB.prepare("SELECT value FROM state WHERE key='briefing_hour'").first();
-      return { ok: true, enabled: en?.value !== "0", hour_ist: Number(hr?.value || 8),
-               note: "I only send it when there's something worth interrupting you for." };
-    },
-  },
-
+  ...SYSTEM_TOOLS,
   ...APPLY_TOOLS,
   ...LIFE_TOOLS,
 };
 
 // The tool list is long enough now that a flat dump reads as noise. Group it so the
 // model can find the right shelf before the right tool.
+// Most tools now carry their own `group` (SYSTEM_TOOLS, APPLY_TOOLS, LIFE_TOOLS); this
+// covers the rest defined inline above.
 const TOOL_GROUPS = {
-  search_corpus: "Opportunities", corpus_overview: "Opportunities", get_pending: "Opportunities",
-  get_stats: "Opportunities", get_draft: "Opportunities", redraft: "Opportunities",
-  add_watcher: "Opportunities", list_watchers: "Opportunities", remove_watcher: "Opportunities",
   web_search: "Web & research", web_fetch: "Web & research",
   spawn_research: "Web & research", get_research: "Web & research",
-  draft_application: "Applications", get_application: "Applications", set_application_status: "Applications",
   save_memory: "Memory", forget_memory: "Memory", read_profile: "Memory",
   set_reminder: "Reminders", list_reminders: "Reminders", cancel_reminder: "Reminders",
   get_calendar: "Senses", search_email: "Senses", search_notifications: "Senses",
@@ -500,7 +345,8 @@ async function context(env, userText) {
     env.DB.prepare("SELECT key FROM profile WHERE key NOT IN ('bio','conversation_summary') ORDER BY key LIMIT 30").all(),
     env.DB.prepare(`SELECT
         (SELECT COUNT(*) FROM memories) AS memories,
-        (SELECT COUNT(*) FROM watchers WHERE active = 1) AS watchers,
+        (SELECT COUNT(*) FROM goals WHERE status = 'active') AS active_goals,
+        (SELECT COUNT(*) FROM quests WHERE status IN ('issued','doing')) AS open_quests,
         (SELECT COUNT(*) FROM research WHERE status IN ('queued','running')) AS research_running`).first(),
     getPersona(env),
   ]);
@@ -534,7 +380,7 @@ function buildPrompt(ctx, userText, transcript, mustReply) {
   const tools = toolList();
   const nowUtc = new Date().toISOString().slice(0, 16) + "Z";
   const local = localNow();
-  return `You are ${ctx.persona.name}, the personal AI agent of exactly one owner, living in their Telegram. You handle anything they need: answer questions, research the web, track their applications, set reminders, remember their life. Your standing mission behind it all: find, research, and win opportunities (jobs, internships, hackathons, fellowships, grants, contracts) for them.${ctx.persona.custom ? "" : " Be concise and direct — short paragraphs, no corporate fluff, no markdown headers."}
+  return `You are ${ctx.persona.name}, the personal agent of exactly one owner, living in their Telegram. You are their strict mentor, and you run a quest System. Your ONE standing motive behind everything: drive the owner to achieve their declared goals — no matter what. You issue quests, hold them accountable, get things done for them (research, applications, reminders), and refuse to let goals quietly die. You also handle anything else they need: answer questions, research the web, remember their life, track their money, body and people — but always in service of moving them forward.
 ${voiceBlock(ctx.persona)}
 Right now it is ${local.text} where the owner is (today's date for them is ${local.iso}). In UTC that is ${nowUtc}.
 Always reason about days and weekdays from THEIR local date above — never from the UTC date, which is often the previous day. When they say a weekday, count forward from ${local.text.split(" ")[0]}; "Friday" means the next Friday on or after today, never simply tomorrow.
@@ -545,7 +391,7 @@ ${ctx.bio || "(no bio yet)"}
 Memories relevant to this message${ctx.counts.memories > ctx.recalled ? ` (${ctx.recalled} recalled of ${ctx.counts.memories} you hold — ask and you'll recall others)` : ""}:
 ${ctx.memories || "(no memories saved yet — when the owner tells you about themselves, save_memory it)"}
 ${ctx.docs ? `Profile documents you can read_profile: ${ctx.docs}` : "(no profile documents yet — the owner can send any text/markdown file in this chat and you'll keep it)"}
-Currently watching ${ctx.counts.watchers} channel(s); ${ctx.counts.research_running} research job(s) in flight.
+Driving ${ctx.counts.active_goals} active goal(s); ${ctx.counts.open_quests} quest(s) open; ${ctx.counts.research_running} research job(s) in flight.
 
 ## Summary of older conversation
 ${ctx.summary || "(none yet)"}
@@ -557,18 +403,20 @@ ${ctx.history || "(none)"}
 ${tools}
 
 ## Rules
-- Every exchange is swept for durable facts after you reply, so you do NOT need to spend a step saving what the owner just told you — it is already being kept. Use save_memory only when the owner explicitly asks you to remember something, or for a fact you derived that the sweep could not see from the text alone.
-- Saved memories also steer the opportunity-ranking pipeline (recall terms + rank context) — the more the owner tells you about their skills and goals, the better their alerts get. Encourage it when natural.
+- GOALS ARE EVERYTHING. If the owner has no active goals, your first job is to pull them out — what are they trying to become, by when? — and set_goal them. Do not let a conversation drift without tying it back to a goal. Vague intentions ("I should get fit") become concrete goals with a target and a deadline, or they don't count.
+- Turn goals into action. When it moves a goal forward, add_quest a concrete, done-tonight task rather than just talking about it. Quests are issued automatically each morning and reckoned each night; you can also set or resolve them on demand. Push — never accept "I'll do it later" without a quest and a time.
+- Be a strict mentor, not a cheerleader. When the owner is slipping — a broken streak, a failed quest, a goal going quiet — say it plainly and demand better. Never flatter. Never soften a real number. Encouragement is earned by results.
+- Every exchange is swept for durable facts after you reply, so you do NOT need to spend a step saving what the owner just told you — it is already being kept. Use save_memory only when the owner explicitly asks you to remember something, or for a derived fact the sweep couldn't see from the text alone.
+- The more the owner tells you about their skills and goals, the sharper your quests get — encourage it when natural.
 - If a new fact contradicts or supersedes a memory, forget_memory the old id, then save the new one.
 - Reminder due_at must be UTC ISO — subtract 5:30 from Indian times.
-- For questions about current events, prices, or anything outside your corpus, use web_search / web_fetch rather than guessing.
+- For current events, prices, or anything you don't know, use web_search / web_fetch rather than guessing.
 - Quick lookup vs deep dig: web_search/web_fetch answer in seconds and you reply now. spawn_research is for questions worth 10 minutes of an agent's time (interview processes, background on a person or company, "should I do X"). After spawning, reply immediately saying it's running — never wait for it.
-- You have no scraper. Opportunities reach you only through channels the owner asked you to watch, so when they mention someone or something worth following, offer to add_watcher it.
-- Applying is the owner's bottleneck — they find opportunities but don't apply. So whenever they mention, paste, or link a specific job/fellowship/role, proactively offer to draft_application for it. When you do, tell them the honest fit first, then the cover note; if fit is low, say so plainly rather than cheerlead. Point them to the dashboard for the full pack.
+- Get things done FOR them. When they mention or link a specific job/fellowship/role, proactively draft_application for it — that is you removing a barrier to a goal. Give the honest fit first; if it's low, say so plainly rather than cheerlead.
 - You have senses: their calendar, recruiter mail, and allowlisted phone notifications. Check them before asking the owner something you could look up (get_calendar, search_email, search_notifications).
 - You hold their money, body and people. Look things up rather than asking — but never invent a number. If nothing is on file, say so and offer to record it.
 - When the owner states a balance, an investment, a debt, a weight, or a detail about a person, PERSIST it first (set_account, set_holding, log_health, remember_person, log_transaction) and only then reply. Doing the arithmetic in your head and moving on loses the data forever.
-- NEVER say you saved, recorded, scheduled or watched something unless a tool call actually returned ok. If you only worked it out in your head, say exactly that. A false "I've recorded it" is worse than admitting you didn't.
+- NEVER say you saved, recorded, scheduled, set a quest, or did anything unless a tool call actually returned ok. A false "done" is worse than admitting you didn't.
 - When they mention a person by name, log_interaction. Relationships go cold through inattention, not intent, and you are the one keeping count.
 
 ## Protocol

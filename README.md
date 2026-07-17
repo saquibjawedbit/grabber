@@ -1,5 +1,17 @@
 # grabber
 
+> ⚠️ **Direction change (2026-07-18): grabber is now _The System_.**
+> It is being reshaped from a passive opportunity-finder into a **strict mentor** (in the
+> *Solo Leveling* sense) whose one motive is to drive the owner to their declared **goals**
+> — issuing daily **quests**, holding a nightly reckoning, penalising failure, and leveling
+> them up. The job-board "opportunity engine" (watchers, IDF ranking, board alerts,
+> calibration, the nightly pipeline) has been **removed**. The current, accurate
+> architecture lives in **[`docs/`](./docs/)** — start with
+> [`docs/05-the-system.md`](./docs/05-the-system.md). **The product story below is legacy
+> and pending rewrite.**
+
+---
+
 An agent that measures itself in **applications submitted**, not opportunities found.
 It scrapes obscure channels, measures rarity instead of asserting it, has an LLM read
 the survivors, arrives with the essay already drafted — and logs every prediction and

@@ -1,11 +1,11 @@
 # 7. Senses, Life, and Initiative
 
-Three layers that turn the job bot into a personal agent: **senses** (things it learns
-without being told), **life** (money/body/people it holds for the owner), and
-**initiative** (it speaks first — briefings, weekly reviews, overnight research). Plus the
-two things that shape *how* it speaks: **persona** and **perception**.
+Three layers around The System: **senses** (things it learns without being told), **life**
+(money/body/people it holds for the owner), and **initiative** — which is now The System's
+quest loop (§7.3). Plus the two things that shape *how* the mentor speaks: **persona** and
+**perception**.
 
-Files: `worker/src/senses.js`, `worker/src/life.js`, `worker/src/briefing.js`,
+Files: `worker/src/senses.js`, `worker/src/life.js`, `worker/src/system.js`,
 `worker/src/persona.js`, `worker/src/perception.js`. Setup guide: [`senses.md`](./senses.md).
 
 ## 7.1 Senses — input without asking
@@ -94,66 +94,58 @@ flowchart TB
 The agent's rules bind these together: **persist a stated number before replying**, never
 invent a figure, and `log_interaction` whenever a person is named (`agent.js:569-572`).
 
-## 7.3 Initiative — the agent speaks first
+## 7.3 Initiative — now The System
 
-Phase 6. Governed entirely by principle 7: **a scheduled message is still an
-interruption, so it only goes out if it changes what the owner would do today.** All three
-jobs run on the hourly cron but self-gate on the IST clock.
+Initiative used to be a *briefing/weekly/overnight* trio governed by "silence is the
+product" — it interrupted **rarely**. The System **inverts** that: a strict mentor pushes
+**daily**. The old `briefing.js` is gone; initiative is now the quest loop in
+`system.js` — morning issuance and a nightly reckoning — fully documented in
+[05-the-system.md](./05-the-system.md).
 
 ```mermaid
 flowchart TB
-  cron["hourly cron"] --> b{"08 IST & not sent today?"}
-  b -->|yes| brief["runBriefing"]
-  cron --> w{"Sun 19 IST & not sent?"}
-  w -->|yes| weekly["runWeekly"]
-  cron --> o{"03 IST & not run?"}
-  o -->|yes| over["runOvernightResearch"]
-  brief --> facts["collectFacts() — ALL numbers from SQL"]
-  facts --> worth{"worthSending()?"}
-  worth -->|no| silent["set briefing_last, send nothing"]
-  worth -->|yes| llm["LLM writes prose AROUND the facts"]
+  cron["hourly cron → runSystem()"] --> i{"07 IST & not issued today?"}
+  i -->|yes| issue["issueDaily — generate & send quests (or Awakening)"]
+  cron --> d{"21 IST & not done today?"}
+  d -->|yes| reck["debrief — unresolved = failed, roll streak, honest reckoning"]
 ```
 
-### The iron rule: numbers come from SQL, never the model
-`collectFacts` (`briefing.js:53`) gathers deadlines, today's events/reminders, overnight
-research, cold threads, spend anomalies and weight — **all via SQL**. The model is handed
-these facts and only writes the sentence around them; it is never asked what the numbers
-are (`briefing.js:6-8`, `:147`). Anomalies are *measured* (spend jump ≥25%, apply drought
-≥10 days), never inferred.
+What carried over from the old design:
 
-### Silence is enforced, even under `force`
-`worthSending` (`briefing.js:136`) returns false when there's nothing material, and
-`runBriefing` sets `briefing_last` and sends nothing — a briefing that says "nothing to
-report" is pure noise. `force` skips the clock check but **never** the silence rule
-(`briefing.js:171`).
+- **Numbers come from SQL, never the model.** The nightly `debrief` computes every figure
+  (done/failed/streak/level) in code and only asks the LLM to write the sentence around
+  them — the same discipline the old briefing used.
+- **Self-gating + once-a-day idempotency** via `state` date rows
+  (`system_last_issue`/`system_last_debrief`).
 
-### Overnight research picks its own question
-`runOvernightResearch` (`briefing.js:292`) at 03 IST: if it knows ≥3 goal/skill/project/
-identity memories, it asks the LLM to pick the single most valuable concrete question
-(avoiding already-researched ones and drawing on watched channels), then calls
-`spawn_research` — the same dispatch path as doc 06. Without enough known about the owner,
-a self-directed question is "a guess dressed as initiative", so it skips.
+What deliberately changed: the **"only speak if it changes the owner's day" gate is gone**
+for the daily quest issue — the daily push *is* the point. The mentor is relentless (one
+quest set + one reckoning), not silent. (Overnight self-directed research is not part of
+this spine; it can be re-added to `system.js` later.)
 
 ## 7.4 Persona — one voice everywhere
 
 `persona.js`: a single `state.persona` row (name + voice) read by **every** prompt that
-speaks to the owner — chat, briefing, weekly, overnight, perception — so the voice is
-consistent instead of five hardcoded ones.
+speaks to the owner — chat, quest generation, the reckoning, perception — so the voice is
+consistent. The **default persona is now The System**: a cold, imperative strict mentor
+(`DEFAULT_PERSONA`). `voiceBlock` was changed to **always** inject the voice (it used to
+emit only for a custom persona) — otherwise the new default voice would never reach the
+prompts.
 
 ```mermaid
 flowchart LR
-  row[("state.persona")] --> get["getPersona()"]
-  get --> vb["voiceBlock() injected into prompts"]
+  row[("state.persona")] --> get["getPersona() — default: The System"]
+  get --> vb["voiceBlock() — always injected now"]
   vb --> guard["'voice is styling, never conduct — rules below win on facts'"]
 ```
 
-The header of `persona.js:1-17` records a **measured** boundary: a persona explicitly
-ordered to invent numbers still answered "0 applications" (facts held), **but** a
-flattering voice made it *soft* — it once closed with "watch the offers roll in!" and
-rewrote a perception to drop "he hasn't applied to anything yet." Conclusion: voice can't
-make it lie, but it can make it soft — which is why perception ignores the voice (next
-section). Owner input is sanitised (braces/backticks stripped) because the agent parses
-replies as one JSON object (`clean`, `:74`).
+The header of `persona.js` records a **measured** boundary: a persona explicitly ordered to
+invent numbers still answered "0 applications" (facts held), **but** a flattering voice
+made it *soft* — it once rewrote a perception to drop "he hasn't applied to anything yet."
+Conclusion: voice can't make it lie, but it can make it soft. For The System that boundary
+is a feature — a strict voice that still can't fake XP or a failed quest — and it's why
+perception ignores the voice (next section). Owner input is sanitised (braces/backticks
+stripped) because the agent parses replies as one JSON object (`clean`).
 
 ## 7.5 Perception — "How I see you"
 
@@ -170,7 +162,10 @@ flowchart TB
 
 Honesty is enforced by **structure**: the model must split what it KNOWS (backed by rows)
 from what it INFERS from what it DOESN'T know, and with a thin brain the only honest output
-is "I barely know you" (`perception.js:1-9`). It deliberately uses the persona's name but
+is "I barely know you" (`perception.js`). It deliberately uses the persona's name but
 **ignores its voice** — "what do you actually think of me" is worthless if the person
-asking picked the tone of the answer (`perception.js:62-66`). It's told to surface the one
-pattern the whole product exists for: opportunities alerted vs applications actually sent.
+asking picked the tone of the answer.
+
+> Note: `perception.js` still gathers the old alerted-vs-applied counts (from the now-inert
+> engine tables). It's the natural place to surface The System's real accountability signal
+> — goals set vs quests actually cleared, streaks kept vs broken — in the next pass.

@@ -83,7 +83,7 @@ flowchart TB
     c3["profile 'bio'"]
     c4["profile 'conversation_summary'"]
     c5["profile doc keys (list)"]
-    c6["counts: memories / watchers / research_running"]
+    c6["counts: memories / active_goals / open_quests / research_running"]
     c7["getPersona()"]
   end
   context --> prompt["buildPrompt"]
@@ -105,9 +105,12 @@ Notable prompt construction details:
 
 ## 3.4 The rules that constrain behaviour
 
-The prompt's `## Rules` block (`agent.js:559-572`) encodes the product's hard-won
-invariants. The ones that shape architecture:
+The prompt's `## Rules` block (`agent.js`) encodes the product's hard-won invariants. The
+ones that shape architecture:
 
+- **Goals are everything.** With no active goals, the agent's first job is to extract them
+  and `set_goal` them; it turns goal-moving intent into concrete `add_quest`s and pushes as
+  a strict mentor rather than a cheerleader (see [05-the-system.md](./05-the-system.md)).
 - **Don't spend a step saving memory** — every exchange is swept afterwards
   (see [04-memory.md](./04-memory.md)), so `save_memory` is only for explicit requests or
   derived facts the sweep can't see. This is the v3→v4 fix (§3.7).
@@ -123,15 +126,15 @@ invariants. The ones that shape architecture:
 
 ## 3.5 The tool catalog
 
-Tools are a flat map `TOOLS` (`agent.js:27`), extended with `...APPLY_TOOLS`
-(`apply.js`) and `...LIFE_TOOLS` (`life.js`), then **grouped** for the prompt via
-`TOOL_GROUPS` + `toolList()` (`agent.js:468`) so the model finds the right shelf first.
+Tools are a flat map `TOOLS` (`agent.js`), extended with `...SYSTEM_TOOLS` (`system.js`),
+`...APPLY_TOOLS` (`apply.js`) and `...LIFE_TOOLS` (`life.js`), then **grouped** for the
+prompt via each tool's `group` + `toolList()` so the model finds the right shelf first.
 
 ```mermaid
 flowchart LR
-  subgraph opp["Opportunities"]
-    search_corpus; corpus_overview; get_pending; get_stats; get_draft; redraft
-    add_watcher; list_watchers; remove_watcher
+  subgraph gq["Goals & Quests"]
+    set_goal; list_goals; update_goal; drop_goal
+    add_quest; list_quests; complete_quest; get_rank
   end
   subgraph web["Web & research"]
     web_search; web_fetch; spawn_research; get_research
