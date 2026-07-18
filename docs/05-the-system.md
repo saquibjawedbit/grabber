@@ -64,7 +64,8 @@ stateDiagram-v2
   skipped --> [*]
 ```
 
-XP by kind (`system.js`): daily **+10**, milestone **+30**, urgent **+15**; a failure is
+XP by kind (`system.js`): daily **+10**, milestone **+30**, urgent **+15**, side **+5**
+(a small supporting action — prep, habit, recovery — that makes the main quests easier); a failure is
 **−5** (`FAIL_PENALTY`). `resolveQuest(id, action)` is the single choke-point that writes
 status and moves XP; only `done`/`failed` change XP, `doing` just keeps the quest open.
 
@@ -78,11 +79,14 @@ reckoning broke, using the pre-reckoning value `debrief` stashes in `state.strea
 `streak_prev_date`.
 
 ### Generation
-`generateDailyQuests` (`system.js`) hands the LLM the active goals, recent quests (to
-avoid repeats), and the owner profile (bio + skills + goal/skill/project memories), and
-asks for **≤ `MAX_DAILY_QUESTS` (4)** concrete quests as JSON. Each becomes an `issued`
-row. The prompt demands checkable-tonight actions, not busywork, and allows skipping a
-goal that has no sensible step today.
+`generateDailyQuests` (`system.js`) hands the LLM the active goals — each with its current
+milestone **and that milestone's planned `steps`** — recent quests (to avoid repeats; steps
+already covered by past quests count as done), and the owner profile, and asks for
+**≤ `MAX_DAILY_QUESTS` (4)** concrete quests as JSON. Main quests are issued from the
+milestone's **next unfinished steps** (resized to fit one day), and the model may add one
+`side` quest — a low-stakes supporting action (+5 XP) that makes the main quests easier.
+Each becomes an `issued` row. The prompt demands checkable-tonight actions, not busywork,
+and allows skipping a goal that has no sensible step today.
 
 ## 5.4 Issuance & the reckoning
 
@@ -195,12 +199,17 @@ persistent, time-aware plan it drives. Four capabilities, all in `system.js`:
 - **Persistent roadmap** — `planGoal()` decomposes a goal into 3–6 ordered `milestones`
   with `target_date`s across the runway (runs once on goal-create, lazily at issuance, or
   via `replan_goal`). The planner (and `adaptPlan`) reasons over `goalContext(env, goal)`:
-  the static owner profile **plus** memories recalled by embedding against the goal's
-  title/target/why — so it plans from where the owner actually is (it knows they own a
-  Yamaha Pacifica; it won't tell them to buy a guitar). `generateDailyQuests` targets each
-  goal's **active** milestone; clearing its quests auto-advances the milestone
-  (`advanceMilestones`). `createGoal` dedups on active title (case-insensitive) so the
-  agent re-hearing a goal in chat can't create a second active copy.
+  the static owner profile, **plus** memories recalled by embedding against the goal's
+  title/target/why, **plus the latest measured numbers** from the `health` and `metrics`
+  logs — so it plans from where the owner actually is (it knows they own a Yamaha Pacifica
+  and weigh what their last log says; it won't tell them to buy a guitar or "gain weight"
+  in the abstract). The prompts enforce **specificity**: every milestone measurable and
+  concrete (exact numbers/named things, no abstract labels), and each carries `steps` —
+  3-6 concrete day-sized actions (stored as JSON, migration 006) that are the raw material
+  for daily quests. `generateDailyQuests` issues from the **active** milestone's next
+  unfinished steps; clearing its quests auto-advances the milestone (`advanceMilestones`).
+  `createGoal` dedups on active title (case-insensitive) so the agent re-hearing a goal in
+  chat can't create a second active copy.
 - **Goal-level progress** — `computeProgress` writes `goals.progress` = (done milestones +
   active-milestone quest ratio) / total; `paceOf` compares it to runway elapsed →
   `ahead / on-track / behind / at-risk` + a projected completion date. Pure SQL + arithmetic.
@@ -230,7 +239,9 @@ so the triggers never re-tune a freshly-tuned plan, and logs `plan_adapt` with i
 
 **The Plans tab** is a consolidated widget: each goal as a horizontal **timeline** (milestone
 dots positioned by target date, a progress fill vs a "today" marker so drift is visible),
-progress %, pace chip, projected date, the milestone list, and Adapt / Re-plan buttons.
+progress %, pace chip, projected date, the milestone list — the **active milestone's steps
+shown open** (today's marching orders), other milestones' steps collapsed behind an
+"N steps" fold — and Adapt / Re-plan buttons.
 
 **Metrics & trends.** Two logs feed the dashboard's charts. **Body/habit** numbers (weight,
 waist, sleep, runs, workouts) go to `log_health` (the `health` table) and chart on the

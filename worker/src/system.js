@@ -21,8 +21,9 @@ const AUTONOMY_BUDGET = 3;  // max self-directed actions per day
 const DAILY_XP = 10, MILESTONE_XP = 30, URGENT_XP = 15, FAIL_PENALTY = 5;
 const MAX_DAILY_QUESTS = 4;
 
-export const QUEST_KINDS = ["daily", "milestone", "urgent"];
-const XP_BY_KIND = { daily: DAILY_XP, milestone: MILESTONE_XP, urgent: URGENT_XP };
+export const QUEST_KINDS = ["daily", "milestone", "urgent", "side"];
+const SIDE_XP = 5;   // side quests: small supporting actions, low stakes
+const XP_BY_KIND = { daily: DAILY_XP, milestone: MILESTONE_XP, urgent: URGENT_XP, side: SIDE_XP };
 
 const esc = s => String(s ?? "").replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
 
@@ -207,11 +208,21 @@ export function paceOf(goal) {
 
 // ---------- Milestones: the persistent roadmap ----------
 
+// Steps are stored as a JSON array; malformed model output degrades to no steps, never a throw.
+function packSteps(steps) {
+  if (!Array.isArray(steps)) return null;
+  const clean = steps.map(s => String(s).trim().slice(0, 200)).filter(Boolean).slice(0, 8);
+  return clean.length ? JSON.stringify(clean) : null;
+}
+function unpackSteps(raw) {
+  try { const v = JSON.parse(raw); return Array.isArray(v) ? v : []; } catch { return []; }
+}
+
 export async function listMilestones(env, goalId) {
   const { results } = await env.DB.prepare(
-    "SELECT id, goal_id, seq, title, done_when, target_date, status, done_at FROM milestones WHERE goal_id = ? ORDER BY seq")
+    "SELECT id, goal_id, seq, title, done_when, steps, target_date, status, done_at FROM milestones WHERE goal_id = ? ORDER BY seq")
     .bind(goalId).all();
-  return results;
+  return results.map(m => ({ ...m, steps: unpackSteps(m.steps) }));
 }
 async function activeMilestone(env, goalId) {
   return env.DB.prepare(
@@ -252,16 +263,26 @@ ${goal.title}${goal.target ? `\nTarget: ${goal.target}` : ""}${goal.why ? `\nWhy
 ## What the System knows about the owner
 ${profile}
 
-Break this into an ORDERED route of 3-6 concrete milestones — the real checkpoints between here
-and done, each with a clear definition of done. The first must be startable this week. Space the
-target dates across the runway${goal.deadline ? " up to the deadline" : " (assume ~8-12 weeks)"}.
-Plan for THIS person, starting from where they actually are: build on what the context shows
-they already own, know, and have done. NEVER include a step the context already covers — do not
-tell them to buy gear they own or learn what they know. No generic filler.
+Break this into an ORDERED route of 3-6 milestones — the real checkpoints between here and
+done. The first must be startable this week. Space the target dates across the runway${goal.deadline ? " up to the deadline" : " (assume ~8-12 weeks)"}.
+
+SPECIFICITY RULES — a plan the owner can act on today, not a syllabus:
+- Every milestone is MEASURABLE and CONCRETE: exact numbers, named things (the actual food,
+  song, exercise, tech, channel, customer count), computed from their real current numbers
+  in the context — never abstract labels like "optimization cycle" or "build momentum".
+- Each milestone carries "steps": 3-6 concrete actions, each finishable in ONE day or less,
+  that together complete the milestone. Steps become the owner's daily quests — write them
+  as imperative, checkable actions with numbers ("eat 2,600 kcal: add a 4th meal — 2 eggs +
+  2 rotis + milk", not "improve nutrition").
+- Fit the steps to their real life from the context: their schedule, job, gear, skills.
+- Plan from where they actually are: build on what they own, know, and have done. NEVER
+  include a step the context already covers — don't tell them to buy gear they own or learn
+  what they know.
 
 Return ONLY JSON:
 {"reasoning":"one or two sentences on the route you chose",
- "milestones":[{"title":"...","done_when":"how you'll know it's complete","weeks_from_now":<number>}]}`;
+ "milestones":[{"title":"...","done_when":"how you'll know it's complete","weeks_from_now":<number>,
+   "steps":["concrete day-sized action", "..."]}]}`;
 
 // Idempotent: no-ops if the goal already has milestones. Called from createGoal and lazily
 // at issuance, so a goal is always planned before its first quests.
@@ -293,10 +314,10 @@ export async function planGoal(env, goalId) {
     if (deadlineMs && targetMs > deadlineMs) targetMs = deadlineMs;
     const target = new Date(targetMs).toISOString().slice(0, 10);
     await env.DB.prepare(
-      `INSERT INTO milestones (goal_id, seq, title, done_when, target_date, status, created_at)
-       VALUES (?,?,?,?,?,?,?)`)
+      `INSERT INTO milestones (goal_id, seq, title, done_when, steps, target_date, status, created_at)
+       VALUES (?,?,?,?,?,?,?,?)`)
       .bind(goalId, seq, String(m.title).slice(0, 200), String(m.done_when || "").slice(0, 300) || null,
-            target, seq === 1 ? "active" : "pending", now).run();
+            packSteps(m.steps), target, seq === 1 ? "active" : "pending", now).run();
     seq++;
   }
   await computeProgress(env, goalId);
@@ -359,8 +380,14 @@ left${goal.deadline ? " up to the deadline" : ""}. If they're behind, simplify/r
 rebuild momentum; if ahead, raise the bar. Output ONLY the remaining milestones (not the done
 ones) — 2 to 6 of them.
 
+SPECIFICITY RULES: every milestone MEASURABLE and CONCRETE (exact numbers, named things,
+computed from their real current numbers above — no abstract labels), and each carries
+"steps": 3-6 concrete actions, each finishable in one day, imperative and checkable with
+numbers — these become their daily quests. Fit steps to their real life (schedule, gear,
+skills from the context).
+
 Return ONLY JSON:
-{"reasoning":"one sentence: what you changed and why","milestones":[{"title":"...","done_when":"...","weeks_from_now":<number>}]}`;
+{"reasoning":"one sentence: what you changed and why","milestones":[{"title":"...","done_when":"...","weeks_from_now":<number>,"steps":["concrete day-sized action","..."]}]}`;
 
 export async function adaptPlan(env, goalId) {
  try {
@@ -402,10 +429,10 @@ export async function adaptPlan(env, goalId) {
     let targetMs = Date.now() + weeks * 7 * MS_DAY;
     if (deadlineMs && targetMs > deadlineMs) targetMs = deadlineMs;
     await env.DB.prepare(
-      `INSERT INTO milestones (goal_id, seq, title, done_when, target_date, status, created_at)
-       VALUES (?,?,?,?,?,?,?)`)
+      `INSERT INTO milestones (goal_id, seq, title, done_when, steps, target_date, status, created_at)
+       VALUES (?,?,?,?,?,?,?,?)`)
       .bind(goalId, seq, String(m.title).slice(0, 200), String(m.done_when || "").slice(0, 300) || null,
-            new Date(targetMs).toISOString().slice(0, 10), first ? "active" : "pending", now).run();
+            packSteps(m.steps), new Date(targetMs).toISOString().slice(0, 10), first ? "active" : "pending", now).run();
     first = false;
   }
   await computeProgress(env, goalId);
@@ -620,15 +647,27 @@ async function ownerProfile(env) {
 // fact that mattered ("already owns a guitar") routinely missed it — and the plan told
 // the owner to buy one. Embedding recall pulls exactly those goal-relevant facts in.
 async function goalContext(env, goal) {
-  const base = await ownerProfile(env);
+  let out = await ownerProfile(env);
   try {
     const rel = await recallMemories(env,
       [goal.title, goal.target, goal.why].filter(Boolean).join(" · "));
-    const fresh = rel.filter(m => m.fact && !base.includes(m.fact)).slice(0, 12)
+    const fresh = rel.filter(m => m.fact && !out.includes(m.fact)).slice(0, 12)
       .map(m => `- (${m.category}) ${m.fact}`);
-    if (fresh.length) return base + "\n\nKnown facts relevant to THIS goal:\n" + fresh.join("\n");
+    if (fresh.length) out += "\n\nKnown facts relevant to THIS goal:\n" + fresh.join("\n");
   } catch (e) { console.log("goalContext recall failed:", String(e).slice(0, 120)); }
-  return base;
+  // The latest measured numbers — where the owner ACTUALLY is right now. Plans anchored
+  // to "gain weight" instead of "47.9 kg today, 60 kg target" come out generic.
+  try {
+    const nums = [];
+    const { results: h } = await env.DB.prepare(
+      `SELECT metric, value, unit, MAX(at) AS at FROM health GROUP BY metric ORDER BY at DESC LIMIT 8`).all();
+    for (const r of h) nums.push(`- ${r.metric}: ${r.value}${r.unit ? " " + r.unit : ""} (logged ${String(r.at).slice(0, 10)})`);
+    const { results: m } = await env.DB.prepare(
+      `SELECT name, value, unit, MAX(at) AS at FROM metrics GROUP BY name ORDER BY at DESC LIMIT 8`).all();
+    for (const r of m) nums.push(`- ${r.name}: ${r.value}${r.unit ? " " + r.unit : ""} (logged ${String(r.at).slice(0, 10)})`);
+    if (nums.length) out += "\n\nLatest measured numbers (their real current state):\n" + nums.join("\n");
+  } catch (e) { console.log("goalContext metrics failed:", String(e).slice(0, 120)); }
+  return out;
 }
 
 function parseJson(text) {
@@ -643,22 +682,26 @@ const GEN_PROMPT = (persona, clock, profile, goals, recent) => `You are ${person
 ${voiceBlock(persona)}
 Today is ${clock.today}.${clock.days_since_last_cleared != null ? ` It has been ${clock.days_since_last_cleared} day(s) since they last cleared a quest.` : ""} Current streak: ${clock.streak}.
 
-A quest is ONE concrete action, done-or-not by tonight, that advances the CURRENT MILESTONE of
-a goal. Not vague ("work on the project"), not busywork. At most ${MAX_DAILY_QUESTS} quests across
-ALL goals — fewer is stronger. Prioritise goals that are behind pace. Skip a goal with no sensible
-step today.
+A quest is ONE concrete action, done-or-not by tonight. Each milestone below lists its planned
+STEPS — issue today's main quests from the NEXT unfinished steps (reworded for today if needed,
+sized to fit one day). Never vague ("work on the project"), never busywork. You may add ONE
+small "side" quest — a low-stakes supporting action (prep, a habit, recovery, outreach) that
+makes the main quests easier — only if it genuinely helps today.
 
-## Active goals and their current milestone
+At most ${MAX_DAILY_QUESTS} quests across ALL goals — fewer is stronger. Prioritise goals that
+are behind pace. Skip a goal with no sensible step today.
+
+## Active goals — current milestone and its planned steps
 ${goals}
 
-## Quests already issued recently — do NOT repeat these
+## Quests already issued recently — do NOT repeat these (steps they already cover are done)
 ${recent || "(none)"}
 
 ## What you know about them
 ${profile}
 
 Return ONLY JSON:
-{"quests":[{"goal_id": <id or null>, "text": "imperative, specific, checkable tonight", "kind": "daily|milestone|urgent"}]}`;
+{"quests":[{"goal_id": <id or null>, "text": "imperative, specific, checkable tonight", "kind": "daily|milestone|urgent|side"}]}`;
 
 async function generateDailyQuests(env) {
   const { results: goals } = await env.DB.prepare(
@@ -673,10 +716,12 @@ async function generateDailyQuests(env) {
     const m = await activeMilestone(env, g.id);
     activeMs[g.id] = m;
     const p = paceOf(g);
+    const steps = m ? unpackSteps(m.steps) : [];
     blocks.push(
       `- #${g.id} ${g.title}${g.target ? ` (target: ${g.target})` : ""}` +
       `${g.deadline ? ` [deadline ${g.deadline} · ${p.days_left}d left · ${p.pace} · ${Math.round((g.progress || 0) * 100)}% done]` : ""}` +
-      (m ? `\n    → current milestone: ${m.title}${m.done_when ? ` — done when: ${m.done_when}` : ""}${m.target_date ? ` (by ${m.target_date})` : ""}`
+      (m ? `\n    → current milestone: ${m.title}${m.done_when ? ` — done when: ${m.done_when}` : ""}${m.target_date ? ` (by ${m.target_date})` : ""}` +
+           (steps.length ? `\n    → planned steps:\n${steps.map(s => `       • ${s}`).join("\n")}` : "")
          : `\n    → no milestone yet; pick a concrete first step`));
   }
   const { results: recent } = await env.DB.prepare(
@@ -1034,7 +1079,7 @@ export const SYSTEM_TOOLS = {
   },
   add_quest: {
     group: "Goals & Quests",
-    desc: 'set a concrete quest (a done-tonight task). args: {"text": "...", "goal_id": <n or null>, "kind": "daily|milestone|urgent"}',
+    desc: 'set a concrete quest (a done-tonight task); kind "side" = small supporting action (+5 XP). args: {"text": "...", "goal_id": <n or null>, "kind": "daily|milestone|urgent|side"}',
     args: { text: { type: "string", required: true }, goal_id: { type: "number" }, kind: { type: "string", enum: QUEST_KINDS } },
     run: (env, a) => createQuest(env, a),
   },

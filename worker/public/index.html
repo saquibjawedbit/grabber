@@ -260,6 +260,9 @@
   .pm.done .pm-t { color: var(--muted); text-decoration: line-through; }
   .pm.active .pm-t { font-weight: 600; }
   .pm .pm-when { color: var(--muted); font-size: 0.76rem; margin-top: 0.1rem; }
+  .pm-steps { margin-top: 0.3rem; display: grid; gap: 0.15rem; }
+  .pm-step { font-size: 0.78rem; color: var(--ink-2); line-height: 1.35; }
+  .pm-steps-fold summary { font-size: 0.74rem; color: var(--muted); cursor: pointer; margin-top: 0.2rem; }
   .pm .pm-date { color: var(--ink-2); font-size: 0.76rem; font-variant-numeric: tabular-nums; white-space: nowrap; }
   /* Forget stays hidden until you mean it — deleting a memory is not a browse action. */
   .mem .x {
@@ -1194,11 +1197,18 @@ function renderPlans(goals) {
         <span>${ms.filter(m => m.status === "done").length}/${ms.length} milestones</span>
       </div>
       ${ms.length ? planTimeline(g) : `<div class="empty">No roadmap yet — hit Re-plan.</div>`}
-      <div class="pm-list">${ms.map(m => `<div class="pm ${esc(m.status)}">
+      <div class="pm-list">${ms.map(m => {
+        const steps = m.steps || [];
+        // The active milestone's steps are today's marching orders — show them open.
+        // Pending/done ones collapse so the plan stays scannable.
+        const stepsHtml = !steps.length ? "" : m.status === "active"
+          ? `<div class="pm-steps">${steps.map(s => `<div class="pm-step">▸ ${esc(s)}</div>`).join("")}</div>`
+          : `<details class="pm-steps-fold"><summary>${steps.length} steps</summary><div class="pm-steps">${steps.map(s => `<div class="pm-step">▸ ${esc(s)}</div>`).join("")}</div></details>`;
+        return `<div class="pm ${esc(m.status)}">
         <span class="pm-ic">${MS_ICON[m.status] || "○"}</span>
-        <span><span class="pm-t">${esc(m.title)}</span>${m.done_when ? `<div class="pm-when">done when: ${esc(m.done_when)}</div>` : ""}</span>
+        <span><span class="pm-t">${esc(m.title)}</span>${m.done_when ? `<div class="pm-when">done when: ${esc(m.done_when)}</div>` : ""}${stepsHtml}</span>
         <span class="pm-date">${m.target_date ? esc(m.target_date.slice(5)) : ""}</span>
-      </div>`).join("")}</div>
+      </div>`;}).join("")}</div>
     </div>`;
   }).join("");
 }

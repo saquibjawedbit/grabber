@@ -296,6 +296,7 @@ CREATE TABLE IF NOT EXISTS milestones (
   seq         INTEGER NOT NULL,               -- order 1..N
   title       TEXT NOT NULL,
   done_when   TEXT,                           -- definition of done
+  steps       TEXT,                           -- JSON array of concrete day-sized steps (quest material)
   target_date TEXT,                           -- ISO date, spaced across the runway
   status      TEXT NOT NULL DEFAULT 'pending',-- pending | active | done | skipped
   created_at  TEXT NOT NULL,
@@ -311,7 +312,7 @@ CREATE TABLE IF NOT EXISTS quests (
   goal_id       INTEGER REFERENCES goals(id),   -- nullable: standalone quests allowed
   milestone_id  INTEGER REFERENCES milestones(id), -- nullable: the milestone it advances
   text          TEXT NOT NULL,
-  kind          TEXT NOT NULL DEFAULT 'daily',  -- daily | milestone | urgent
+  kind          TEXT NOT NULL DEFAULT 'daily',  -- daily | milestone | urgent | side
   status        TEXT NOT NULL DEFAULT 'issued', -- issued | doing | done | failed | skipped
   xp            INTEGER NOT NULL DEFAULT 10,
   due_at        TEXT,                           -- UTC ISO; default end of the owner's today
