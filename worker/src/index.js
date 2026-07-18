@@ -4,7 +4,7 @@
 import { embedMemory, rememberExchange, runAgent, TOOLS, validateArgs } from "./agent.js";
 import { backfill, extract, forgetMemory, reconcile, saveMemory, unpackVec } from "./memory.js";
 import { DEFAULT_PERSONA, getPersona, resetPersona, setPersona } from "./persona.js";
-import { createGoal, debrief, getSettings, getSystemState, issueDaily, listGoals, listMilestones, listQuests, planGoal, resolveQuest, runSystem, setAutonomyMode, updateGoal } from "./system.js";
+import { createGoal, debrief, getSettings, getSystemState, issueDaily, listGoals, listMetrics, listMilestones, listQuests, replanGoal, resolveQuest, runSystem, setAutonomyMode, updateGoal } from "./system.js";
 import { classifyInbox, googleConnected, ingestNotification, pollCalendar, remindEvents } from "./senses.js";
 import { processBankNotifications } from "./life.js";
 import { generatePerception, getPerception } from "./perception.js";
@@ -746,8 +746,7 @@ async function handleApi(url, env, request) {
     // {id,replan:true} maps a fresh route.
     const body = await request.json().catch(() => ({}));
     if (body.id && body.replan) {
-      await env.DB.prepare("DELETE FROM milestones WHERE goal_id = ?").bind(Number(body.id)).run();
-      return Response.json(await planGoal(env, body.id));
+      return Response.json(await replanGoal(env, body.id));
     }
     if (body.id) {
       const status = ["active", "achieved", "dropped"].includes(body.status) ? body.status : null;
@@ -765,7 +764,7 @@ async function handleApi(url, env, request) {
   if (url.pathname === "/api/system") {
     // Everything the dashboard's System tab shows: rank, goals (with roadmap + pace),
     // today's quests, the work log, and the autonomy setting.
-    const [rank, goalsR, questsToday, activity, settings] = await Promise.all([
+    const [rank, goalsR, questsToday, activity, settings, metrics] = await Promise.all([
       getSystemState(env),
       listGoals(env, { status: "all" }),   // already carries progress + pace
       env.DB.prepare(`
@@ -776,6 +775,7 @@ async function handleApi(url, env, request) {
         SELECT id, at, kind, actor, summary, detail, reasoning, goal_id, quest_id
         FROM activity ORDER BY id DESC LIMIT 60`).all(),
       getSettings(env),
+      listMetrics(env, {}),
     ]);
     // Attach each goal's roadmap.
     const goals = await Promise.all(goalsR.goals.map(async g => ({ ...g, milestones: await listMilestones(env, g.id) })));
@@ -783,6 +783,7 @@ async function handleApi(url, env, request) {
       rank, goals, settings,
       quests_today: questsToday.results,
       activity: activity.results,
+      metrics: metrics.metrics,
     });
   }
   return Response.json({ error: "not found" }, { status: 404 });

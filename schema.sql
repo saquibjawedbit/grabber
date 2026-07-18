@@ -340,5 +340,19 @@ CREATE TABLE IF NOT EXISTS activity (
 
 CREATE INDEX IF NOT EXISTS idx_activity_at ON activity(at);
 
+-- Arbitrary numeric metrics the agent logs to track over time (weight, MRR, leetcode
+-- solved, minutes practiced, anything). Charted per-name on the dashboard.
+CREATE TABLE IF NOT EXISTS metrics (
+  id      INTEGER PRIMARY KEY AUTOINCREMENT,
+  name    TEXT NOT NULL,       -- metric key, lowercased: weight | mrr | leetcode | ...
+  value   REAL NOT NULL,
+  unit    TEXT,
+  note    TEXT,
+  goal_id INTEGER,             -- optional link to a goal
+  at      TEXT NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_metrics_name ON metrics(name, at);
+
 -- XP / level / streak live as rows in `state`:
 --   xp, level, streak, streak_best, system_last_issue, system_last_debrief

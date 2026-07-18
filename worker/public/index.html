@@ -208,6 +208,16 @@
     color: var(--ink-2); cursor: pointer; border-right: 1px solid var(--border); }
   .seg button:last-child { border-right: 0; }
   .seg button.on { background: var(--seq); color: #fff; font-weight: 600; }
+  /* metrics charts */
+  .metric-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 0.9rem; }
+  .metric-card { border: 1px solid var(--border); border-radius: 10px; padding: 0.7rem 0.8rem; background: var(--surface); }
+  .metric-head { display: flex; align-items: baseline; justify-content: space-between; gap: 0.5rem; }
+  .metric-name { font-size: 0.82rem; color: var(--ink-2); text-transform: capitalize; }
+  .metric-val { font-size: 1.35rem; font-weight: 650; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
+  .metric-unit { font-size: 0.8rem; font-weight: 400; color: var(--muted); }
+  .mchart { display: block; width: 100%; height: 64px; margin: 0.4rem 0 0.2rem; }
+  .metric-foot { font-size: 0.72rem; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .metric-up { color: var(--good); } .metric-down { color: var(--critical); }
   /* Forget stays hidden until you mean it — deleting a memory is not a browse action. */
   .mem .x {
     flex: none; background: none; border: 0; color: var(--muted); cursor: pointer;
@@ -465,6 +475,10 @@
           <div id="activity"></div>
         </div>
       </div>
+    </div>
+    <div class="card">
+      <h2>Metrics <span class="sub">numbers the agent is tracking for you</span></h2>
+      <div id="metrics"></div>
     </div>
     <div class="card" id="apps-card">
       <h2>Applications <span class="sub" id="apps-sub"></span></h2>
@@ -1068,7 +1082,7 @@ window.replanGoal = async id => {
 
 const ACT_ICON = {
   goal: "⚔️", plan: "🗺️", quest_issued: "📜", quest_done: "✅", quest_failed: "❌",
-  reckoning: "🌑", milestone_done: "🏁", research: "🔎", application: "📄", autonomous: "⚡", note: "•",
+  reckoning: "🌑", milestone_done: "🏁", research: "🔎", application: "📄", autonomous: "⚡", metric: "📈", note: "•",
 };
 
 function renderActivity(items) {
@@ -1082,6 +1096,49 @@ function renderActivity(items) {
       <span class="ab">${esc(a.summary)}${a.kind === "autonomous" ? `<span class="auto-chip">AUTO</span>` : ""}${a.detail ? `<span class="ad">${esc(a.detail)}</span>` : ""}${a.reasoning ? `<span class="why">“${esc(a.reasoning)}”</span>` : ""}</span>
       <span class="at">${esc(day(a.at))} ${esc(clock(a.at))}</span>
     </div>`).join("");
+}
+
+// One numeric series → a small area line chart. Matches the weight sparkline idiom.
+function metricChart(points, w = 260, h = 64) {
+  if (points.length < 2) {
+    return `<svg class="mchart" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" aria-hidden="true"><circle cx="${w - 6}" cy="${h / 2}" r="3.5" fill="var(--seq)"></circle></svg>`;
+  }
+  const vals = points.map(p => p.value);
+  const lo = Math.min(...vals), hi = Math.max(...vals), span = hi - lo || 1;
+  const x = i => 4 + (i / (points.length - 1)) * (w - 8);
+  const y = v => h - 6 - ((v - lo) / span) * (h - 14);
+  const line = points.map((p, i) => `${x(i).toFixed(1)},${y(p.value).toFixed(1)}`).join(" L");
+  const last = points[points.length - 1];
+  return `<svg class="mchart" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" role="img" aria-label="trend from ${vals[0]} to ${last.value}">
+    <path d="M${line} L${x(points.length - 1).toFixed(1)},${h} L${x(0).toFixed(1)},${h} Z" fill="var(--seq-fill)"></path>
+    <path d="M${line}" fill="none" stroke="var(--seq)" stroke-width="2" vector-effect="non-scaling-stroke"></path>
+    <circle cx="${x(points.length - 1).toFixed(1)}" cy="${y(last.value).toFixed(1)}" r="3" fill="var(--seq)"></circle>
+  </svg>`;
+}
+
+function renderMetrics(metrics) {
+  const box = $("metrics");
+  if (!box) return;
+  if (!metrics?.length) {
+    box.innerHTML = `<div class="empty">No metrics yet. Tell the bot a number worth tracking — “I weigh 58kg”, “MRR hit $250”, “solved 4 leetcode today” — and it charts here over time. Each named number becomes its own series.</div>`;
+    return;
+  }
+  const byName = {};
+  for (const m of metrics) (byName[m.name] ||= []).push(m);
+  box.innerHTML = `<div class="metric-grid">` + Object.entries(byName).map(([name, pts]) => {
+    pts.sort((a, b) => new Date(a.at) - new Date(b.at));
+    const last = pts[pts.length - 1];
+    const delta = pts.length > 1 ? Math.round((last.value - pts[0].value) * 100) / 100 : null;
+    const dcls = delta > 0 ? "metric-up" : delta < 0 ? "metric-down" : "";
+    return `<div class="metric-card">
+      <div class="metric-head">
+        <span class="metric-name">${esc(name.replace(/_/g, " "))}</span>
+        <span class="metric-val">${esc(String(last.value))}${last.unit ? `<span class="metric-unit"> ${esc(last.unit)}</span>` : ""}</span>
+      </div>
+      ${metricChart(pts)}
+      <div class="metric-foot">${pts.length} point${pts.length === 1 ? "" : "s"}${delta != null ? ` · <span class="${dcls}">${delta > 0 ? "▲" : delta < 0 ? "▼" : "→"} ${Math.abs(delta)}</span> since first` : ""}</div>
+    </div>`;
+  }).join("") + `</div>`;
 }
 
 function renderSettings(s) {
@@ -1474,6 +1531,7 @@ async function boot() {
     renderQuests(sys.quests_today);
     renderGoals(sys.goals);
     renderActivity(sys.activity);
+    renderMetrics(sys.metrics);
     renderApplications(brain.applications);
     wireGoalForm();
     // Brain tab

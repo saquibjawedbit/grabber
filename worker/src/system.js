@@ -70,6 +70,38 @@ export async function logActivity(env, { kind, summary, detail = null, reasoning
   }
 }
 
+// ---------- Metrics: arbitrary numbers the agent tracks + the dashboard charts ----------
+
+export async function logMetric(env, { name, value, unit = null, note = null, goal_id = null, at = null }) {
+  name = String(name || "").trim().toLowerCase().replace(/\s+/g, "_").slice(0, 40);
+  const v = Number(value);
+  if (!name) return { error: "a metric needs a name" };
+  if (!isFinite(v)) return { error: "value must be a number" };
+  await env.DB.prepare(
+    "INSERT INTO metrics (name, value, unit, note, goal_id, at) VALUES (?,?,?,?,?,?)")
+    .bind(name, v, unit ? String(unit).slice(0, 12) : null, note ? String(note).slice(0, 200) : null,
+          goal_id ? Number(goal_id) : null, at || new Date().toISOString()).run();
+  await logActivity(env, {
+    kind: "metric", actor: "owner", goal_id: goal_id ? Number(goal_id) : null,
+    summary: `Logged ${name}: ${v}${unit ? " " + unit : ""}`,
+  });
+  const prev = await env.DB.prepare(
+    "SELECT value FROM metrics WHERE name = ? ORDER BY at DESC LIMIT 1 OFFSET 1").bind(name).first();
+  return { ok: true, name, value: v, change_since_last: prev ? Math.round((v - prev.value) * 100) / 100 : null };
+}
+
+export async function listMetrics(env, { name = null, limit = 300 } = {}) {
+  if (name) {
+    const { results } = await env.DB.prepare(
+      "SELECT name, value, unit, note, at FROM metrics WHERE name = ? ORDER BY at DESC LIMIT ?")
+      .bind(String(name).toLowerCase(), Math.min(limit, 500)).all();
+    return { name, points: results.reverse() };
+  }
+  const { results } = await env.DB.prepare(
+    "SELECT name, value, unit, at FROM metrics ORDER BY at DESC LIMIT ?").bind(Math.min(limit, 500)).all();
+  return { count: results.length, metrics: results.reverse() };   // oldest-first, ready to chart
+}
+
 // ---------- XP / level / streak ----------
 // Level curve: level N needs (N-1)^2 * 100 XP. L2@100, L3@400, L4@900, L5@1600…
 
@@ -231,6 +263,7 @@ Return ONLY JSON:
 // Idempotent: no-ops if the goal already has milestones. Called from createGoal and lazily
 // at issuance, so a goal is always planned before its first quests.
 export async function planGoal(env, goalId) {
+ try {
   const goal = await env.DB.prepare("SELECT * FROM goals WHERE id = ?").bind(goalId).first();
   if (!goal || goal.status !== "active") return { skipped: "no active goal" };
   const have = await env.DB.prepare("SELECT COUNT(*) AS n FROM milestones WHERE goal_id = ?").bind(goalId).first();
@@ -242,11 +275,20 @@ export async function planGoal(env, goalId) {
   const list = Array.isArray(v?.milestones) ? v.milestones.slice(0, 8) : [];
   if (!list.length) return { error: "no milestones produced" };
   const now = new Date().toISOString();
-  let seq = 1;
+  const deadlineMs = goal.deadline ? new Date(goal.deadline).getTime() : null;
+  let seq = 1, prevWeeks = 0;
   for (const m of list) {
     if (!m.title) continue;
-    const weeks = Number(m.weeks_from_now) || seq * 2;
-    const target = new Date(Date.now() + weeks * 7 * MS_DAY).toISOString().slice(0, 10);
+    // Keep target dates in order: each milestone lands at least half a week after the
+    // previous one (the model sometimes returns weeks_from_now out of order), and never
+    // past the goal's deadline.
+    let weeks = Number(m.weeks_from_now);
+    if (!isFinite(weeks) || weeks <= 0) weeks = prevWeeks + 2;
+    if (weeks < prevWeeks + 0.5) weeks = prevWeeks + 0.5;
+    prevWeeks = weeks;
+    let targetMs = Date.now() + weeks * 7 * MS_DAY;
+    if (deadlineMs && targetMs > deadlineMs) targetMs = deadlineMs;
+    const target = new Date(targetMs).toISOString().slice(0, 10);
     await env.DB.prepare(
       `INSERT INTO milestones (goal_id, seq, title, done_when, target_date, status, created_at)
        VALUES (?,?,?,?,?,?,?)`)
@@ -262,6 +304,21 @@ export async function planGoal(env, goalId) {
     reasoning: v.reasoning ? String(v.reasoning).slice(0, 300) : null,
   });
   return { ok: true, milestones: seq - 1 };
+ } catch (e) {
+  console.log("planGoal threw:", String(e && e.stack || e).slice(0, 300));
+  return { error: "planner failed: " + String(e && e.message || e).slice(0, 160) };
+ }
+}
+
+// Discard a goal's roadmap and map a fresh one. Quests FK milestones(id), so their
+// links must be detached before the milestones can be deleted.
+export async function replanGoal(env, goalId) {
+  goalId = Number(goalId);
+  await env.DB.prepare(
+    "UPDATE quests SET milestone_id = NULL WHERE milestone_id IN (SELECT id FROM milestones WHERE goal_id = ?)")
+    .bind(goalId).run();
+  await env.DB.prepare("DELETE FROM milestones WHERE goal_id = ?").bind(goalId).run();
+  return planGoal(env, goalId);
 }
 
 // ---------- Goals ----------
@@ -742,11 +799,7 @@ export const SYSTEM_TOOLS = {
     group: "Goals & Quests",
     desc: 'discard a goal\'s roadmap and map a fresh one (use when the route is off). args: {"goal_id": <n>}',
     args: { goal_id: { type: "number", required: true } },
-    run: async (env, a) => {
-      if (!a.goal_id) return { error: "need the goal id" };
-      await env.DB.prepare("DELETE FROM milestones WHERE goal_id = ?").bind(Number(a.goal_id)).run();
-      return planGoal(env, a.goal_id);
-    },
+    run: (env, a) => a.goal_id ? replanGoal(env, a.goal_id) : { error: "need the goal id" },
   },
   update_goal: {
     group: "Goals & Quests",
@@ -781,5 +834,16 @@ export const SYSTEM_TOOLS = {
     group: "Goals & Quests",
     desc: "the owner's level, XP, and streak. args: {}",
     run: (env) => getSystemState(env),
+  },
+  log_metric: {
+    group: "Metrics",
+    desc: 'record a numeric data point to track over time — weight, MRR/revenue, leetcode solved, minutes practiced, reps, anything. It gets charted on the dashboard. args: {"name": "mrr", "value": 250, "unit": "$", "note": "...", "goal_id": <n or null>}',
+    args: { name: { type: "string", required: true }, value: { type: "number", required: true }, unit: { type: "string" }, note: { type: "string" }, goal_id: { type: "number" } },
+    run: (env, a) => logMetric(env, a),
+  },
+  list_metrics: {
+    group: "Metrics",
+    desc: 'read logged metrics. args: {"name": "mrr"} for one series over time, or {} for recent across all',
+    run: (env, a) => listMetrics(env, a),
   },
 };

@@ -198,6 +198,15 @@ persistent, time-aware plan it drives. Four capabilities, all in `system.js`:
 (21:00). The dashboard renders each goal's progress bar, pace chip, projected date, and
 its milestone roadmap. Full design: the roadmap artifact linked from the project notes.
 
+**Metrics.** `logMetric()` (agent tool `log_metric`) records any named number over time
+(weight, MRR, leetcode solved, minutes practiced) into the `metrics` table; the dashboard
+charts each series as an area line chart on the System tab. The agent is told to log a
+metric whenever the owner reports a trackable number moving toward a goal.
+
+**Re-planning caveat:** because `quests.milestone_id` FKs `milestones(id)`, `replanGoal()`
+detaches quests (`milestone_id = NULL`) *before* deleting the old milestones — a raw
+`DELETE FROM milestones` fails the foreign-key constraint once quests reference them.
+
 ## 5.9 What changed from the opportunity engine
 
 | Removed | Replaced by |
