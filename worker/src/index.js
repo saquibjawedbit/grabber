@@ -4,7 +4,7 @@
 import { embedMemory, rememberExchange, runAgent, TOOLS, validateArgs } from "./agent.js";
 import { backfill, extract, forgetMemory, reconcile, saveMemory, unpackVec } from "./memory.js";
 import { DEFAULT_PERSONA, getPersona, resetPersona, setPersona } from "./persona.js";
-import { adaptPlan, announceOpenQuestions, answerPlanQuestion, checkAwards, createGoal, debrief, getSettings, getSystemState, issueDaily, listAwards, listGoals, listMetrics, listMilestones, listPlanQuestions, listQuests, maybeAdaptOnDone, replanGoal, resolveQuest, runSystem, setAutonomyMode, updateGoal } from "./system.js";
+import { adaptPlan, announceOpenQuestions, answerPlanQuestion, answerPlanQuestions, checkAwards, createGoal, debrief, getSettings, getSystemState, issueDaily, listAwards, listGoals, listMetrics, listMilestones, listPlanQuestions, listQuests, maybeAdaptOnDone, replanGoal, resolveQuest, runSystem, setAutonomyMode, updateGoal } from "./system.js";
 import { classifyInbox, googleConnected, ingestNotification, pollCalendar, remindEvents } from "./senses.js";
 import { processBankNotifications } from "./life.js";
 import { generatePerception, getPerception } from "./perception.js";
@@ -823,14 +823,17 @@ async function handleApi(url, env, request) {
     return Response.json({ error: "nothing to set" }, { status: 400 });
   }
   if (url.pathname === "/api/plan-question" && request.method === "POST") {
-    // Answer (or dismiss) a planner question from the dashboard. Answering stores the
-    // fact and re-plans the goal immediately — same path as the agent's tool.
+    // Answer (or dismiss) planner questions from the dashboard. {answers:[{id,answer}]}
+    // batches: every answer recorded first, then ONE re-plan per goal. A single {id,answer}
+    // re-plans only when it closes the goal's last open question (same auto rule as chat).
     const body = await request.json().catch(() => ({}));
     if (body.id && body.dismiss) {
       await env.DB.prepare("UPDATE plan_questions SET status = 'dismissed' WHERE id = ?").bind(Number(body.id)).run();
       return Response.json({ ok: true, dismissed: Number(body.id) });
     }
-    const r = await answerPlanQuestion(env, body);
+    const r = Array.isArray(body.answers)
+      ? await answerPlanQuestions(env, body)
+      : await answerPlanQuestion(env, body);
     return Response.json(r, { status: r.error ? 400 : 200 });
   }
   if (url.pathname === "/api/system") {

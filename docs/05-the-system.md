@@ -265,11 +265,16 @@ short `questions` when a missing fact would materially change the route. The lif
    ✅-triggered adapt, a manual adapt/replan from the dashboard).
 3. **Answered** — three ways, all landing in `answerPlanQuestion`: the owner replies in
    chat (open questions ride in every agent prompt with instruction to call the
-   `answer_plan_question` tool when a message answers one, even in passing), the Plans tab
-   (inline input per question → `POST /api/plan-question`, `{id,dismiss:true}` to wave one
-   off), or the agent tool directly. The answer is stored on the row, saved as an
-   `identity` **memory** (so all future recall knows it), logged as `plan_question`
-   activity, and the goal is **re-planned immediately** — ask → answer → better plan.
+   `answer_plan_question` tool once per answered question, even in passing), the Plans tab
+   (one input per question, ONE "Save answers → re-plan" button per goal →
+   `POST /api/plan-question {answers:[{id,answer}]}`; `{id,dismiss:true}` waves one off),
+   or the agent tool directly. The answer is stored on the row, saved as an `identity`
+   **memory** (so all future recall knows it), and logged as `plan_question` activity.
+   **Re-planning fires once, not per answer**: the chat path re-plans automatically when a
+   goal's *last* open question is answered (`replan:"auto"`); the dashboard batch records
+   every answer first, then runs one `adaptPlan` per distinct goal even if some questions
+   stayed open. Answers that never trip a re-plan still reach the planner through
+   `goalContext` at the next adapt.
 
 `goalContext` feeds answered Q&A into every subsequent plan/adapt as its highest-signal
 facts. Open questions surface in `/api/system` (`plan_questions`) and via the

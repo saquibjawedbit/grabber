@@ -413,8 +413,12 @@ export async function listPlanQuestions(env, { status = "open" } = {}) {
   return { count: results.length, questions: results };
 }
 
-// The core of the loop: store the answer, keep it as a durable memory, re-plan NOW.
-export async function answerPlanQuestion(env, { id, answer }) {
+// The core of the loop: store the answer, keep it as a durable memory, and re-plan ONCE —
+// not once per answer. `replan: "auto"` (the default) re-plans only when this was the last
+// open question for the goal, so answering three questions costs one LLM call, fired by
+// the final answer. `replan: false` just records (the batch path re-plans itself); answers
+// that never trigger a replan still reach the planner via goalContext at the next adapt.
+export async function answerPlanQuestion(env, { id, answer, replan = "auto" }) {
   id = Number(id);
   answer = String(answer || "").trim().slice(0, 500);
   if (!id || !answer) return { error: "need the question id and an answer" };
@@ -432,8 +436,31 @@ export async function answerPlanQuestion(env, { id, answer }) {
     summary: `Answered the System's question: ${q.question.slice(0, 120)}`,
     detail: answer.slice(0, 300),
   });
-  const replanned = await adaptPlan(env, q.goal_id);   // re-plan immediately with the new fact
-  return { ok: true, goal_id: q.goal_id, replanned: replanned.ok ? true : replanned };
+  const open = (await env.DB.prepare(
+    "SELECT COUNT(*) AS n FROM plan_questions WHERE goal_id = ? AND status = 'open'").bind(q.goal_id).first()).n;
+  let replanned = false;
+  if (replan === true || (replan === "auto" && open === 0)) {
+    replanned = (await adaptPlan(env, q.goal_id)).ok === true;
+  }
+  return { ok: true, goal_id: q.goal_id, replanned, open_questions_left: open };
+}
+
+// Batch: record every answer first, then ONE re-plan per distinct goal. This is what the
+// dashboard's "save all" submits; it re-plans even if some questions were left open —
+// the owner chose to move now with what they gave.
+export async function answerPlanQuestions(env, { answers }) {
+  if (!Array.isArray(answers) || !answers.length) return { error: "need answers: [{id, answer}]" };
+  const goals = new Set();
+  let answered = 0;
+  for (const a of answers.slice(0, 12)) {
+    const r = await answerPlanQuestion(env, { ...a, replan: false });
+    if (r.ok && !r.already) { answered++; goals.add(r.goal_id); }
+  }
+  const replanned = [];
+  for (const gid of goals) {
+    if ((await adaptPlan(env, gid)).ok) replanned.push(gid);
+  }
+  return { ok: true, answered, replanned_goals: replanned };
 }
 
 // Send unannounced open questions to Telegram — one message, all pending. Skipped in
@@ -1365,7 +1392,7 @@ export const SYSTEM_TOOLS = {
   },
   answer_plan_question: {
     group: "Goals & Quests",
-    desc: 'record the owner\'s answer to a plan question — saves the fact and RE-PLANS the goal immediately. Use whenever their message answers an open plan question. args: {"id": <n>, "answer": "..."}',
+    desc: 'record the owner\'s answer to a plan question — saves the fact; the goal RE-PLANS once, automatically, when its last open question is answered. If one message answers several questions, call this once per question. args: {"id": <n>, "answer": "..."}',
     args: { id: { type: "number", required: true }, answer: { type: "string", required: true } },
     run: (env, a) => answerPlanQuestion(env, a),
   },

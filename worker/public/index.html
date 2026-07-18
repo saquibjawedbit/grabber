@@ -279,6 +279,7 @@
   .plan-qs .pq-x { background: none; border: none; color: var(--muted); cursor: pointer; font-size: 0.75rem; padding: 0 0.2rem; }
   .plan-qs .pq-row { display: flex; gap: 0.4rem; margin-top: 0.3rem; }
   .plan-qs .pq-row input { flex: 1; min-width: 0; }
+  .plan-qs .pq-save { margin-top: 0.55rem; }
   .award-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 0.6rem; }
   .award { display: flex; gap: 0.55rem; align-items: flex-start; border: 1px solid var(--border); border-radius: 10px; padding: 0.55rem 0.65rem; }
   .award-ic { font-size: 1.3rem; line-height: 1; }
@@ -1224,14 +1225,17 @@ function planTimeline(g) {
     <div class="tl-axis"><span>${esc((g.created_at || "").slice(0, 10))}</span><span>${g.deadline ? esc(g.deadline.slice(0, 10)) : "open-ended"}</span></div>`;
 }
 
-window.answerPlanQ = async id => {
-  const inp = document.getElementById(`pq-in-${id}`);
-  const val = (inp?.value || "").trim();
-  if (!val) { inp?.focus(); return; }
-  const btn = document.getElementById(`pq-btn-${id}`);
-  if (btn) { btn.disabled = true; btn.textContent = "Re-planning…"; }
-  try { await api("/api/plan-question", { method: "POST", body: { id, answer: val } }); boot(); }
-  catch { if (btn) { btn.disabled = false; btn.textContent = "Answer"; } }
+// Collect every filled answer for the goal and submit them in ONE batch — the server
+// records them all, then re-plans the goal once (not once per answer).
+window.answerPlanQs = async goalId => {
+  const answers = [...document.querySelectorAll(`input[data-pq-goal="${goalId}"]`)]
+    .map(inp => ({ id: Number(inp.dataset.pqId), answer: inp.value.trim() }))
+    .filter(a => a.answer);
+  if (!answers.length) return;
+  const btn = document.getElementById(`pq-btn-${goalId}`);
+  if (btn) { btn.disabled = true; btn.textContent = "Saving & re-planning…"; }
+  try { await api("/api/plan-question", { method: "POST", body: { answers } }); boot(); }
+  catch { if (btn) { btn.disabled = false; btn.textContent = "Save answers → re-plan"; } }
 };
 window.dismissPlanQ = async id => {
   try { await api("/api/plan-question", { method: "POST", body: { id, dismiss: true } }); boot(); }
@@ -1258,13 +1262,13 @@ function renderPlans(goals, questsToday, planQuestions) {
     // The planner's open questions for THIS goal — answer inline, the plan re-tunes itself.
     const qs = (planQuestions || []).filter(q => q.goal_id === g.id);
     const qsHtml = qs.length ? `<div class="plan-qs">
-      <div class="pq-h">❓ The System needs these to plan you better:</div>
+      <div class="pq-h">❓ The System needs these to plan you better — answer what you can, then save once:</div>
       ${qs.map(q => `<div class="pq">
         <div class="pq-q">${esc(q.question)} <button class="pq-x" onclick="dismissPlanQ(${q.id})" title="Dismiss">✕</button></div>
-        <div class="pq-row"><input id="pq-in-${q.id}" maxlength="500" placeholder="Your answer…"
-          onkeydown="if(event.key==='Enter'){event.preventDefault();answerPlanQ(${q.id})}">
-        <button id="pq-btn-${q.id}" class="ghost-btn primary" onclick="answerPlanQ(${q.id})">Answer</button></div>
+        <div class="pq-row"><input data-pq-goal="${g.id}" data-pq-id="${q.id}" maxlength="500" placeholder="Your answer…"
+          onkeydown="if(event.key==='Enter'){event.preventDefault();answerPlanQs(${g.id})}"></div>
       </div>`).join("")}
+      <button id="pq-btn-${g.id}" class="ghost-btn primary pq-save" onclick="answerPlanQs(${g.id})">Save answers → re-plan</button>
     </div>` : "";
     const today = (questsToday || []).filter(q => q.goal_id === g.id);
     const todayHtml = today.length ? `<div class="plan-today">
