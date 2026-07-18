@@ -198,6 +198,19 @@ persistent, time-aware plan it drives. Four capabilities, all in `system.js`:
 (21:00). The dashboard renders each goal's progress bar, pace chip, projected date, and
 its milestone roadmap. Full design: the roadmap artifact linked from the project notes.
 
+**Adaptive planning.** A roadmap isn't static — `adaptPlan()` re-personalizes it to real
+progress: it **keeps the completed milestones** and re-tunes only what's left (reshaping
+scope/titles, re-spacing dates for the remaining runway, simplifying when behind). It runs
+three ways: the **debrief** adapts one drifted-or-just-advanced goal per night (2-day
+per-goal cooldown, gated to behind/at-risk/just-hit-a-milestone), an **"Adapt to progress"**
+button on the Plans/System tabs (`POST /api/goal {id,adapt}`), and the agent tool
+`adapt_plan`. Every adaptation logs `plan_adapt` with its reasoning. (Distinct from
+`replanGoal`, which throws the whole roadmap away and maps a fresh one.)
+
+**The Plans tab** is a consolidated widget: each goal as a horizontal **timeline** (milestone
+dots positioned by target date, a progress fill vs a "today" marker so drift is visible),
+progress %, pace chip, projected date, the milestone list, and Adapt / Re-plan buttons.
+
 **Metrics.** `logMetric()` (agent tool `log_metric`) records any named number over time
 (weight, MRR, leetcode solved, minutes practiced) into the `metrics` table; the dashboard
 charts each series as an area line chart on the System tab. The agent is told to log a

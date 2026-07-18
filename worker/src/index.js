@@ -4,7 +4,7 @@
 import { embedMemory, rememberExchange, runAgent, TOOLS, validateArgs } from "./agent.js";
 import { backfill, extract, forgetMemory, reconcile, saveMemory, unpackVec } from "./memory.js";
 import { DEFAULT_PERSONA, getPersona, resetPersona, setPersona } from "./persona.js";
-import { createGoal, debrief, getSettings, getSystemState, issueDaily, listGoals, listMetrics, listMilestones, listQuests, replanGoal, resolveQuest, runSystem, setAutonomyMode, updateGoal } from "./system.js";
+import { adaptPlan, createGoal, debrief, getSettings, getSystemState, issueDaily, listGoals, listMetrics, listMilestones, listQuests, replanGoal, resolveQuest, runSystem, setAutonomyMode, updateGoal } from "./system.js";
 import { classifyInbox, googleConnected, ingestNotification, pollCalendar, remindEvents } from "./senses.js";
 import { processBankNotifications } from "./life.js";
 import { generatePerception, getPerception } from "./perception.js";
@@ -747,6 +747,9 @@ async function handleApi(url, env, request) {
     const body = await request.json().catch(() => ({}));
     if (body.id && body.replan) {
       return Response.json(await replanGoal(env, body.id));
+    }
+    if (body.id && body.adapt) {
+      return Response.json(await adaptPlan(env, body.id));
     }
     if (body.id) {
       const status = ["active", "achieved", "dropped"].includes(body.status) ? body.status : null;

@@ -321,6 +321,97 @@ export async function replanGoal(env, goalId) {
   return planGoal(env, goalId);
 }
 
+// ---------- Adaptive planning: re-personalize the plan to real progress ----------
+//
+// Unlike replan (throw it all away), adapt KEEPS the milestones already done and only
+// re-tunes what's left — reflecting how the owner is actually progressing, re-spacing
+// dates for the remaining runway, and reshaping scope. Runs on demand, and nightly for
+// goals that have drifted or just hit a milestone.
+
+const ADAPT_PROMPT = (persona, clock, goal, done, remaining, quests, pace) => `You are ${persona.name}, adjusting the owner's plan to their REAL progress.
+${voiceBlock(persona)}
+Today is ${clock.today}. This goal is on day ${clock.goal_age_days}${goal.deadline ? `, deadline ${goal.deadline} (${clock.days_to_deadline} days left)` : ""}. Progress ${Math.round((goal.progress || 0) * 100)}%, pace: ${pace.pace}.
+
+## The goal
+${goal.title}${goal.target ? `\nTarget: ${goal.target}` : ""}
+
+## Milestones already DONE — keep these, do NOT repeat them
+${done.length ? done.map(m => `✓ ${m.title}`).join("\n") : "(none yet)"}
+
+## The remaining plan right now
+${remaining.map(m => `- ${m.title} (was due ${m.target_date || "?"}, ${m.status})`).join("\n")}
+
+## What the owner actually did recently (their quests)
+${quests.length ? quests.map(q => `${q.status === "done" ? "✓" : q.status === "failed" ? "✗" : "·"} ${q.text}`).join("\n") : "(no quests yet)"}
+
+Re-personalize the REMAINING route to reality: keep what still makes sense, adjust scope and
+titles to how they're actually moving, and re-space target dates realistically for the runway
+left${goal.deadline ? " up to the deadline" : ""}. If they're behind, simplify/resequence to
+rebuild momentum; if ahead, raise the bar. Output ONLY the remaining milestones (not the done
+ones) — 2 to 6 of them.
+
+Return ONLY JSON:
+{"reasoning":"one sentence: what you changed and why","milestones":[{"title":"...","done_when":"...","weeks_from_now":<number>}]}`;
+
+export async function adaptPlan(env, goalId) {
+ try {
+  goalId = Number(goalId);
+  const goal = await env.DB.prepare("SELECT * FROM goals WHERE id = ?").bind(goalId).first();
+  if (!goal || goal.status !== "active") return { skipped: "no active goal" };
+  const ms = await listMilestones(env, goalId);
+  if (!ms.length) return planGoal(env, goalId);   // never planned → make one
+  const done = ms.filter(m => m.status === "done");
+  const remaining = ms.filter(m => m.status !== "done");
+  if (!remaining.length) return { skipped: "every milestone is done" };
+
+  const quests = (await env.DB.prepare(
+    "SELECT text, status FROM quests WHERE goal_id = ? ORDER BY id DESC LIMIT 20").bind(goalId).all()).results;
+  const { text, salvaged } = await llm(env, ADAPT_PROMPT(
+    await getPersona(env), await clockContext(env, goal), goal, done, remaining, quests, paceOf(goal)));
+  if (salvaged) return { error: "adapt salvaged" };
+  const v = parseJson(text);
+  const list = Array.isArray(v?.milestones) ? v.milestones.slice(0, 6) : [];
+  if (!list.length) return { error: "no milestones produced" };
+
+  // Swap out the non-done milestones for the re-tuned ones (detach quests first — FK).
+  await env.DB.prepare(
+    "UPDATE quests SET milestone_id = NULL WHERE milestone_id IN (SELECT id FROM milestones WHERE goal_id = ? AND status != 'done')")
+    .bind(goalId).run();
+  await env.DB.prepare("DELETE FROM milestones WHERE goal_id = ? AND status != 'done'").bind(goalId).run();
+
+  const now = new Date().toISOString();
+  const deadlineMs = goal.deadline ? new Date(goal.deadline).getTime() : null;
+  let seq = done.length, prevWeeks = 0, first = true;
+  for (const m of list) {
+    if (!m.title) continue;
+    seq++;
+    let weeks = Number(m.weeks_from_now);
+    if (!isFinite(weeks) || weeks <= 0) weeks = prevWeeks + 2;
+    if (weeks < prevWeeks + 0.5) weeks = prevWeeks + 0.5;
+    prevWeeks = weeks;
+    let targetMs = Date.now() + weeks * 7 * MS_DAY;
+    if (deadlineMs && targetMs > deadlineMs) targetMs = deadlineMs;
+    await env.DB.prepare(
+      `INSERT INTO milestones (goal_id, seq, title, done_when, target_date, status, created_at)
+       VALUES (?,?,?,?,?,?,?)`)
+      .bind(goalId, seq, String(m.title).slice(0, 200), String(m.done_when || "").slice(0, 300) || null,
+            new Date(targetMs).toISOString().slice(0, 10), first ? "active" : "pending", now).run();
+    first = false;
+  }
+  await computeProgress(env, goalId);
+  await logActivity(env, {
+    kind: "plan_adapt", goal_id: goalId,
+    summary: `Re-tuned the plan for: ${goal.title}`,
+    detail: list.map((m, i) => `${done.length + i + 1}. ${m.title}`).join("\n"),
+    reasoning: v.reasoning ? String(v.reasoning).slice(0, 300) : null,
+  });
+  return { ok: true, kept: done.length, adapted: list.length };
+ } catch (e) {
+  console.log("adaptPlan threw:", String(e && e.stack || e).slice(0, 300));
+  return { error: "adapt failed: " + String(e && e.message || e).slice(0, 160) };
+ }
+}
+
 // ---------- Goals ----------
 
 export async function createGoal(env, { title, why, target, deadline }) {
@@ -605,10 +696,30 @@ export async function debrief(env, tg, { force = false } = {}) {
   if (streak > Number(await getState(env, "streak_best") || 0)) await setState(env, "streak_best", streak);
 
   // Roll progress + milestones forward for every active goal after tonight's resolutions.
-  for (const g of (await env.DB.prepare("SELECT id FROM goals WHERE status = 'active'").all()).results) {
+  const activeGoals = (await env.DB.prepare("SELECT * FROM goals WHERE status = 'active'").all()).results;
+  for (const g of activeGoals) {
     await computeProgress(env, g.id);
     await advanceMilestones(env, g.id);
   }
+  // Re-personalize ONE plan a night — the most-behind active goal that's drifted or just
+  // hit a milestone, with a 2-day per-goal cooldown so it re-tunes frequently but not daily.
+  try {
+    let pick = null, worst = 1;
+    for (const g of activeGoals) {
+      const fresh = await env.DB.prepare("SELECT progress, deadline, created_at FROM goals WHERE id = ?").bind(g.id).first();
+      const p = paceOf(fresh);
+      const last = await getState(env, `adapt_last_${g.id}`);
+      const cooled = !last || daysBetween(last, new Date().toISOString()) >= 2;
+      const hit = (await env.DB.prepare(
+        "SELECT COUNT(*) AS n FROM milestones WHERE goal_id = ? AND status = 'done' AND date(done_at,'+330 minutes') = date('now','+330 minutes')")
+        .bind(g.id).first()).n;
+      if (cooled && (p.pace === "behind" || p.pace === "at-risk" || hit)) {
+        // prefer the goal furthest behind pace (lowest progress relative to runway)
+        if (!pick || p.progress < worst) { pick = g; worst = p.progress; }
+      }
+    }
+    if (pick) { await adaptPlan(env, pick.id); await setState(env, `adapt_last_${pick.id}`, t.date); }
+  } catch (e) { console.log("nightly adapt failed:", String(e).slice(0, 120)); }
 
   const st = await getSystemState(env);
   const facts = {
@@ -800,6 +911,12 @@ export const SYSTEM_TOOLS = {
     desc: 'discard a goal\'s roadmap and map a fresh one (use when the route is off). args: {"goal_id": <n>}',
     args: { goal_id: { type: "number", required: true } },
     run: (env, a) => a.goal_id ? replanGoal(env, a.goal_id) : { error: "need the goal id" },
+  },
+  adapt_plan: {
+    group: "Goals & Quests",
+    desc: 're-tune a goal\'s remaining roadmap to the owner\'s real progress — keeps completed milestones, reshapes and re-dates the rest. Use when they\'ve fallen behind, sped ahead, or their situation changed. args: {"goal_id": <n>}',
+    args: { goal_id: { type: "number", required: true } },
+    run: (env, a) => a.goal_id ? adaptPlan(env, a.goal_id) : { error: "need the goal id" },
   },
   update_goal: {
     group: "Goals & Quests",

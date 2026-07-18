@@ -218,6 +218,42 @@
   .mchart { display: block; width: 100%; height: 64px; margin: 0.4rem 0 0.2rem; }
   .metric-foot { font-size: 0.72rem; color: var(--muted); font-variant-numeric: tabular-nums; }
   .metric-up { color: var(--good); } .metric-down { color: var(--critical); }
+  /* Plans widget — a timeline per goal */
+  .plan { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 1rem 1.1rem; margin: 0 0 1rem; }
+  .plan.achieved { opacity: 0.72; }
+  .plan-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 0.8rem; flex-wrap: wrap; }
+  .plan-title { font-size: 1.05rem; font-weight: 650; letter-spacing: -0.01em; }
+  .plan-target { color: var(--ink-2); font-size: 0.86rem; margin-top: 0.1rem; }
+  .plan-actions { display: flex; gap: 0.35rem; flex-wrap: wrap; }
+  .plan-actions button { background: none; border: 1px solid var(--border); color: var(--ink-2); cursor: pointer;
+    font: inherit; font-size: 0.76rem; padding: 0.25rem 0.6rem; border-radius: 7px; white-space: nowrap; }
+  .plan-actions button:hover:not(:disabled) { color: var(--ink); border-color: var(--baseline); }
+  .plan-actions button.primary:hover:not(:disabled) { background: var(--seq-fill); border-color: var(--seq); color: var(--ink); }
+  .plan-actions button:disabled { opacity: 0.5; cursor: default; }
+  .plan-stats { display: flex; align-items: center; gap: 0.5rem 1rem; flex-wrap: wrap; margin: 0.7rem 0 0.2rem; font-size: 0.8rem; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+  .plan-stats b { color: var(--ink); font-weight: 650; }
+  /* the timeline track */
+  .tl { position: relative; height: 30px; margin: 0.9rem 0 0.2rem; }
+  .tl-track { position: absolute; top: 13px; left: 0; right: 0; height: 4px; border-radius: 999px; background: var(--grid); }
+  .tl-fill { position: absolute; top: 13px; left: 0; height: 4px; border-radius: 999px; background: var(--seq); }
+  .tl-today { position: absolute; top: 4px; width: 2px; height: 22px; background: var(--ink-2); }
+  .tl-today::after { content: "today"; position: absolute; top: -13px; left: 50%; transform: translateX(-50%);
+    font-size: 0.6rem; color: var(--muted); white-space: nowrap; }
+  .tl-dot { position: absolute; top: 8px; width: 14px; height: 14px; border-radius: 50%; transform: translateX(-50%);
+    border: 2px solid var(--surface); background: var(--baseline); box-sizing: border-box; cursor: default; }
+  .tl-dot.done { background: var(--good); }
+  .tl-dot.active { background: var(--seq); box-shadow: 0 0 0 3px var(--seq-fill); }
+  .tl-dot.pending { background: var(--baseline); }
+  .tl-dot.skipped { background: var(--muted); }
+  .tl-axis { display: flex; justify-content: space-between; font-size: 0.68rem; color: var(--muted); font-variant-numeric: tabular-nums; }
+  .pm-list { margin-top: 0.7rem; border-top: 1px solid var(--grid); }
+  .pm { display: grid; grid-template-columns: 1.5rem 1fr auto; gap: 0.55rem; padding: 0.5rem 0; border-bottom: 1px solid var(--grid); align-items: baseline; }
+  .pm:last-child { border-bottom: 0; }
+  .pm .pm-ic { text-align: center; }
+  .pm.done .pm-t { color: var(--muted); text-decoration: line-through; }
+  .pm.active .pm-t { font-weight: 600; }
+  .pm .pm-when { color: var(--muted); font-size: 0.76rem; margin-top: 0.1rem; }
+  .pm .pm-date { color: var(--ink-2); font-size: 0.76rem; font-variant-numeric: tabular-nums; white-space: nowrap; }
   /* Forget stays hidden until you mean it — deleting a memory is not a browse action. */
   .mem .x {
     flex: none; background: none; border: 0; color: var(--muted); cursor: pointer;
@@ -364,12 +400,24 @@
 
   <nav class="tabs" id="tabs">
     <button data-tab="system" class="on">System</button>
+    <button data-tab="plans">Plans</button>
     <button data-tab="brain">Brain</button>
     <button data-tab="life">Life</button>
     <button data-tab="research">Research</button>
     <button data-tab="senses">Senses</button>
     <button data-tab="settings">Settings</button>
   </nav>
+
+  <!-- PLANS -->
+  <section data-panel="plans" hidden>
+    <div class="card">
+      <div class="card-head">
+        <h2>Your plans <span class="sub" id="plans-sub"></span></h2>
+        <span class="sub">the roadmap adapts to your progress — nightly, and on demand</span>
+      </div>
+    </div>
+    <div id="plans"></div>
+  </section>
 
   <!-- BRAIN -->
   <section data-panel="brain" hidden>
@@ -1057,7 +1105,7 @@ function renderGoals(goals) {
   $("goals").innerHTML = goals.map(g => {
     const pct = Math.round((g.progress || 0) * 100);
     const actions = g.status === "active"
-      ? `<span class="goal-actions"><button class="ok" onclick="goalStatus(${g.id},'achieved')" title="Mark achieved">✓ done</button><button onclick="replanGoal(${g.id})" title="Re-map the roadmap">re-plan</button><button onclick="goalStatus(${g.id},'dropped')" title="Drop this goal">drop</button></span>`
+      ? `<span class="goal-actions"><button class="ok" onclick="goalStatus(${g.id},'achieved')" title="Mark achieved">✓ done</button><button data-adapt="${g.id}" onclick="adaptGoal(${g.id})" title="Re-tune the plan to your progress">adapt</button><button onclick="replanGoal(${g.id})" title="Re-map the roadmap">re-plan</button><button onclick="goalStatus(${g.id},'dropped')" title="Drop this goal">drop</button></span>`
       : "";
     const prog = g.status === "active" ? `<div class="goal-prog">
       <div class="prog-track"><div class="prog-fill" style="width:${Math.max(2, pct)}%"></div></div>
@@ -1075,14 +1123,79 @@ function renderGoals(goals) {
   }).join("");
 }
 window.replanGoal = async id => {
-  if (!confirm("Re-map this goal's roadmap? The current milestones will be replaced.")) return;
+  if (!confirm("Re-map this goal's roadmap from scratch? The current milestones will be replaced.")) return;
   try { await api("/api/goal", { method: "POST", body: { id, replan: true } }); boot(); }
   catch { /* next load reflects the truth */ }
 };
+window.adaptGoal = async id => {
+  const btns = document.querySelectorAll(`[data-adapt="${id}"]`);
+  btns.forEach(b => { b.disabled = true; b.textContent = "Adapting…"; });
+  try { await api("/api/goal", { method: "POST", body: { id, adapt: true } }); boot(); }
+  catch { btns.forEach(b => { b.disabled = false; b.textContent = "Adapt to progress"; }); }
+};
+
+// ---------- Plans tab: a timeline widget per goal ----------
+const MS_ICON = { done: "✅", active: "◉", pending: "○", skipped: "⤫" };
+
+function planTimeline(g) {
+  const ms = g.milestones || [];
+  const start = new Date(g.created_at).getTime();
+  const dated = ms.map(m => m.target_date ? new Date(m.target_date).getTime() : null).filter(Boolean);
+  const end = g.deadline ? new Date(g.deadline).getTime() : (dated.length ? Math.max(...dated) : start + 90 * 864e5);
+  const span = Math.max(1, end - start);
+  const pos = t => Math.max(0, Math.min(100, ((t - start) / span) * 100));
+  const dots = ms.filter(m => m.target_date).map(m =>
+    `<span class="tl-dot ${esc(m.status)}" style="left:${pos(new Date(m.target_date).getTime()).toFixed(1)}%" title="${esc(m.title)} — ${esc(m.target_date)}"></span>`).join("");
+  return `<div class="tl">
+      <div class="tl-track"></div>
+      <div class="tl-fill" style="width:${Math.max(0, Math.min(100, (g.progress || 0) * 100)).toFixed(1)}%"></div>
+      ${dots}
+      <div class="tl-today" style="left:${pos(Date.now()).toFixed(1)}%"></div>
+    </div>
+    <div class="tl-axis"><span>${esc((g.created_at || "").slice(0, 10))}</span><span>${g.deadline ? esc(g.deadline.slice(0, 10)) : "open-ended"}</span></div>`;
+}
+
+function renderPlans(goals) {
+  const box = $("plans");
+  if (!box) return;
+  const active = (goals || []).filter(g => g.status === "active");
+  $("plans-sub").textContent = active.length ? `${active.length} active` : "";
+  if (!goals?.length) {
+    box.innerHTML = `<div class="card"><div class="empty">No plans yet. Set a goal on the System tab and the System maps a milestone route you can track — and adapt — here.</div></div>`;
+    return;
+  }
+  box.innerHTML = goals.map(g => {
+    const ms = g.milestones || [];
+    const pct = Math.round((g.progress || 0) * 100);
+    const acts = g.status === "active" ? `<div class="plan-actions">
+      <button class="primary" data-adapt="${g.id}" onclick="adaptGoal(${g.id})" title="Re-tune the remaining plan to your real progress">Adapt to progress</button>
+      <button onclick="replanGoal(${g.id})" title="Map a fresh roadmap from scratch">Re-plan</button>
+      <button onclick="goalStatus(${g.id},'achieved')">✓ achieved</button></div>` : "";
+    return `<div class="plan ${esc(g.status)}">
+      <div class="plan-head">
+        <div><div class="plan-title">${esc(g.title)}${g.status !== "active" ? ` <span class="meta">(${esc(g.status)})</span>` : ""}</div>${g.target ? `<div class="plan-target">${esc(g.target)}</div>` : ""}</div>
+        ${acts}
+      </div>
+      <div class="plan-stats">
+        <span><b>${pct}%</b> done</span>
+        <span class="pace pace-${esc(g.pace || "no-deadline")}">${PACE_LABEL[g.pace] || "—"}</span>
+        ${g.days_left != null ? `<span><b>${g.days_left}</b> days left</span>` : ""}
+        ${g.projected ? `<span>projected <b>${esc(g.projected)}</b></span>` : ""}
+        <span>${ms.filter(m => m.status === "done").length}/${ms.length} milestones</span>
+      </div>
+      ${ms.length ? planTimeline(g) : `<div class="empty">No roadmap yet — hit Re-plan.</div>`}
+      <div class="pm-list">${ms.map(m => `<div class="pm ${esc(m.status)}">
+        <span class="pm-ic">${MS_ICON[m.status] || "○"}</span>
+        <span><span class="pm-t">${esc(m.title)}</span>${m.done_when ? `<div class="pm-when">done when: ${esc(m.done_when)}</div>` : ""}</span>
+        <span class="pm-date">${m.target_date ? esc(m.target_date.slice(5)) : ""}</span>
+      </div>`).join("")}</div>
+    </div>`;
+  }).join("");
+}
 
 const ACT_ICON = {
   goal: "⚔️", plan: "🗺️", quest_issued: "📜", quest_done: "✅", quest_failed: "❌",
-  reckoning: "🌑", milestone_done: "🏁", research: "🔎", application: "📄", autonomous: "⚡", metric: "📈", note: "•",
+  reckoning: "🌑", milestone_done: "🏁", research: "🔎", application: "📄", autonomous: "⚡", metric: "📈", plan_adapt: "🧭", note: "•",
 };
 
 function renderActivity(items) {
@@ -1534,6 +1647,8 @@ async function boot() {
     renderMetrics(sys.metrics);
     renderApplications(brain.applications);
     wireGoalForm();
+    // Plans tab
+    renderPlans(sys.goals);
     // Brain tab
     renderMemories(brain.memories);
     renderChat(brain.chat);
@@ -1555,7 +1670,7 @@ async function boot() {
     wireTeach();
     $("signout").onclick = () => { localStorage.removeItem("dash_token"); location.reload(); };
     const start = (location.hash || "").slice(1);
-    showTab(["system", "brain", "life", "research", "senses", "settings"].includes(start) ? start : "system");
+    showTab(["system", "plans", "brain", "life", "research", "senses", "settings"].includes(start) ? start : "system");
   } catch (e) {
     localStorage.removeItem("dash_token");
     gate(e.message === "token" && token ? "Wrong token — try again." : "");

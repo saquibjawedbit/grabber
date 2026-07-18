@@ -96,7 +96,7 @@ XP / level / streak are not a table — they live as `state` rows (`xp`, `level`
 | `goals` | The owner's real objectives | `system.js` (`set_goal`, chat) | `status` `active\|achieved\|dropped`; cached `progress` `0..1` recomputed on quest/milestone change; everything is judged against active goals. |
 | `milestones` | The persistent **roadmap** per goal | `planGoal()` in `system.js` | ordered `seq`; `done_when`, `target_date`, `status` `pending\|active\|done\|skipped`. Daily quests aim at the goal's `active` milestone. |
 | `quests` | Concrete done-tonight tasks | `system.js` (`issueDaily`, `add_quest`) | `milestone_id` links the quest to the milestone it advances; `status` `issued→doing→done\|failed\|skipped`; `xp` by kind; resolution moves XP + streak + progress. |
-| `activity` | The System's work log | `logActivity()` in `system.js` | `actor` `owner\|system`; `reasoning` (why, for autonomous moves); `kind` adds `plan\|milestone_done\|autonomous\|metric`. Powers the dashboard feed via `/api/system`. |
+| `activity` | The System's work log | `logActivity()` in `system.js` | `actor` `owner\|system`; `reasoning` (why, for autonomous moves); `kind` adds `plan\|plan_adapt\|milestone_done\|autonomous\|metric`. Powers the dashboard feed via `/api/system`. |
 | `metrics` | Arbitrary numbers tracked over time | `logMetric()` (agent tool `log_metric`) | `name` (lowercased series key), `value`, `unit`, optional `goal_id`; charted per-name on the dashboard's System tab. |
 
 ### Agent brain
