@@ -10,6 +10,7 @@
 // 1:1 onto quest→resolution→XP, so this is a re-shaping of that idea, not a bolt-on.
 
 import { llm } from "./llm.js";
+import { recallMemories } from "./memory.js";
 import { getPersona, voiceBlock } from "./persona.js";
 
 const ISSUE_HOUR = 7;       // IST — morning quest issuance
@@ -248,13 +249,15 @@ It is ${clock.today}. This goal was set ${clock.goal_age_days === 0 ? "today" : 
 ## The goal
 ${goal.title}${goal.target ? `\nTarget: ${goal.target}` : ""}${goal.why ? `\nWhy: ${goal.why}` : ""}
 
-## Who it's for
+## What the System knows about the owner
 ${profile}
 
 Break this into an ORDERED route of 3-6 concrete milestones — the real checkpoints between here
 and done, each with a clear definition of done. The first must be startable this week. Space the
 target dates across the runway${goal.deadline ? " up to the deadline" : " (assume ~8-12 weeks)"}.
-Be specific to THIS goal and person; no generic filler.
+Plan for THIS person, starting from where they actually are: build on what the context shows
+they already own, know, and have done. NEVER include a step the context already covers — do not
+tell them to buy gear they own or learn what they know. No generic filler.
 
 Return ONLY JSON:
 {"reasoning":"one or two sentences on the route you chose",
@@ -269,7 +272,7 @@ export async function planGoal(env, goalId) {
   const have = await env.DB.prepare("SELECT COUNT(*) AS n FROM milestones WHERE goal_id = ?").bind(goalId).first();
   if (have.n) return { skipped: "already planned" };
   const { text, salvaged } = await llm(env,
-    PLAN_PROMPT(await getPersona(env), await clockContext(env, goal), goal, await ownerProfile(env)));
+    PLAN_PROMPT(await getPersona(env), await clockContext(env, goal), goal, await goalContext(env, goal)));
   if (salvaged) return { error: "planner salvaged" };
   const v = parseJson(text);
   const list = Array.isArray(v?.milestones) ? v.milestones.slice(0, 8) : [];
@@ -328,12 +331,18 @@ export async function replanGoal(env, goalId) {
 // dates for the remaining runway, and reshaping scope. Runs on demand, and nightly for
 // goals that have drifted or just hit a milestone.
 
-const ADAPT_PROMPT = (persona, clock, goal, done, remaining, quests, pace) => `You are ${persona.name}, adjusting the owner's plan to their REAL progress.
+const ADAPT_PROMPT = (persona, clock, goal, done, remaining, quests, pace, profile) => `You are ${persona.name}, adjusting the owner's plan to their REAL progress.
 ${voiceBlock(persona)}
 Today is ${clock.today}. This goal is on day ${clock.goal_age_days}${goal.deadline ? `, deadline ${goal.deadline} (${clock.days_to_deadline} days left)` : ""}. Progress ${Math.round((goal.progress || 0) * 100)}%, pace: ${pace.pace}.
 
 ## The goal
 ${goal.title}${goal.target ? `\nTarget: ${goal.target}` : ""}
+
+## What the System knows about the owner
+${profile}
+Plan for THIS person: build on what they already own, know, and have done. NEVER include a
+step the context above already covers (don't tell them to buy gear they own or learn what
+they know).
 
 ## Milestones already DONE — keep these, do NOT repeat them
 ${done.length ? done.map(m => `✓ ${m.title}`).join("\n") : "(none yet)"}
@@ -367,7 +376,8 @@ export async function adaptPlan(env, goalId) {
   const quests = (await env.DB.prepare(
     "SELECT text, status FROM quests WHERE goal_id = ? ORDER BY id DESC LIMIT 20").bind(goalId).all()).results;
   const { text, salvaged } = await llm(env, ADAPT_PROMPT(
-    await getPersona(env), await clockContext(env, goal), goal, done, remaining, quests, paceOf(goal)));
+    await getPersona(env), await clockContext(env, goal), goal, done, remaining, quests, paceOf(goal),
+    await goalContext(env, goal)));
   if (salvaged) return { error: "adapt salvaged" };
   const v = parseJson(text);
   const list = Array.isArray(v?.milestones) ? v.milestones.slice(0, 6) : [];
@@ -399,6 +409,9 @@ export async function adaptPlan(env, goalId) {
     first = false;
   }
   await computeProgress(env, goalId);
+  // Every successful adapt — manual, on-completion, or nightly — stamps the shared
+  // cooldown, so the other triggers see a freshly-tuned plan and skip it.
+  await setState(env, `adapt_last_${goalId}`, now);
   await logActivity(env, {
     kind: "plan_adapt", goal_id: goalId,
     summary: `Re-tuned the plan for: ${goal.title}`,
@@ -412,11 +425,35 @@ export async function adaptPlan(env, goalId) {
  }
 }
 
+// Re-evaluate a goal's plan the moment the owner clears a quest, so the roadmap always
+// reflects what just happened instead of waiting for the nightly reckoning. Gated by a
+// cheap state read first — most completions skip instantly — and a per-goal cooldown so
+// a burst of ✅ taps costs one LLM call, not five. The same `adapt_last_` key gates the
+// nightly pass, so a plan re-tuned this evening isn't re-tuned again at the reckoning.
+const ADAPT_COOLDOWN_MS = 4 * 3600000;   // on-completion: at most every 4h per goal
+export async function maybeAdaptOnDone(env, goalId) {
+  try {
+    goalId = Number(goalId);
+    if (!goalId) return { skipped: "no goal" };
+    const last = await getState(env, `adapt_last_${goalId}`);
+    if (last && Date.now() - new Date(last).getTime() < ADAPT_COOLDOWN_MS) return { skipped: "cooldown" };
+    return await adaptPlan(env, goalId);
+  } catch (e) {
+    console.log("maybeAdaptOnDone failed:", String(e).slice(0, 150));
+    return { error: String(e).slice(0, 150) };
+  }
+}
+
 // ---------- Goals ----------
 
 export async function createGoal(env, { title, why, target, deadline }) {
   title = String(title || "").trim();
   if (!title) return { error: "a goal needs a title" };
+  // Dedup: the agent has re-declared a goal it heard again in chat, leaving multiple
+  // active copies competing for quests. Same title (case-insensitive) → same goal.
+  const dup = await env.DB.prepare(
+    "SELECT id, title FROM goals WHERE status = 'active' AND lower(title) = lower(?)").bind(title.slice(0, 200)).first();
+  if (dup) return { ok: true, id: dup.id, title: dup.title, already_exists: true, note: "That goal is already active — driving at it." };
   const now = new Date().toISOString();
   const row = await env.DB.prepare(
     `INSERT INTO goals (title, why, target, deadline, status, created_at, updated_at)
@@ -498,8 +535,16 @@ export async function listQuests(env, { status = "today" } = {}) {
 export async function resolveQuest(env, id, action) {
   const q = await env.DB.prepare("SELECT * FROM quests WHERE id = ?").bind(Number(id)).first();
   if (!q) return { error: "no quest with that id" };
-  if (["done", "failed", "skipped"].includes(q.status)) return { ok: true, already: q.status };
   const status = ["done", "doing", "failed", "skipped"].includes(action) ? action : "doing";
+  if (["done", "failed", "skipped"].includes(q.status)) {
+    // A terminal status is locked — EXCEPT a same-day "done" overturning failed/skipped.
+    // The reckoning runs at 21:00 IST and auto-fails everything unresolved, but the owner
+    // often clears quests (or taps ✅) later that same night; without this, their Done
+    // silently bounced off the auto-fail and the quest stayed failed forever.
+    const sameDay = q.resolved_at && ist(new Date(q.resolved_at)).date === ist().date;
+    if (!(status === "done" && q.status !== "done" && sameDay)) return { ok: true, already: q.status };
+    return overturnQuest(env, q);
+  }
   await env.DB.prepare("UPDATE quests SET status = ?, resolved_at = ? WHERE id = ?")
     .bind(status, status === "doing" ? null : new Date().toISOString(), Number(id)).run();
   let delta = 0;
@@ -519,7 +564,40 @@ export async function resolveQuest(env, id, action) {
     await advanceMilestones(env, q.goal_id);
     await computeProgress(env, q.goal_id);
   }
-  return { ok: true, status, xp_delta: delta, ...st };
+  return { ok: true, status, xp_delta: delta, goal_id: q.goal_id, ...st };
+}
+
+// Flip a failed/skipped quest to done later the same day. Awards the quest's XP and, for a
+// fail, refunds the penalty (addXp clamps at 0, so the refund can be generous by a few XP
+// when the bar was already empty — acceptable; losing a real deduction forever is not).
+// If the flip leaves today clean, the streak the reckoning broke is restored from the
+// value debrief() stashed before resetting it.
+async function overturnQuest(env, q) {
+  await env.DB.prepare("UPDATE quests SET status = 'done', resolved_at = ? WHERE id = ?")
+    .bind(new Date().toISOString(), q.id).run();
+  const delta = (q.xp || DAILY_XP) + (q.status === "failed" ? FAIL_PENALTY : 0);
+  const st = await addXp(env, delta);
+  await logActivity(env, {
+    kind: "quest_done", actor: "owner", quest_id: q.id, goal_id: q.goal_id,
+    summary: `Cleared quest (overturned ${q.status}): ${q.text}`,
+    detail: `+${delta} XP → level ${st.level}`,
+  });
+  const t = ist();
+  const today = (await env.DB.prepare(
+    "SELECT status FROM quests WHERE date(issued_at, '+330 minutes') = date('now', '+330 minutes')").all()).results;
+  if (today.length && !today.some(x => x.status === "failed") && today.some(x => x.status === "done")
+      && await getState(env, "streak_prev_date") === t.date) {
+    const streak = Number(await getState(env, "streak_prev") || 0) + 1;
+    await setState(env, "streak", streak);
+    if (streak > Number(await getState(env, "streak_best") || 0)) await setState(env, "streak_best", streak);
+  }
+  if (q.goal_id) {
+    await computeProgress(env, q.goal_id);
+    await advanceMilestones(env, q.goal_id);
+    await computeProgress(env, q.goal_id);
+  }
+  const fresh = await getSystemState(env);
+  return { ok: true, status: "done", overturned: q.status, xp_delta: delta, goal_id: q.goal_id, ...st, streak: fresh.streak };
 }
 
 // ---------- Owner profile the System reasons over ----------
@@ -535,6 +613,22 @@ async function ownerProfile(env) {
      WHERE category IN ('goal','skill','project','identity','preference') ORDER BY id LIMIT 40`).all();
   if (mems.length) parts.push(mems.map(m => `- (${m.category}) ${m.fact}`).join("\n"));
   return parts.join("\n\n") || "(the System knows little about them yet)";
+}
+
+// The profile the PLANNER sees: the static profile PLUS memories recalled by meaning
+// against this specific goal. The static block is capped and category-filtered, so the
+// fact that mattered ("already owns a guitar") routinely missed it — and the plan told
+// the owner to buy one. Embedding recall pulls exactly those goal-relevant facts in.
+async function goalContext(env, goal) {
+  const base = await ownerProfile(env);
+  try {
+    const rel = await recallMemories(env,
+      [goal.title, goal.target, goal.why].filter(Boolean).join(" · "));
+    const fresh = rel.filter(m => m.fact && !base.includes(m.fact)).slice(0, 12)
+      .map(m => `- (${m.category}) ${m.fact}`);
+    if (fresh.length) return base + "\n\nKnown facts relevant to THIS goal:\n" + fresh.join("\n");
+  } catch (e) { console.log("goalContext recall failed:", String(e).slice(0, 120)); }
+  return base;
 }
 
 function parseJson(text) {
@@ -672,7 +766,7 @@ export async function debrief(env, tg, { force = false } = {}) {
   if (!force && await getState(env, "system_last_debrief") === t.date) return { skipped: "already done today" };
 
   const { results: today } = await env.DB.prepare(
-    "SELECT id, text, kind, status FROM quests WHERE date(issued_at, '+330 minutes') = date('now', '+330 minutes')").all();
+    "SELECT id, text, kind, status, goal_id FROM quests WHERE date(issued_at, '+330 minutes') = date('now', '+330 minutes')").all();
   await setState(env, "system_last_debrief", t.date);
   if (!today.length) return { skipped: "no quests today" };
 
@@ -690,8 +784,13 @@ export async function debrief(env, tg, { force = false } = {}) {
   const failed = today.filter(q => q.status === "failed").length;
   const allCleared = failed === 0 && done > 0;
 
-  // Streak: a clean day extends it; any failure resets it to zero.
-  let streak = allCleared ? Number(await getState(env, "streak") || 0) + 1 : 0;
+  // Streak: a clean day extends it; any failure resets it to zero. Stash the pre-reckoning
+  // value first — if the owner overturns tonight's auto-fails to done, resolveQuest restores
+  // the streak from it (see overturnQuest).
+  const prevStreak = Number(await getState(env, "streak") || 0);
+  await setState(env, "streak_prev", prevStreak);
+  await setState(env, "streak_prev_date", t.date);
+  let streak = allCleared ? prevStreak + 1 : 0;
   await setState(env, "streak", streak);
   if (streak > Number(await getState(env, "streak_best") || 0)) await setState(env, "streak_best", streak);
 
@@ -701,24 +800,27 @@ export async function debrief(env, tg, { force = false } = {}) {
     await computeProgress(env, g.id);
     await advanceMilestones(env, g.id);
   }
-  // Re-personalize ONE plan a night — the most-behind active goal that's drifted or just
-  // hit a milestone, with a 2-day per-goal cooldown so it re-tunes frequently but not daily.
+  // Nightly re-personalization: EVERY active goal that failed a quest today (including
+  // tonight's auto-fails), drifted behind pace, or hit a milestone gets its remaining
+  // route re-tuned to reality. Capped at 3 LLM calls a night for the free-tier budget;
+  // the shared `adapt_last_` cooldown means a plan already re-tuned this evening (by an
+  // on-completion adapt) is skipped rather than re-tuned twice.
   try {
-    let pick = null, worst = 1;
+    let adapts = 0;
     for (const g of activeGoals) {
+      if (adapts >= 3) break;
+      const last = await getState(env, `adapt_last_${g.id}`);
+      if (last && Date.now() - new Date(last).getTime() < 6 * 3600000) continue;
+      const failedToday = today.some(q => q.goal_id === g.id && q.status === "failed");
       const fresh = await env.DB.prepare("SELECT progress, deadline, created_at FROM goals WHERE id = ?").bind(g.id).first();
       const p = paceOf(fresh);
-      const last = await getState(env, `adapt_last_${g.id}`);
-      const cooled = !last || daysBetween(last, new Date().toISOString()) >= 2;
       const hit = (await env.DB.prepare(
         "SELECT COUNT(*) AS n FROM milestones WHERE goal_id = ? AND status = 'done' AND date(done_at,'+330 minutes') = date('now','+330 minutes')")
         .bind(g.id).first()).n;
-      if (cooled && (p.pace === "behind" || p.pace === "at-risk" || hit)) {
-        // prefer the goal furthest behind pace (lowest progress relative to runway)
-        if (!pick || p.progress < worst) { pick = g; worst = p.progress; }
+      if (failedToday || p.pace === "behind" || p.pace === "at-risk" || hit) {
+        if ((await adaptPlan(env, g.id)).ok) adapts++;
       }
     }
-    if (pick) { await adaptPlan(env, pick.id); await setState(env, `adapt_last_${pick.id}`, t.date); }
   } catch (e) { console.log("nightly adapt failed:", String(e).slice(0, 120)); }
 
   const st = await getSystemState(env);
@@ -945,7 +1047,13 @@ export const SYSTEM_TOOLS = {
     group: "Goals & Quests",
     desc: 'resolve a quest by id. args: {"id": <n>, "action": "done|doing|failed|skipped"}',
     args: { id: { type: "number", required: true }, action: { type: "string", enum: ["done", "doing", "failed", "skipped"] } },
-    run: (env, a) => a.id ? resolveQuest(env, a.id, a.action || "done") : { error: "need the quest id" },
+    run: async (env, a) => {
+      if (!a.id) return { error: "need the quest id" };
+      const r = await resolveQuest(env, a.id, a.action || "done");
+      // A cleared quest re-evaluates its goal's plan (cooldown-gated, fail-soft).
+      if (r.status === "done" && r.goal_id) await maybeAdaptOnDone(env, r.goal_id);
+      return r;
+    },
   },
   get_rank: {
     group: "Goals & Quests",

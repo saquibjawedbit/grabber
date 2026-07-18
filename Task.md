@@ -72,9 +72,11 @@ Cloudflare **Vectorize** is on the same free tier and removes the ceiling.
       vectorCount 19). Round-trip verified: querying by a stored id returns itself at
       score 0.99999, neighbours at ~0.72 — below the 0.90 dedup threshold, as expected.
       (`/api/vector-backfill` remains the tokened rebuild path for the future.)
-- [ ] Owner spot-check: save a near-duplicate via
-      `/api/tool?t=…&name=save_memory&args=...` → expect `status:"duplicate"`, and
-      watch `wrangler tail` for `vectorize … failed` lines in normal chat.
+- [x] Live spot-check (via `wrangler dev --remote` against the real D1/Vectorize/AI
+      bindings): saving an existing fact verbatim → `{ok, id:10, "already known"}`
+      (deduped through the index); a paraphrase below 0.90 inserted (id 36), appeared
+      in the index at score 0.99999, then `DELETE /api/memory?id=36` removed it from
+      **both** stores (D1 count 0, index vectorCount back to 19). Test data cleaned up.
 
 ## Files in scope
 
@@ -150,10 +152,11 @@ or serving more than one owner. Until then, hand-rolled wins.
 - [x] `validateArgs` exercised offline: missing-required, numeric-string coercion,
       bad-number rejection, enum rejection, optional-enum absent, boolean coercion,
       empty-string-as-missing — 10/10 pass. Untyped tools bypass validation (opt-in).
-- [ ] Owner spot-check (deployed, needs `DASH_TOKEN`):
-      `/api/tool?t=…&name=set_reminder&args={"text":"x"}` → expect
-      `invalid args: missing required arg "due_at"`; then watch a real chat self-correct
-      in `wrangler tail`.
+- [x] Live spot-check (via `wrangler dev --remote`, real bindings):
+      `set_reminder` without `due_at` → `invalid args: missing required arg "due_at"
+      (string)`; `complete_quest` with `action:"finished"` → enum error listing the
+      valid values; `cancel_reminder` with `id:"999999"` (string) → coerced, reached
+      the tool, returned "no reminder with that id". All three exactly as designed.
 
 ## Files in scope
 

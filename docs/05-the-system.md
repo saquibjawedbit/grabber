@@ -57,6 +57,8 @@ stateDiagram-v2
   doing --> failed: Failed (-5 xp)
   issued --> failed: debrief — unresolved at reckoning (-5 xp)
   doing --> failed: debrief — unresolved at reckoning (-5 xp)
+  failed --> done: Done later the SAME day (overturn — +xp, refund -5)
+  skipped --> done: Done later the SAME day (overturn — +xp)
   done --> [*]
   failed --> [*]
   skipped --> [*]
@@ -65,6 +67,15 @@ stateDiagram-v2
 XP by kind (`system.js`): daily **+10**, milestone **+30**, urgent **+15**; a failure is
 **−5** (`FAIL_PENALTY`). `resolveQuest(id, action)` is the single choke-point that writes
 status and moves XP; only `done`/`failed` change XP, `doing` just keeps the quest open.
+
+**Overturning** (`overturnQuest`): a terminal status is locked, *except* `done` landing on
+a `failed`/`skipped` quest resolved earlier the **same IST day**. The reckoning runs at
+21:00 IST and auto-fails everything unresolved, but the owner often clears quests (or taps
+✅) later that night — before this rule their Done silently bounced off the auto-fail
+(`already: failed`) and the quest stayed failed forever. The flip re-awards the quest's XP,
+refunds the −5 penalty for a fail, and — if the day is now clean — restores the streak the
+reckoning broke, using the pre-reckoning value `debrief` stashes in `state.streak_prev` /
+`streak_prev_date`.
 
 ### Generation
 `generateDailyQuests` (`system.js`) hands the LLM the active goals, recent quests (to
@@ -97,7 +108,7 @@ sequenceDiagram
   Note over CRON,SYS: 21:00 IST — debrief
   CRON->>SYS: runSystem()
   SYS->>DB: today's quests; unresolved → failed (-5 each)
-  SYS->>DB: streak = allCleared ? +1 : 0 (+ streak_best)
+  SYS->>DB: stash streak_prev, then streak = allCleared ? +1 : 0 (+ streak_best)
   SYS->>AI: DEBRIEF_PROMPT(measured facts only)
   AI-->>SYS: hard, honest reckoning text
   SYS->>TG: "Reckoning — <date>"
@@ -120,7 +131,8 @@ XP/level/streak live as `state` rows (`xp`, `level`, `streak`, `streak_best`).
 - **Level curve** (`levelFor`/`xpForLevel`): level *N* needs `(N-1)² · 100` XP — L2@100,
   L3@400, L4@900, L5@1600…
 - **Streak:** a *clean* day (≥1 done, 0 failed) extends it; **any** failure resets it to
-  zero. `streak_best` records the high-water mark.
+  zero. `streak_best` records the high-water mark. A same-day overturn that leaves the day
+  clean restores the broken streak from `streak_prev` (see §5.3).
 - Surfaced by `/rank` (a level bar + XP-to-next + streak), the `get_rank` agent tool, and
   `GET /api/rank`.
 
@@ -182,8 +194,13 @@ persistent, time-aware plan it drives. Four capabilities, all in `system.js`:
   quest generation, the ponder tick, the reckoning). Never guessed by the model.
 - **Persistent roadmap** — `planGoal()` decomposes a goal into 3–6 ordered `milestones`
   with `target_date`s across the runway (runs once on goal-create, lazily at issuance, or
-  via `replan_goal`). `generateDailyQuests` targets each goal's **active** milestone;
-  clearing its quests auto-advances the milestone (`advanceMilestones`).
+  via `replan_goal`). The planner (and `adaptPlan`) reasons over `goalContext(env, goal)`:
+  the static owner profile **plus** memories recalled by embedding against the goal's
+  title/target/why — so it plans from where the owner actually is (it knows they own a
+  Yamaha Pacifica; it won't tell them to buy a guitar). `generateDailyQuests` targets each
+  goal's **active** milestone; clearing its quests auto-advances the milestone
+  (`advanceMilestones`). `createGoal` dedups on active title (case-insensitive) so the
+  agent re-hearing a goal in chat can't create a second active copy.
 - **Goal-level progress** — `computeProgress` writes `goals.progress` = (done milestones +
   active-milestone quest ratio) / total; `paceOf` compares it to runway elapsed →
   `ahead / on-track / behind / at-risk` + a projected completion date. Pure SQL + arithmetic.
@@ -200,12 +217,16 @@ its milestone roadmap. Full design: the roadmap artifact linked from the project
 
 **Adaptive planning.** A roadmap isn't static — `adaptPlan()` re-personalizes it to real
 progress: it **keeps the completed milestones** and re-tunes only what's left (reshaping
-scope/titles, re-spacing dates for the remaining runway, simplifying when behind). It runs
-three ways: the **debrief** adapts one drifted-or-just-advanced goal per night (2-day
-per-goal cooldown, gated to behind/at-risk/just-hit-a-milestone), an **"Adapt to progress"**
-button on the Plans/System tabs (`POST /api/goal {id,adapt}`), and the agent tool
-`adapt_plan`. Every adaptation logs `plan_adapt` with its reasoning. (Distinct from
-`replanGoal`, which throws the whole roadmap away and maps a fresh one.)
+scope/titles, re-spacing dates for the remaining runway, simplifying when behind), reasoning
+over the same `goalContext` owner profile + goal-relevant memories as the planner. It runs
+four ways: **on quest completion** — a ✅ (Telegram button, via `ctx.waitUntil` so the toast
+never waits on the LLM, or the `complete_quest` tool) fires `maybeAdaptOnDone`, gated by a
+4-hour per-goal cooldown so a burst of taps costs one call; the **debrief** re-tunes *every*
+goal that failed a quest today, is behind/at-risk, or hit a milestone (capped at 3/night,
+6-hour cooldown); the **"Adapt to progress"** button (`POST /api/goal {id,adapt}`); and the
+agent tool `adapt_plan`. Every successful adapt stamps a shared `adapt_last_<id>` state key,
+so the triggers never re-tune a freshly-tuned plan, and logs `plan_adapt` with its reasoning.
+(Distinct from `replanGoal`, which throws the whole roadmap away and maps a fresh one.)
 
 **The Plans tab** is a consolidated widget: each goal as a horizontal **timeline** (milestone
 dots positioned by target date, a progress fill vs a "today" marker so drift is visible),
@@ -217,6 +238,14 @@ waist, sleep, runs, workouts) go to `log_health` (the `health` table) and chart 
 else** moving toward a goal (MRR, leetcode solved, minutes practiced) goes to `log_metric`
 (the `metrics` table) and charts on the **System** tab. The agent's rules route each kind
 to the right log so it forms one series over time.
+
+Both sections share one interactive chart (`drawTrend` in `public/index.html`): a
+**time-proportional x-axis** (uneven logging reads as uneven — an index-based x would lie
+about pace), y gridlines with value labels, first/last date labels, hover **crosshair +
+tooltip** (exact value, IST timestamp), and a **7d/30d/90d/All range row** that scopes
+every card in the section. Count series are **bucketed per IST day** (entries sum into one
+bar; hovering lifts the bar). Charts draw at real pixel width and redraw on resize; an
+all-positive series never pads its domain below zero.
 
 **Re-planning caveat:** because `quests.milestone_id` FKs `milestones(id)`, `replanGoal()`
 detaches quests (`milestone_id = NULL`) *before* deleting the old milestones — a raw

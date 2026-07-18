@@ -215,7 +215,14 @@
   .metric-name { font-size: 0.82rem; color: var(--ink-2); text-transform: capitalize; }
   .metric-val { font-size: 1.35rem; font-weight: 650; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
   .metric-unit { font-size: 0.8rem; font-weight: 400; color: var(--muted); }
-  .mchart { display: block; width: 100%; height: 64px; margin: 0.4rem 0 0.2rem; }
+  .trend-tools { display: flex; align-items: center; gap: 0.7rem; margin: 0 0 0.8rem; flex-wrap: wrap; }
+  .trend-tools .hint { color: var(--muted); font-size: 0.74rem; }
+  .seg.seg-sm button { font-size: 0.74rem; padding: 0.22rem 0.6rem; }
+  .mchart-box { margin: 0.45rem 0 0.25rem; }
+  .mchart-box svg { display: block; width: 100%; height: auto; cursor: crosshair; }
+  .mchart-box .axis { fill: var(--muted); font-size: 10px; font-variant-numeric: tabular-nums; }
+  .mchart-none { height: 120px; display: flex; align-items: center; justify-content: center;
+    color: var(--muted); font-size: 0.78rem; border: 1px dashed var(--border); border-radius: 8px; }
   .metric-foot { font-size: 0.72rem; color: var(--muted); font-variant-numeric: tabular-nums; }
   .metric-up { color: var(--good); } .metric-down { color: var(--critical); }
   /* Plans widget — a timeline per goal */
@@ -1214,90 +1221,190 @@ function renderActivity(items) {
     </div>`).join("");
 }
 
-// One numeric series → a small area line chart. Matches the weight sparkline idiom.
-function metricChart(points, w = 260, h = 64) {
-  if (points.length < 2) {
-    return `<svg class="mchart" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" aria-hidden="true"><circle cx="${w - 6}" cy="${h / 2}" r="3.5" fill="var(--seq)"></circle></svg>`;
+// ---------- trend charts (System → Metrics, Life → Trends over time) ----------
+// One numeric series per card: a line for levels (weight, MRR), per-day bars for counts
+// (workouts, runs). Time-proportional x — uneven logging must read as uneven, an
+// index-based x would lie about the pace. Hover = crosshair + tooltip (the shared #tip),
+// and a range row (7d/30d/90d/All) scopes every card in the section at once.
+
+const TREND_RANGES = [["7d", 7], ["30d", 30], ["90d", 90], ["All", 0]];
+const trendRange = {};   // boxId → days back (0 = everything)
+
+const fmtV = v => Math.abs(v) >= 1000 ? Math.round(v).toLocaleString() : String(Math.round(v * 100) / 100);
+const fmtD = (at, withTime) => new Date(at).toLocaleString("en-GB", {
+  timeZone: "Asia/Kolkata", day: "numeric", month: "short",
+  ...(withTime ? { hour: "2-digit", minute: "2-digit" } : {}),
+});
+
+// Count-like entries within the same IST day sum into one bar.
+function bucketByDay(pts) {
+  const by = new Map();
+  for (const p of pts) {
+    const d = new Date(new Date(p.at).getTime() + 330 * 60000).toISOString().slice(0, 10);
+    by.set(d, (by.get(d) || 0) + Number(p.value));
   }
-  const vals = points.map(p => p.value);
-  const lo = Math.min(...vals), hi = Math.max(...vals), span = hi - lo || 1;
-  const x = i => 4 + (i / (points.length - 1)) * (w - 8);
-  const y = v => h - 6 - ((v - lo) / span) * (h - 14);
-  const line = points.map((p, i) => `${x(i).toFixed(1)},${y(p.value).toFixed(1)}`).join(" L");
-  const last = points[points.length - 1];
-  return `<svg class="mchart" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" role="img" aria-label="trend from ${vals[0]} to ${last.value}">
-    <path d="M${line} L${x(points.length - 1).toFixed(1)},${h} L${x(0).toFixed(1)},${h} Z" fill="var(--seq-fill)"></path>
-    <path d="M${line}" fill="none" stroke="var(--seq)" stroke-width="2" vector-effect="non-scaling-stroke"></path>
-    <circle cx="${x(points.length - 1).toFixed(1)}" cy="${y(last.value).toFixed(1)}" r="3" fill="var(--seq)"></circle>
-  </svg>`;
+  return [...by.entries()].sort().map(([d, v]) => ({ at: d + "T00:00:00+05:30", value: v }));
 }
 
-function renderMetrics(metrics) {
-  const box = $("metrics");
+function renderTrendGrid(boxId, groups, emptyMsg) {
+  const box = $(boxId);
   if (!box) return;
-  if (!metrics?.length) {
-    box.innerHTML = `<div class="empty">No metrics yet. Tell the bot a number worth tracking — “I weigh 58kg”, “MRR hit $250”, “solved 4 leetcode today” — and it charts here over time. Each named number becomes its own series.</div>`;
-    return;
-  }
-  const byName = {};
-  for (const m of metrics) (byName[m.name] ||= []).push(m);
-  box.innerHTML = `<div class="metric-grid">` + Object.entries(byName).map(([name, pts]) => {
-    pts.sort((a, b) => new Date(a.at) - new Date(b.at));
-    const last = pts[pts.length - 1];
-    const delta = pts.length > 1 ? Math.round((last.value - pts[0].value) * 100) / 100 : null;
+  if (!groups.length) { box.innerHTML = `<div class="empty">${emptyMsg}</div>`; return; }
+  const days = trendRange[boxId] || 0;
+  const cut = days ? Date.now() - days * 86400000 : 0;
+  const visOf = g => cut ? g.pts.filter(p => new Date(p.at) >= cut) : g.pts;
+  box.innerHTML = `
+    <div class="trend-tools">
+      <div class="seg seg-sm">${TREND_RANGES.map(([label, d]) =>
+        `<button data-d="${d}" class="${days === d ? "on" : ""}">${label}</button>`).join("")}</div>
+      <span class="hint">hover a chart for exact values</span>
+    </div>
+    <div class="metric-grid">` + groups.map((g, gi) => {
+    const vis = visOf(g);
+    const last = vis[vis.length - 1], first = vis[0];
+    const delta = vis.length > 1 ? Math.round((last.value - first.value) * 100) / 100 : null;
     const dcls = delta > 0 ? "metric-up" : delta < 0 ? "metric-down" : "";
     return `<div class="metric-card">
       <div class="metric-head">
-        <span class="metric-name">${esc(name.replace(/_/g, " "))}</span>
-        <span class="metric-val">${esc(String(last.value))}${last.unit ? `<span class="metric-unit"> ${esc(last.unit)}</span>` : ""}</span>
+        <span class="metric-name">${esc(g.name.replace(/_/g, " "))}</span>
+        <span class="metric-val">${last ? esc(fmtV(last.value)) : "–"}${last && g.unit ? `<span class="metric-unit"> ${esc(g.unit)}</span>` : ""}</span>
       </div>
-      ${metricChart(pts)}
-      <div class="metric-foot">${pts.length} point${pts.length === 1 ? "" : "s"}${delta != null ? ` · <span class="${dcls}">${delta > 0 ? "▲" : delta < 0 ? "▼" : "→"} ${Math.abs(delta)}</span> since first` : ""}</div>
+      <div class="mchart-box" data-g="${gi}"></div>
+      <div class="metric-foot">${vis.length
+        ? `${vis.length} ${g.bar ? "day" : "point"}${vis.length === 1 ? "" : "s"} · ${esc(fmtD(first.at))} → ${esc(fmtD(last.at))}${delta != null ? ` · <span class="${dcls}">${delta > 0 ? "▲" : delta < 0 ? "▼" : "→"} ${fmtV(Math.abs(delta))}</span>` : ""}`
+        : `nothing in the last ${days} days`}</div>
     </div>`;
   }).join("") + `</div>`;
+  box.querySelectorAll(".seg-sm button").forEach(b => b.onclick = () => {
+    trendRange[boxId] = Number(b.dataset.d);
+    renderTrendGrid(boxId, groups, emptyMsg);
+  });
+  box.querySelectorAll(".mchart-box").forEach(el => {
+    const g = groups[Number(el.dataset.g)];
+    el._draw = () => drawTrend(el, visOf(g), g);
+    el._draw();
+  });
 }
 
-// Vertical bars for count-like series (workouts, runs). Last bar emphasized.
-function barChart(points, w = 260, h = 64) {
-  const vals = points.map(p => p.value);
-  const hi = Math.max(1, ...vals);
-  const n = points.length, gap = n > 40 ? 0.5 : 2;
-  const bw = Math.max(1.5, (w - (n - 1) * gap) / n);
-  return `<svg class="mchart" viewBox="0 0 ${w} ${h}" preserveAspectRatio="none" role="img" aria-label="${n} bars">
-    ${points.map((p, i) => {
-      const bh = Math.max(1, (p.value / hi) * (h - 4));
-      return `<rect x="${(i * (bw + gap)).toFixed(1)}" y="${(h - bh).toFixed(1)}" width="${bw.toFixed(1)}" height="${bh.toFixed(1)}" rx="1" fill="var(--seq)" opacity="${i === n - 1 ? 1 : 0.62}"></rect>`;
-    }).join("")}
+// Grid columns reflow on resize; charts are drawn at real pixel width, so redraw them.
+addEventListener("resize", (() => {
+  let t;
+  return () => {
+    clearTimeout(t);
+    t = setTimeout(() => document.querySelectorAll(".mchart-box").forEach(el => el._draw && el._draw()), 150);
+  };
+})());
+
+function drawTrend(el, pts, g) {
+  if (!pts.length) { el.innerHTML = `<div class="mchart-none">no points in this range</div>`; return; }
+  const w = Math.max(180, el.clientWidth || 260), h = 120;
+  const padL = 38, padR = 12, padT = 10, padB = 18;
+  const iw = w - padL - padR, ih = h - padT - padB, base = padT + ih;
+  const vals = pts.map(p => p.value);
+  const lo = g.bar ? 0 : Math.min(...vals), hi = Math.max(...vals);
+  const span = hi - lo || Math.abs(hi) || 1;
+  // Pad the domain so the line doesn't kiss the frame — but never pad an all-positive
+  // series below zero (an MRR chart labelled "-129" reads as a real loss).
+  const rawLo = g.bar ? 0 : lo - span * 0.08;
+  const dLo = lo >= 0 ? Math.max(0, rawLo) : rawLo, dHi = hi + span * 0.08, dSpan = dHi - dLo || 1;
+  const Y = v => padT + ih - ((v - dLo) / dSpan) * ih;
+
+  const t0 = new Date(pts[0].at).getTime(), t1 = new Date(pts[pts.length - 1].at).getTime();
+  let xs, bw = 0;
+  if (g.bar) {
+    const nDays = Math.round((t1 - t0) / 86400000) + 1;
+    const slot = iw / nDays;
+    bw = Math.min(26, Math.max(2.5, slot - 2));
+    xs = pts.map(p => padL + (Math.round((new Date(p.at).getTime() - t0) / 86400000) + 0.5) * slot);
+  } else {
+    xs = pts.map(p => padL + ((new Date(p.at).getTime() - t0) / (t1 - t0 || 1)) * iw);
+  }
+
+  const grid = [dLo, (dLo + dHi) / 2, dHi].map(v =>
+    `<line x1="${padL}" x2="${w - padR}" y1="${Y(v).toFixed(1)}" y2="${Y(v).toFixed(1)}" stroke="var(--grid)" stroke-width="1"></line>
+     <text class="axis" x="${padL - 6}" y="${(Y(v) + 3).toFixed(1)}" text-anchor="end">${esc(fmtV(v))}</text>`).join("");
+  const xlab = `<text class="axis" x="${padL}" y="${h - 4}">${esc(fmtD(pts[0].at))}</text>
+    <text class="axis" x="${w - padR}" y="${h - 4}" text-anchor="end">${esc(fmtD(pts[pts.length - 1].at))}</text>`;
+
+  let marks;
+  if (g.bar) {
+    marks = pts.map((p, i) => {
+      const bh = Math.max(1.5, base - Y(p.value));
+      return `<rect class="tbar" x="${(xs[i] - bw / 2).toFixed(1)}" y="${(base - bh).toFixed(1)}" width="${bw.toFixed(1)}" height="${bh.toFixed(1)}" rx="2" fill="var(--seq)" opacity="0.78"></rect>`;
+    }).join("");
+  } else if (pts.length === 1) {
+    marks = `<circle cx="${xs[0].toFixed(1)}" cy="${Y(vals[0]).toFixed(1)}" r="3.5" fill="var(--seq)"></circle>`;
+  } else {
+    const line = pts.map((p, i) => `${xs[i].toFixed(1)},${Y(p.value).toFixed(1)}`).join(" L");
+    marks = `<path d="M${line} L${xs[xs.length - 1].toFixed(1)},${base} L${xs[0].toFixed(1)},${base} Z" fill="var(--seq-fill)"></path>
+      <path d="M${line}" fill="none" stroke="var(--seq)" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"></path>
+      <circle cx="${xs[xs.length - 1].toFixed(1)}" cy="${Y(vals[vals.length - 1]).toFixed(1)}" r="3" fill="var(--seq)"></circle>`;
+  }
+
+  el.innerHTML = `<svg viewBox="0 0 ${w} ${h}" role="img"
+      aria-label="${esc(g.name)}: ${pts.length} points, ${esc(fmtV(vals[0]))} to ${esc(fmtV(vals[vals.length - 1]))}">
+    ${grid}${xlab}${marks}
+    <line class="xh" y1="${padT}" y2="${base}" stroke="var(--baseline)" stroke-width="1" visibility="hidden"></line>
+    <circle class="hpt" r="4" fill="var(--seq)" stroke="var(--surface)" stroke-width="2" visibility="hidden"></circle>
   </svg>`;
+
+  const svg = el.firstElementChild;
+  const xh = svg.querySelector(".xh"), hpt = svg.querySelector(".hpt");
+  const bars = g.bar ? [...svg.querySelectorAll(".tbar")] : [];
+  let hovered = -1;
+  svg.onpointermove = e => {
+    const r = svg.getBoundingClientRect();
+    const px = (e.clientX - r.left) * (w / r.width);   // svg is width:100%, scale back to viewBox units
+    let i = 0;
+    for (let k = 1; k < xs.length; k++) if (Math.abs(xs[k] - px) < Math.abs(xs[i] - px)) i = k;
+    const p = pts[i];
+    if (g.bar) {
+      if (hovered !== i) {
+        if (hovered >= 0) bars[hovered].setAttribute("opacity", "0.78");
+        bars[i].setAttribute("opacity", "1");
+        hovered = i;
+      }
+    } else {
+      xh.setAttribute("x1", xs[i]); xh.setAttribute("x2", xs[i]);
+      xh.setAttribute("visibility", "visible");
+      hpt.setAttribute("cx", xs[i]); hpt.setAttribute("cy", Y(p.value));
+      hpt.setAttribute("visibility", "visible");
+    }
+    tipShow(`<b>${esc(fmtV(p.value))}${g.unit ? ` <span class="t-cat">${esc(g.unit)}</span>` : ""}</b>
+      <div class="t-cat">${esc(fmtD(p.at, !g.bar))} · ${esc(g.name.replace(/_/g, " "))}</div>`, e.clientX, e.clientY);
+  };
+  svg.onpointerleave = () => {
+    xh.setAttribute("visibility", "hidden");
+    hpt.setAttribute("visibility", "hidden");
+    if (hovered >= 0) bars[hovered].setAttribute("opacity", "0.78");
+    hovered = -1;
+    tipHide();
+  };
+}
+
+function renderMetrics(metrics) {
+  const byName = {};
+  for (const m of metrics || []) (byName[m.name] ||= []).push(m);
+  const groups = Object.entries(byName).map(([name, pts]) => {
+    pts.sort((a, b) => new Date(a.at) - new Date(b.at));
+    return { name, unit: pts.find(p => p.unit)?.unit || "", pts, bar: false };
+  });
+  renderTrendGrid("metrics", groups,
+    `No metrics yet. Tell the bot a number worth tracking — “I weigh 58kg”, “MRR hit $250”, “solved 4 leetcode today” — and it charts here over time. Each named number becomes its own series.`);
 }
 
 // Body/habit metrics from the health log → a chart per series (line for levels, bars for counts).
 const LIFE_BAR = { run_km: 1, workout: 1, pushups: 1, steps: 1, reps: 1, water: 1, run: 1, situps: 1 };
 function renderLifeTrends(health) {
-  const box = $("life-trends");
-  if (!box) return;
-  const pts = (health || []).filter(h => h.value != null);
-  if (!pts.length) {
-    box.innerHTML = `<div class="empty">Nothing logged yet. Tell the bot “I weigh 71.2 today”, “slept 6.5h”, “ran 5k”, “did a workout” — each becomes a tracked series and charts here over time.</div>`;
-    return;
-  }
   const byMetric = {};
-  for (const h of pts) (byMetric[h.metric] ||= []).push(h);
-  box.innerHTML = `<div class="metric-grid">` + Object.entries(byMetric).map(([name, ps]) => {
-    ps.sort((a, b) => new Date(a.at) - new Date(b.at));
-    const last = ps[ps.length - 1], first = ps[0];
-    const delta = ps.length > 1 ? Math.round((last.value - first.value) * 100) / 100 : null;
-    const dcls = delta > 0 ? "metric-up" : delta < 0 ? "metric-down" : "";
-    const chart = LIFE_BAR[name] ? barChart(ps) : metricChart(ps);
-    return `<div class="metric-card">
-      <div class="metric-head">
-        <span class="metric-name">${esc(name.replace(/_/g, " "))}</span>
-        <span class="metric-val">${esc(String(last.value))}${last.unit ? `<span class="metric-unit"> ${esc(last.unit)}</span>` : ""}</span>
-      </div>
-      ${chart}
-      <div class="metric-foot">${ps.length} point${ps.length === 1 ? "" : "s"} · ${esc(first.at.slice(0, 10))} → ${esc(last.at.slice(0, 10))}${delta != null ? ` · <span class="${dcls}">${delta > 0 ? "▲" : delta < 0 ? "▼" : "→"} ${Math.abs(delta)}</span>` : ""}</div>
-    </div>`;
-  }).join("") + `</div>`;
+  for (const hp of health || []) if (hp.value != null) (byMetric[hp.metric] ||= []).push(hp);
+  const groups = Object.entries(byMetric).map(([name, pts]) => {
+    pts.sort((a, b) => new Date(a.at) - new Date(b.at));
+    const bar = !!LIFE_BAR[name];
+    return { name, unit: pts.find(p => p.unit)?.unit || "", pts: bar ? bucketByDay(pts) : pts, bar };
+  });
+  renderTrendGrid("life-trends", groups,
+    `Nothing logged yet. Tell the bot “I weigh 71.2 today”, “slept 6.5h”, “ran 5k”, “did a workout” — each becomes a tracked series and charts here over time.`);
 }
 
 function renderSettings(s) {

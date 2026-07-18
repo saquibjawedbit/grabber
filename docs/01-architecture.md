@@ -171,6 +171,12 @@ Key implementation facts:
 - **HTML-safety fallback:** if `sendMessage`/`editMessageText` fails (usually the model
   emitted HTML-unsafe text), the Worker resends with `parse_mode` stripped
   (`worker/src/index.js:308`).
+- **Swipe-to-reply carries context:** `replyContext` (`worker/src/index.js`) runs on the
+  text and voice branches. A reply to a quest message is matched exactly via the
+  `tg_message_id` stored at issue time and becomes `[replying to quest #12 — "…" (status:
+  issued)]`; a reply to any other message quotes it verbatim (≤300 chars). This matters
+  because cron-sent messages (quests, reckonings, briefings) never enter `chat_history` —
+  without the prefix, a reply to one of them reached the agent with zero context.
 
 ## 1.5 The hourly cron: how the agent acts unprompted
 

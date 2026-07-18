@@ -4,7 +4,7 @@
 import { embedMemory, rememberExchange, runAgent, TOOLS, validateArgs } from "./agent.js";
 import { backfill, extract, forgetMemory, reconcile, saveMemory, unpackVec } from "./memory.js";
 import { DEFAULT_PERSONA, getPersona, resetPersona, setPersona } from "./persona.js";
-import { adaptPlan, createGoal, debrief, getSettings, getSystemState, issueDaily, listGoals, listMetrics, listMilestones, listQuests, replanGoal, resolveQuest, runSystem, setAutonomyMode, updateGoal } from "./system.js";
+import { adaptPlan, createGoal, debrief, getSettings, getSystemState, issueDaily, listGoals, listMetrics, listMilestones, listQuests, maybeAdaptOnDone, replanGoal, resolveQuest, runSystem, setAutonomyMode, updateGoal } from "./system.js";
 import { classifyInbox, googleConnected, ingestNotification, pollCalendar, remindEvents } from "./senses.js";
 import { processBankNotifications } from "./life.js";
 import { generatePerception, getPerception } from "./perception.js";
@@ -177,7 +177,7 @@ async function describeImage(env, fileId, caption, mime) {
   return (res?.response ?? res?.choices?.[0]?.message?.content ?? "").trim();
 }
 
-async function handleVoice(env, chatId, fileId, placeholderId) {
+async function handleVoice(env, chatId, fileId, placeholderId, quoted = "") {
   let heard;
   try {
     heard = await transcribe(env, fileId);
@@ -201,7 +201,7 @@ async function handleVoice(env, chatId, fileId, placeholderId) {
     chat_id: chatId, message_id: placeholderId,
     text: `🎧 <i>“${esc(heard)}”</i>\n\n🤔 …`, parse_mode: "HTML",
   });
-  await converse(env, chatId, heard, placeholderId, `🎧 <i>“${esc(heard)}”</i>\n\n`);
+  await converse(env, chatId, quoted + heard, placeholderId, `🎧 <i>“${esc(heard)}”</i>\n\n`);
 }
 
 async function handlePhoto(env, chatId, fileId, caption, placeholderId, mime) {
@@ -234,6 +234,31 @@ async function handlePhoto(env, chatId, fileId, caption, placeholderId, mime) {
 
 // ---------- Conversational agent ----------
 
+// The agent writes Markdown, but messages go out with parse_mode=HTML — sent
+// verbatim, Telegram shows the asterisks literally. Convert the subset the
+// model actually produces. A reply already carrying Telegram HTML tags passes
+// through untouched.
+const TG_HTML = /<\/?(b|strong|i|em|u|s|del|code|pre|blockquote|tg-spoiler)>|<a href=/i;
+function mdToHtml(md) {
+  const src = String(md ?? "");
+  if (TG_HTML.test(src)) return src;
+  // Code first: nothing inside it may be styled, and its content needs escaping.
+  const keep = [];
+  const stash = html => `\u0000${keep.push(html) - 1}\u0000`;
+  let s = src.replace(/```\w*\n?([\s\S]*?)```/g, (_, code) => stash(`<pre>${esc(code.replace(/\n$/, ""))}</pre>`));
+  s = esc(s)
+    .replace(/`([^`\n]+)`/g, (_, c) => stash(`<code>${c}</code>`))
+    .replace(/\[([^\]\n]+)\]\((https?:[^)\s]+)\)/g, '<a href="$2">$1</a>')
+    .replace(/\*\*([^*\n]+)\*\*/g, "<b>$1</b>")
+    .replace(/__([^_\n]+)__/g, "<b>$1</b>")
+    .replace(/(^|[^\w*])\*(\S(?:[^*\n]*\S)?)\*(?![\w*])/g, "$1<i>$2</i>")
+    .replace(/(^|\s)_(\S(?:[^_\n]*\S)?)_(?!\w)/g, "$1<i>$2</i>")
+    .replace(/~~([^~\n]+)~~/g, "<s>$1</s>")
+    .replace(/^#{1,6} +(.+)$/gm, "<b>$1</b>")
+    .replace(/^[-*] +/gm, "• ");
+  return s.replace(/\u0000(\d+)\u0000/g, (_, i) => keep[i]);
+}
+
 async function converse(env, chatId, text, placeholderId, prefix = "") {
   let reply;
   try {
@@ -242,7 +267,7 @@ async function converse(env, chatId, text, placeholderId, prefix = "") {
     reply = `⚠️ I hit an error: ${String(e).slice(0, 200)}`;
   }
   const body = {
-    chat_id: chatId, text: prefix + reply, parse_mode: "HTML", disable_web_page_preview: true,
+    chat_id: chatId, text: prefix + mdToHtml(reply), parse_mode: "HTML", disable_web_page_preview: true,
   };
   let r = placeholderId
     ? await tg(env, "editMessageText", { ...body, message_id: placeholderId })
@@ -294,6 +319,24 @@ async function ingestDocument(env, chatId, doc) {
 
 // ---------- Telegram webhook: every tap is a label (point 4) ----------
 
+// Telegram's swipe-to-reply carries the quoted message in reply_to_message; it used to
+// be silently dropped, so "done" replied onto a quest meant nothing to the agent. Worse,
+// quest/reckoning/briefing messages are sent by the cron path and never enter
+// chat_history — a reply to one of those arrived with ZERO context. Quests are matched
+// exactly via the tg_message_id stored at issue time; anything else is quoted verbatim.
+async function replyContext(env, msg) {
+  const r = msg?.reply_to_message;
+  if (!r) return "";
+  try {
+    const q = await env.DB.prepare(
+      "SELECT id, text, status FROM quests WHERE tg_message_id = ?").bind(r.message_id).first();
+    if (q) return `[replying to quest #${q.id} — "${q.text}" (status: ${q.status})] `;
+  } catch { /* fall through to the plain quote */ }
+  const quoted = (r.text || r.caption || "").slice(0, 300);
+  if (!quoted) return "";
+  return `[replying to ${r.from?.is_bot ? "your earlier message" : "their own earlier message"}: "${quoted}"] `;
+}
+
 async function handleTelegram(request, env, ctx) {
   if (request.headers.get("X-Telegram-Bot-Api-Secret-Token") !== env.TG_WEBHOOK_SECRET) {
     return new Response("forbidden", { status: 403 });
@@ -326,7 +369,8 @@ async function handleTelegram(request, env, ctx) {
   if (audio) {
     if (!isOwner(msg.chat.id, env)) return new Response("ok");
     const sent = await tg(env, "sendMessage", { chat_id: msg.chat.id, text: "🎧 listening…" });
-    ctx.waitUntil(handleVoice(env, msg.chat.id, audio.file_id, sent.result?.message_id));
+    const quoted = await replyContext(env, msg);
+    ctx.waitUntil(handleVoice(env, msg.chat.id, audio.file_id, sent.result?.message_id, quoted));
     return new Response("ok");
   }
   if (msg?.text) {
@@ -338,7 +382,8 @@ async function handleTelegram(request, env, ctx) {
     }
     // Ack Telegram fast; think in the background, then edit the placeholder.
     const sent = await tg(env, "sendMessage", { chat_id: msg.chat.id, text: "🤔 …" });
-    ctx.waitUntil(converse(env, msg.chat.id, msg.text, sent.result?.message_id));
+    const quoted = await replyContext(env, msg);
+    ctx.waitUntil(converse(env, msg.chat.id, quoted + msg.text, sent.result?.message_id));
     return new Response("ok");
   }
   if (msg && isOwner(msg.chat.id, env)) {
@@ -368,7 +413,8 @@ async function handleTelegram(request, env, ctx) {
     const r = await resolveQuest(env, id, action);
     let toast = r.error ? r.error : `Quest ${action}`;
     if (!r.error) {
-      if (action === "done") toast = `✅ +${r.xp_delta} XP · Level ${r.level}${r.leveled_up ? " — LEVEL UP" : ""}`;
+      if (r.already) toast = `Already ${r.already} — that stands.`;   // no-op: don't fake an XP gain
+      else if (action === "done") toast = `✅ ${r.overturned ? "Overturned. " : ""}+${r.xp_delta} XP · Level ${r.level}${r.leveled_up ? " — LEVEL UP" : ""}`;
       else if (action === "failed") toast = `❌ ${r.xp_delta} XP. Do better tomorrow.`;
       else if (action === "doing") toast = "In progress. The reckoning is tonight.";
     }
@@ -380,6 +426,9 @@ async function handleTelegram(request, env, ctx) {
       });
     }
     await tg(env, "answerCallbackQuery", { callback_query_id: cb.id, text: toast });
+    // A ✅ re-evaluates the goal's plan against what just happened — in the background,
+    // so the button toast never waits on an LLM call (cooldown-gated inside).
+    if (r.status === "done" && r.goal_id) ctx.waitUntil(maybeAdaptOnDone(env, r.goal_id));
     return new Response("ok");
   }
   await tg(env, "answerCallbackQuery", { callback_query_id: cb.id });
