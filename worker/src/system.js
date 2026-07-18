@@ -10,7 +10,7 @@
 // 1:1 onto quest→resolution→XP, so this is a re-shaping of that idea, not a bolt-on.
 
 import { llm } from "./llm.js";
-import { recallMemories } from "./memory.js";
+import { recallMemories, saveMemory } from "./memory.js";
 import { getPersona, voiceBlock } from "./persona.js";
 
 const ISSUE_HOUR = 7;       // IST — morning quest issuance
@@ -371,6 +371,95 @@ async function advanceMilestones(env, goalId) {
   }
 }
 
+// ---------- Plan questions: the planner asks back ----------
+//
+// A mature plan is built on facts. When the planner is missing one that would materially
+// change the route (waist size, hours free per day, equipment, budget, skill level), it
+// emits up to 3 targeted questions. They surface on Telegram, in the chat agent's context,
+// and on the Plans tab. Answering stores the fact (plan_questions + a memory) and
+// re-plans the goal immediately — ask → answer → better plan, all day.
+
+const MAX_OPEN_QUESTIONS = 3;   // per goal — the mentor probes, it doesn't interrogate
+
+async function recordPlanQuestions(env, goalId, questions) {
+  if (!Array.isArray(questions) || !questions.length) return 0;
+  const now = new Date().toISOString();
+  let added = 0;
+  for (const q of questions.slice(0, MAX_OPEN_QUESTIONS)) {
+    const text = String(q).trim().slice(0, 300);
+    if (!text) continue;
+    const open = await env.DB.prepare(
+      "SELECT COUNT(*) AS n FROM plan_questions WHERE goal_id = ? AND status = 'open'").bind(goalId).first();
+    if (open.n >= MAX_OPEN_QUESTIONS) break;
+    // Don't re-ask what's open or was ever answered for this goal (case-insensitive).
+    const dup = await env.DB.prepare(
+      "SELECT id FROM plan_questions WHERE goal_id = ? AND lower(question) = lower(?)").bind(goalId, text).first();
+    if (dup) continue;
+    await env.DB.prepare(
+      "INSERT INTO plan_questions (goal_id, question, status, asked_at) VALUES (?,?, 'open', ?)")
+      .bind(goalId, text, now).run();
+    added++;
+  }
+  return added;
+}
+
+export async function listPlanQuestions(env, { status = "open" } = {}) {
+  const where = status === "all" ? "" : "WHERE q.status = ?";
+  const binds = status === "all" ? [] : [status];
+  const { results } = await env.DB.prepare(
+    `SELECT q.id, q.goal_id, g.title AS goal_title, q.question, q.status, q.answer, q.asked_at
+     FROM plan_questions q JOIN goals g ON g.id = q.goal_id ${where} ORDER BY q.id DESC LIMIT 30`)
+    .bind(...binds).all();
+  return { count: results.length, questions: results };
+}
+
+// The core of the loop: store the answer, keep it as a durable memory, re-plan NOW.
+export async function answerPlanQuestion(env, { id, answer }) {
+  id = Number(id);
+  answer = String(answer || "").trim().slice(0, 500);
+  if (!id || !answer) return { error: "need the question id and an answer" };
+  const q = await env.DB.prepare("SELECT * FROM plan_questions WHERE id = ?").bind(id).first();
+  if (!q) return { error: "no plan question with that id" };
+  if (q.status === "answered") return { ok: true, already: "answered" };
+  await env.DB.prepare(
+    "UPDATE plan_questions SET status = 'answered', answer = ?, answered_at = ? WHERE id = ?")
+    .bind(answer, new Date().toISOString(), id).run();
+  // Durable memory too, so every future recall — not just this goal's planner — knows it.
+  try { await saveMemory(env, `${answer} (answering: ${q.question})`, "identity", { source: "plan_question" }); }
+  catch (e) { console.log("plan answer memory failed:", String(e).slice(0, 120)); }
+  await logActivity(env, {
+    kind: "plan_question", actor: "owner", goal_id: q.goal_id,
+    summary: `Answered the System's question: ${q.question.slice(0, 120)}`,
+    detail: answer.slice(0, 300),
+  });
+  const replanned = await adaptPlan(env, q.goal_id);   // re-plan immediately with the new fact
+  return { ok: true, goal_id: q.goal_id, replanned: replanned.ok ? true : replanned };
+}
+
+// Send unannounced open questions to Telegram — one message, all pending. Skipped in
+// quiet hours (they stay unannounced and go out with the next call, e.g. the morning
+// issuance). Called wherever a plan may have just been made and a tg handle exists.
+export async function announceOpenQuestions(env, tg) {
+  if (!tg) return { skipped: "no tg" };
+  const t = ist();
+  if (t.hour >= QUIET_START || t.hour < QUIET_END) return { skipped: "quiet hours" };
+  const { results } = await env.DB.prepare(
+    `SELECT q.id, q.question, g.title FROM plan_questions q JOIN goals g ON g.id = q.goal_id
+     WHERE q.status = 'open' AND q.announced = 0 ORDER BY q.id LIMIT 9`).all();
+  if (!results.length) return { none: true };
+  const lines = results.map(q => `▫️ <b>${esc(q.title.slice(0, 60))}</b>: ${esc(q.question)}`).join("\n");
+  const r = await tg(env, "sendMessage", {
+    chat_id: env.TELEGRAM_CHAT_ID, parse_mode: "HTML",
+    text: `🗺️ <b>The System needs facts to plan you better.</b>\n\n${lines}\n\n<i>Just answer here — the plan updates itself.</i>`,
+  });
+  if (r.ok) {
+    for (const q of results) {
+      await env.DB.prepare("UPDATE plan_questions SET announced = 1 WHERE id = ?").bind(q.id).run();
+    }
+  }
+  return { announced: results.length };
+}
+
 // ---------- The planner: a goal becomes a route ----------
 
 const PLAN_PROMPT = (persona, clock, goal, profile) => `You are ${persona.name}, mapping the route to a goal.
@@ -398,9 +487,17 @@ SPECIFICITY RULES — a plan the owner can act on today, not a syllabus:
 - Plan from where they actually are: build on what they own, know, and have done. NEVER
   include a step the context already covers — don't tell them to buy gear they own or learn
   what they know.
+- Think like a coach, not a list-maker: progression (easy → hard), consolidation/rest where
+  the domain needs it, dependencies in the right order, and buffer before any deadline.
+
+ASK WHAT YOU'RE MISSING: if a fact you don't have would materially change this plan — a body
+measurement, hours genuinely free per day, equipment or budget, current skill level, an
+existing routine — list up to 3 short questions for the owner in "questions". Still produce
+the best plan you can WITHOUT the answers. Never ask what the context already answers.
 
 Return ONLY JSON:
 {"reasoning":"one or two sentences on the route you chose",
+ "questions":["short question the owner can answer in one line", "..."],
  "milestones":[{"title":"...","done_when":"how you'll know it's complete","weeks_from_now":<number>,
    "steps":["concrete day-sized action", "..."]}]}`;
 
@@ -441,13 +538,14 @@ export async function planGoal(env, goalId) {
     seq++;
   }
   await computeProgress(env, goalId);
+  const asked = await recordPlanQuestions(env, goalId, v.questions);
   await logActivity(env, {
     kind: "plan", goal_id: goalId,
     summary: `Mapped a ${seq - 1}-step route to: ${goal.title}`,
     detail: list.map((m, i) => `${i + 1}. ${m.title}`).join("\n"),
     reasoning: v.reasoning ? String(v.reasoning).slice(0, 300) : null,
   });
-  return { ok: true, milestones: seq - 1 };
+  return { ok: true, milestones: seq - 1, questions_asked: asked };
  } catch (e) {
   console.log("planGoal threw:", String(e && e.stack || e).slice(0, 300));
   return { error: "planner failed: " + String(e && e.message || e).slice(0, 160) };
@@ -504,10 +602,16 @@ SPECIFICITY RULES: every milestone MEASURABLE and CONCRETE (exact numbers, named
 computed from their real current numbers above — no abstract labels), and each carries
 "steps": 3-6 concrete actions, each finishable in one day, imperative and checkable with
 numbers — these become their daily quests. Fit steps to their real life (schedule, gear,
-skills from the context).
+skills from the context). Think like a coach: progression, consolidation where the domain
+needs it, buffer before any deadline.
+
+ASK WHAT YOU'RE MISSING: if a fact you don't have would materially improve this plan (a
+measurement, hours free, equipment, budget, skill level), list up to 3 short questions in
+"questions" — but still produce the best plan without the answers, and never ask what the
+context already answers or what you've already asked.
 
 Return ONLY JSON:
-{"reasoning":"one sentence: what you changed and why","milestones":[{"title":"...","done_when":"...","weeks_from_now":<number>,"steps":["concrete day-sized action","..."]}]}`;
+{"reasoning":"one sentence: what you changed and why","questions":["short question","..."],"milestones":[{"title":"...","done_when":"...","weeks_from_now":<number>,"steps":["concrete day-sized action","..."]}]}`;
 
 export async function adaptPlan(env, goalId) {
  try {
@@ -559,13 +663,14 @@ export async function adaptPlan(env, goalId) {
   // Every successful adapt — manual, on-completion, or nightly — stamps the shared
   // cooldown, so the other triggers see a freshly-tuned plan and skip it.
   await setState(env, `adapt_last_${goalId}`, now);
+  const asked = await recordPlanQuestions(env, goalId, v.questions);
   await logActivity(env, {
     kind: "plan_adapt", goal_id: goalId,
     summary: `Re-tuned the plan for: ${goal.title}`,
     detail: list.map((m, i) => `${done.length + i + 1}. ${m.title}`).join("\n"),
     reasoning: v.reasoning ? String(v.reasoning).slice(0, 300) : null,
   });
-  return { ok: true, kept: done.length, adapted: list.length };
+  return { ok: true, kept: done.length, adapted: list.length, questions_asked: asked };
  } catch (e) {
   console.log("adaptPlan threw:", String(e && e.stack || e).slice(0, 300));
   return { error: "adapt failed: " + String(e && e.message || e).slice(0, 160) };
@@ -578,13 +683,15 @@ export async function adaptPlan(env, goalId) {
 // a burst of ✅ taps costs one LLM call, not five. The same `adapt_last_` key gates the
 // nightly pass, so a plan re-tuned this evening isn't re-tuned again at the reckoning.
 const ADAPT_COOLDOWN_MS = 4 * 3600000;   // on-completion: at most every 4h per goal
-export async function maybeAdaptOnDone(env, goalId) {
+export async function maybeAdaptOnDone(env, goalId, tg = null) {
   try {
     goalId = Number(goalId);
     if (!goalId) return { skipped: "no goal" };
     const last = await getState(env, `adapt_last_${goalId}`);
     if (last && Date.now() - new Date(last).getTime() < ADAPT_COOLDOWN_MS) return { skipped: "cooldown" };
-    return await adaptPlan(env, goalId);
+    const r = await adaptPlan(env, goalId);
+    if (r.questions_asked) await announceOpenQuestions(env, tg);
+    return r;
   } catch (e) {
     console.log("maybeAdaptOnDone failed:", String(e).slice(0, 150));
     return { error: String(e).slice(0, 150) };
@@ -787,6 +894,19 @@ async function goalContext(env, goal) {
     for (const r of m) nums.push(`- ${r.name}: ${r.value}${r.unit ? " " + r.unit : ""} (logged ${String(r.at).slice(0, 10)})`);
     if (nums.length) out += "\n\nLatest measured numbers (their real current state):\n" + nums.join("\n");
   } catch (e) { console.log("goalContext metrics failed:", String(e).slice(0, 120)); }
+  // What the owner told the System when it asked — the highest-signal facts of all —
+  // plus what's still pending, so the planner never re-asks an open question.
+  try {
+    const { results: qs } = await env.DB.prepare(
+      "SELECT question, status, answer FROM plan_questions WHERE goal_id = ? ORDER BY id DESC LIMIT 12")
+      .bind(goal.id).all();
+    const answered = qs.filter(q => q.status === "answered");
+    const open = qs.filter(q => q.status === "open");
+    if (answered.length) out += "\n\nAnswers the owner gave to your planning questions:\n" +
+      answered.map(q => `- Q: ${q.question}\n  A: ${q.answer}`).join("\n");
+    if (open.length) out += "\n\nQuestions you already asked and are still waiting on (do NOT re-ask):\n" +
+      open.map(q => `- ${q.question}`).join("\n");
+  } catch (e) { console.log("goalContext questions failed:", String(e).slice(0, 120)); }
   return out;
 }
 
@@ -912,6 +1032,8 @@ export async function issueDaily(env, tg, { force = false } = {}) {
         .bind(sent.result.message_id, row.id).run();
     }
   }
+  // Morning is also when overnight planner questions go out (quiet hours held them back).
+  try { await announceOpenQuestions(env, tg); } catch { /* never blocks issuance */ }
   return { issued: created.length };
 }
 
@@ -990,6 +1112,8 @@ export async function debrief(env, tg, { force = false } = {}) {
 
   // Awards land after the streak/progress are final, so tonight's earnings count.
   const awardsTonight = await checkAwards(env, tg);
+  // Any questions the nightly adapts raised go out with the reckoning (still pre-quiet).
+  try { await announceOpenQuestions(env, tg); } catch { /* never blocks the reckoning */ }
 
   const st = await getSystemState(env);
   const facts = {
@@ -1233,6 +1357,17 @@ export const SYSTEM_TOOLS = {
     group: "Goals & Quests",
     desc: "the awards the owner has earned (streaks, rank promotions, 30-day transformations). args: {}",
     run: (env) => listAwards(env),
+  },
+  list_plan_questions: {
+    group: "Goals & Quests",
+    desc: 'the planner\'s open questions to the owner (facts it needs to plan better). args: {"status": "open|answered|all"}',
+    run: (env, a) => listPlanQuestions(env, a),
+  },
+  answer_plan_question: {
+    group: "Goals & Quests",
+    desc: 'record the owner\'s answer to a plan question — saves the fact and RE-PLANS the goal immediately. Use whenever their message answers an open plan question. args: {"id": <n>, "answer": "..."}',
+    args: { id: { type: "number", required: true }, answer: { type: "string", required: true } },
+    run: (env, a) => answerPlanQuestion(env, a),
   },
   log_metric: {
     group: "Metrics",

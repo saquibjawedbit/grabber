@@ -369,5 +369,20 @@ CREATE TABLE IF NOT EXISTS awards (
   awarded_at TEXT NOT NULL
 );
 
+-- The planner's questions back to the owner: facts it needs to plan better (waist size,
+-- hours free, equipment...). Answering stores the fact and re-plans the goal immediately.
+CREATE TABLE IF NOT EXISTS plan_questions (
+  id          INTEGER PRIMARY KEY AUTOINCREMENT,
+  goal_id     INTEGER NOT NULL REFERENCES goals(id),
+  question    TEXT NOT NULL,
+  status      TEXT NOT NULL DEFAULT 'open',   -- open | answered | dismissed
+  answer      TEXT,
+  announced   INTEGER NOT NULL DEFAULT 0,     -- sent to Telegram yet?
+  asked_at    TEXT NOT NULL,
+  answered_at TEXT
+);
+
+CREATE INDEX IF NOT EXISTS idx_plan_questions_goal ON plan_questions(goal_id, status);
+
 -- XP / level / streak live as rows in `state`:
 --   xp, level, streak, streak_best, system_last_issue, system_last_debrief

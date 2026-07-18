@@ -249,6 +249,32 @@ the planner's own reasoning (latest `plan`/`plan_adapt` activity, served as
 section inside each plan card linking today's quests to the active milestone, with a note
 on how much of the goal each milestone is worth.
 
+## 5.86 The planner asks back (plan questions)
+
+A mature plan is built on facts the System may not hold — a waist measurement, hours
+genuinely free, equipment, budget, current skill level. Both planner prompts now end with
+an **"ASK WHAT YOU'RE MISSING"** clause: produce the best plan anyway, and emit up to 3
+short `questions` when a missing fact would materially change the route. The lifecycle
+(`plan_questions` table, migration 008):
+
+1. **Asked** — `recordPlanQuestions` stores them (≤3 open per goal, case-insensitive dedup
+   against everything ever asked for that goal; `goalContext` lists open ones back to the
+   planner as "do NOT re-ask").
+2. **Announced** — `announceOpenQuestions(env, tg)` sends unannounced ones to Telegram in
+   one message; quiet hours defer to the next outlet (morning issuance, the reckoning, a
+   ✅-triggered adapt, a manual adapt/replan from the dashboard).
+3. **Answered** — three ways, all landing in `answerPlanQuestion`: the owner replies in
+   chat (open questions ride in every agent prompt with instruction to call the
+   `answer_plan_question` tool when a message answers one, even in passing), the Plans tab
+   (inline input per question → `POST /api/plan-question`, `{id,dismiss:true}` to wave one
+   off), or the agent tool directly. The answer is stored on the row, saved as an
+   `identity` **memory** (so all future recall knows it), logged as `plan_question`
+   activity, and the goal is **re-planned immediately** — ask → answer → better plan.
+
+`goalContext` feeds answered Q&A into every subsequent plan/adapt as its highest-signal
+facts. Open questions surface in `/api/system` (`plan_questions`) and via the
+`list_plan_questions` tool.
+
 ## 5.87 Awards
 
 XP rewards a day; **awards** reward the arc. The `awards` table (migration 007) holds

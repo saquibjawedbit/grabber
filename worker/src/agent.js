@@ -387,7 +387,7 @@ function toolList() {
 // ---------- Prompt assembly ----------
 
 async function context(env, userText) {
-  const [mem, hist, bio, summary, docs, counts, persona] = await Promise.all([
+  const [mem, hist, bio, summary, docs, counts, persona, planQs] = await Promise.all([
     recallMemories(env, userText),   // v3: relevant to THIS message, not simply the newest
     env.DB.prepare("SELECT role, content FROM chat_history ORDER BY id DESC LIMIT ?")
       .bind(HISTORY_ACTIVE).all(),
@@ -400,8 +400,14 @@ async function context(env, userText) {
         (SELECT COUNT(*) FROM quests WHERE status IN ('issued','doing')) AS open_quests,
         (SELECT COUNT(*) FROM research WHERE status IN ('queued','running')) AS research_running`).first(),
     getPersona(env),
+    // The planner's open questions ride in every chat turn, so a stray "my waist is 71cm"
+    // lands as an answer (answer_plan_question) instead of evaporating into small talk.
+    env.DB.prepare(`SELECT q.id, q.question, g.title FROM plan_questions q
+      JOIN goals g ON g.id = q.goal_id WHERE q.status = 'open' ORDER BY q.id LIMIT 6`).all()
+      .catch(() => ({ results: [] })),
   ]);
   return {
+    plan_questions: planQs.results.map(q => `- [id ${q.id}] (${q.title.slice(0, 50)}) ${q.question}`).join("\n"),
     memories: mem.map(r => `- [#${r.id}|${r.category}] ${r.fact}`).join("\n"),
     recalled: mem.length,
     history: hist.results.reverse().map(r => `${r.role}: ${r.content.slice(0, 400)}`).join("\n"),
@@ -443,6 +449,7 @@ Memories relevant to this message${ctx.counts.memories > ctx.recalled ? ` (${ctx
 ${ctx.memories || "(no memories saved yet — when the owner tells you about themselves, save_memory it)"}
 ${ctx.docs ? `Profile documents you can read_profile: ${ctx.docs}` : "(no profile documents yet — the owner can send any text/markdown file in this chat and you'll keep it)"}
 Driving ${ctx.counts.active_goals} active goal(s); ${ctx.counts.open_quests} quest(s) open; ${ctx.counts.research_running} research job(s) in flight.
+${ctx.plan_questions ? `\nOPEN PLANNING QUESTIONS you asked the owner (the planner needs these to improve their plans). If their message answers one — even partially or in passing — call answer_plan_question with its id; the plan re-tunes itself immediately:\n${ctx.plan_questions}` : ""}
 
 ## Summary of older conversation
 ${ctx.summary || "(none yet)"}

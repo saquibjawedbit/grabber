@@ -271,6 +271,14 @@
   .plan-today .pt-x { color: var(--muted); font-size: 0.72rem; margin-left: 0.3rem; }
   .plan-today .pt-note { color: var(--muted); font-size: 0.72rem; margin-top: 0.35rem; }
   .rank-title { font-weight: 700; letter-spacing: 0.02em; }
+  .plan-qs { margin: 0.65rem 0 0.2rem; border: 1px dashed var(--border); border-radius: 8px; padding: 0.55rem 0.65rem; }
+  .plan-qs .pq-h { font-size: 0.78rem; font-weight: 650; margin-bottom: 0.4rem; }
+  .plan-qs .pq { margin-bottom: 0.5rem; }
+  .plan-qs .pq:last-child { margin-bottom: 0; }
+  .plan-qs .pq-q { font-size: 0.8rem; line-height: 1.4; }
+  .plan-qs .pq-x { background: none; border: none; color: var(--muted); cursor: pointer; font-size: 0.75rem; padding: 0 0.2rem; }
+  .plan-qs .pq-row { display: flex; gap: 0.4rem; margin-top: 0.3rem; }
+  .plan-qs .pq-row input { flex: 1; min-width: 0; }
   .award-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 0.6rem; }
   .award { display: flex; gap: 0.55rem; align-items: flex-start; border: 1px solid var(--border); border-radius: 10px; padding: 0.55rem 0.65rem; }
   .award-ic { font-size: 1.3rem; line-height: 1; }
@@ -1216,7 +1224,21 @@ function planTimeline(g) {
     <div class="tl-axis"><span>${esc((g.created_at || "").slice(0, 10))}</span><span>${g.deadline ? esc(g.deadline.slice(0, 10)) : "open-ended"}</span></div>`;
 }
 
-function renderPlans(goals, questsToday) {
+window.answerPlanQ = async id => {
+  const inp = document.getElementById(`pq-in-${id}`);
+  const val = (inp?.value || "").trim();
+  if (!val) { inp?.focus(); return; }
+  const btn = document.getElementById(`pq-btn-${id}`);
+  if (btn) { btn.disabled = true; btn.textContent = "Re-planning…"; }
+  try { await api("/api/plan-question", { method: "POST", body: { id, answer: val } }); boot(); }
+  catch { if (btn) { btn.disabled = false; btn.textContent = "Answer"; } }
+};
+window.dismissPlanQ = async id => {
+  try { await api("/api/plan-question", { method: "POST", body: { id, dismiss: true } }); boot(); }
+  catch { /* next load reflects the truth */ }
+};
+
+function renderPlans(goals, questsToday, planQuestions) {
   const box = $("plans");
   if (!box) return;
   const active = (goals || []).filter(g => g.status === "active");
@@ -1233,6 +1255,17 @@ function renderPlans(goals, questsToday) {
     // The plan's own explanation of itself: why this route, and what it demands today.
     const why = g.plan_reasoning ? `<div class="plan-why">🧭 <b>Why this route:</b> ${esc(g.plan_reasoning)}
       <span class="plan-why-at">planned ${esc(String(g.plan_at || "").slice(0, 10))}</span></div>` : "";
+    // The planner's open questions for THIS goal — answer inline, the plan re-tunes itself.
+    const qs = (planQuestions || []).filter(q => q.goal_id === g.id);
+    const qsHtml = qs.length ? `<div class="plan-qs">
+      <div class="pq-h">❓ The System needs these to plan you better:</div>
+      ${qs.map(q => `<div class="pq">
+        <div class="pq-q">${esc(q.question)} <button class="pq-x" onclick="dismissPlanQ(${q.id})" title="Dismiss">✕</button></div>
+        <div class="pq-row"><input id="pq-in-${q.id}" maxlength="500" placeholder="Your answer…"
+          onkeydown="if(event.key==='Enter'){event.preventDefault();answerPlanQ(${q.id})}">
+        <button id="pq-btn-${q.id}" class="ghost-btn primary" onclick="answerPlanQ(${q.id})">Answer</button></div>
+      </div>`).join("")}
+    </div>` : "";
     const today = (questsToday || []).filter(q => q.goal_id === g.id);
     const todayHtml = today.length ? `<div class="plan-today">
       <div class="pt-h">⚔️ Today's quests${activeM ? ` → <i>${esc(activeM.title)}</i>` : ""}</div>
@@ -1257,6 +1290,7 @@ function renderPlans(goals, questsToday) {
         <span>${ms.filter(m => m.status === "done").length}/${ms.length} milestones</span>
       </div>
       ${why}
+      ${qsHtml}
       ${ms.length ? planTimeline(g) : `<div class="empty">No roadmap yet — hit Re-plan.</div>`}
       ${todayHtml}
       <div class="pm-list">${ms.map(m => {
@@ -1277,7 +1311,7 @@ function renderPlans(goals, questsToday) {
 
 const ACT_ICON = {
   goal: "⚔️", plan: "🗺️", quest_issued: "📜", quest_done: "✅", quest_failed: "❌",
-  reckoning: "🌑", milestone_done: "🏁", research: "🔎", application: "📄", autonomous: "⚡", metric: "📈", plan_adapt: "🧭", award: "🏆", note: "•",
+  reckoning: "🌑", milestone_done: "🏁", research: "🔎", application: "📄", autonomous: "⚡", metric: "📈", plan_adapt: "🧭", award: "🏆", plan_question: "❓", note: "•",
 };
 
 function renderActivity(items) {
@@ -1874,7 +1908,7 @@ async function boot() {
     renderApplications(brain.applications);
     wireGoalForm();
     // Plans tab
-    renderPlans(sys.goals, sys.quests_today);
+    renderPlans(sys.goals, sys.quests_today, sys.plan_questions);
     // Brain tab
     renderMemories(brain.memories);
     renderChat(brain.chat);

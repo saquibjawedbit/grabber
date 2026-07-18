@@ -4,7 +4,7 @@
 import { embedMemory, rememberExchange, runAgent, TOOLS, validateArgs } from "./agent.js";
 import { backfill, extract, forgetMemory, reconcile, saveMemory, unpackVec } from "./memory.js";
 import { DEFAULT_PERSONA, getPersona, resetPersona, setPersona } from "./persona.js";
-import { adaptPlan, checkAwards, createGoal, debrief, getSettings, getSystemState, issueDaily, listAwards, listGoals, listMetrics, listMilestones, listQuests, maybeAdaptOnDone, replanGoal, resolveQuest, runSystem, setAutonomyMode, updateGoal } from "./system.js";
+import { adaptPlan, announceOpenQuestions, answerPlanQuestion, checkAwards, createGoal, debrief, getSettings, getSystemState, issueDaily, listAwards, listGoals, listMetrics, listMilestones, listPlanQuestions, listQuests, maybeAdaptOnDone, replanGoal, resolveQuest, runSystem, setAutonomyMode, updateGoal } from "./system.js";
 import { classifyInbox, googleConnected, ingestNotification, pollCalendar, remindEvents } from "./senses.js";
 import { processBankNotifications } from "./life.js";
 import { generatePerception, getPerception } from "./perception.js";
@@ -431,7 +431,7 @@ async function handleTelegram(request, env, ctx) {
     // the award check so a crossed threshold (quest totals, rank) lands immediately.
     if (r.status === "done") {
       ctx.waitUntil(checkAwards(env, tg));
-      if (r.goal_id) ctx.waitUntil(maybeAdaptOnDone(env, r.goal_id));
+      if (r.goal_id) ctx.waitUntil(maybeAdaptOnDone(env, r.goal_id, tg));
     }
     return new Response("ok");
   }
@@ -800,10 +800,14 @@ async function handleApi(url, env, request) {
     // {id,replan:true} maps a fresh route.
     const body = await request.json().catch(() => ({}));
     if (body.id && body.replan) {
-      return Response.json(await replanGoal(env, body.id));
+      const r = await replanGoal(env, body.id);
+      if (r.questions_asked) await announceOpenQuestions(env, tg);
+      return Response.json(r);
     }
     if (body.id && body.adapt) {
-      return Response.json(await adaptPlan(env, body.id));
+      const r = await adaptPlan(env, body.id);
+      if (r.questions_asked) await announceOpenQuestions(env, tg);
+      return Response.json(r);
     }
     if (body.id) {
       const status = ["active", "achieved", "dropped"].includes(body.status) ? body.status : null;
@@ -817,6 +821,17 @@ async function handleApi(url, env, request) {
     const body = await request.json().catch(() => ({}));
     if (body.autonomy_mode) return Response.json(await setAutonomyMode(env, body.autonomy_mode));
     return Response.json({ error: "nothing to set" }, { status: 400 });
+  }
+  if (url.pathname === "/api/plan-question" && request.method === "POST") {
+    // Answer (or dismiss) a planner question from the dashboard. Answering stores the
+    // fact and re-plans the goal immediately — same path as the agent's tool.
+    const body = await request.json().catch(() => ({}));
+    if (body.id && body.dismiss) {
+      await env.DB.prepare("UPDATE plan_questions SET status = 'dismissed' WHERE id = ?").bind(Number(body.id)).run();
+      return Response.json({ ok: true, dismissed: Number(body.id) });
+    }
+    const r = await answerPlanQuestion(env, body);
+    return Response.json(r, { status: r.error ? 400 : 200 });
   }
   if (url.pathname === "/api/system") {
     // Everything the dashboard's System tab shows: rank, goals (with roadmap + pace),
@@ -852,6 +867,7 @@ async function handleApi(url, env, request) {
       activity: activity.results,
       metrics: metrics.metrics,
       awards: (await listAwards(env)).awards,
+      plan_questions: (await listPlanQuestions(env, { status: "open" })).questions,
     });
   }
   return Response.json({ error: "not found" }, { status: 404 });
