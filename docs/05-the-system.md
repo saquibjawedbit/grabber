@@ -211,10 +211,12 @@ button on the Plans/System tabs (`POST /api/goal {id,adapt}`), and the agent too
 dots positioned by target date, a progress fill vs a "today" marker so drift is visible),
 progress %, pace chip, projected date, the milestone list, and Adapt / Re-plan buttons.
 
-**Metrics.** `logMetric()` (agent tool `log_metric`) records any named number over time
-(weight, MRR, leetcode solved, minutes practiced) into the `metrics` table; the dashboard
-charts each series as an area line chart on the System tab. The agent is told to log a
-metric whenever the owner reports a trackable number moving toward a goal.
+**Metrics & trends.** Two logs feed the dashboard's charts. **Body/habit** numbers (weight,
+waist, sleep, runs, workouts) go to `log_health` (the `health` table) and chart on the
+**Life → Trends** section — a line per level metric, bars per count metric. **Everything
+else** moving toward a goal (MRR, leetcode solved, minutes practiced) goes to `log_metric`
+(the `metrics` table) and charts on the **System** tab. The agent's rules route each kind
+to the right log so it forms one series over time.
 
 **Re-planning caveat:** because `quests.milestone_id` FKs `milestones(id)`, `replanGoal()`
 detaches quests (`milestone_id = NULL`) *before* deleting the old milestones — a raw
