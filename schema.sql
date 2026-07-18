@@ -168,6 +168,22 @@ CREATE TABLE IF NOT EXISTS health (
   at     TEXT NOT NULL
 );
 
+-- Calorie tracking (migration 009). A meal keeps kcal + macros together in one row
+-- (four parallel `health` series would drift apart); the dashboard buckets by IST day
+-- and stacks the macro calories.
+CREATE TABLE IF NOT EXISTS meals (
+  id        INTEGER PRIMARY KEY AUTOINCREMENT,
+  name      TEXT NOT NULL,               -- "2 eggs + 2 rotis + milk"
+  kcal      REAL NOT NULL,
+  protein_g REAL,                        -- macros optional: the agent estimates when
+  carbs_g   REAL,                        -- the owner doesn't state them
+  fat_g     REAL,
+  note      TEXT,
+  at        TEXT NOT NULL                -- UTC ISO; the dashboard buckets by IST day
+);
+
+CREATE INDEX IF NOT EXISTS idx_meals_at ON meals(at);
+
 CREATE TABLE IF NOT EXISTS holdings (
   name       TEXT PRIMARY KEY,
   kind       TEXT NOT NULL,             -- asset | liability

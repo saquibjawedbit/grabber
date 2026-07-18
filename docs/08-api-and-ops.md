@@ -31,7 +31,9 @@ flowchart TB
 ### Dashboard API (`/api/*`, all require `?t=DASH_TOKEN`, `handleApi` at `:551`)
 | Route | Method | Purpose |
 |-------|--------|---------|
-| `/api/brain` | GET | The whole dashboard payload: memories, persona, chat, reminders, docs, summary, research, life (accounts/holdings/spend/people/health/transactions), applications, merchants, perception, senses — plus **legacy** engine fields (watchers, rarity, calibration, alerts) that now return empty until the dashboard is reshaped. |
+| `/api/brain` | GET | The whole dashboard payload: memories, persona, chat, reminders, docs, summary, research, life (accounts/holdings/spend/people/health/meals/transactions), applications, merchants, perception, senses — plus **legacy** engine fields (watchers, rarity, calibration, alerts) that now return empty until the dashboard is reshaped. |
+| `/api/chat` | POST | **Talk to the agent at full capability from the dashboard** — `{text}` → the exact `runAgent` loop Telegram gets (every tool, memory recall, persona, default ~70s deadline); reply returns synchronously, then `rememberExchange` (history + memory sweep) runs under `waitUntil`, mirroring the Telegram path. |
+| `/api/reminder` | POST | Reminders from the desk: `{text, due_at}` creates; `{id, text?, due_at?}` edits (a re-timed reminder resets `notified` so it fires again); `{id, done:true}` completes/cancels. `due_at` is UTC ISO — the dashboard converts from browser-local `datetime-local` input. |
 | `/api/teach` | POST | Paste text → memory `extract` (doc 04). `{text, dry}`. |
 | `/api/persona` | POST | Set/reset the persona (doc 07). |
 | `/api/memory` | POST / DELETE | Add a fact / delete by `?id`. |
@@ -47,7 +49,7 @@ flowchart TB
 | `/api/cron` | GET | Manually trigger cron work — flags `?senses=1&system=1&issue=1&debrief=1&force=1` (`issue`/`debrief` force one half of The System). |
 | `/api/rank` | GET | The System's level/XP/streak + active goals. |
 | `/api/system` | GET | The dashboard **System tab** payload: `rank` (level/XP/streak + `title` hunter rank), `goals` (each with `progress`, `pace`, `projected`, its `milestones` roadmap, and `plan_reasoning`/`plan_at`), `quests_today`, `quest_history` (per-IST-day done/failed counts, last 14 days — the Battle record chart), `activity` (the work log, newest 60, with `actor`/`reasoning`), `awards`, `plan_questions` (open), and `settings` (autonomy mode + budget). |
-| `/api/goal` | POST | Set a goal (`{title,…}` → `createGoal`, which also maps the roadmap), change status (`{id,status}`), or re-map the roadmap (`{id,replan:true}`). Powers the dashboard's "Set a goal" form and per-goal buttons. |
+| `/api/goal` | POST | Set a goal (`{title,…}` → `createGoal`, which also maps the roadmap), change status (`{id,status}`), re-map the roadmap (`{id,replan:true}`), re-tune it (`{id,adapt:true}`), feed the planner a fact (`{id,context:"…"}` → `addGoalContext`: saved as a memory + immediate adapt), or delete the goal permanently (`{id,delete:true}` → `deleteGoal`: quests/awards survive detached as the battle record; milestones and plan questions go with it). Powers the dashboard's "Set a goal" form and the Plans-tab buttons. |
 | `/api/settings` | POST | `{autonomy_mode: off\|suggest\|act}` — the dashboard's autonomy control. |
 
 > **Security note:** `DASH_TOKEN` gates *both* the read dashboard and mutating endpoints

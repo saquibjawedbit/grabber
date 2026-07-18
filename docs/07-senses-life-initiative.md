@@ -72,6 +72,8 @@ flowchart TB
   subgraph body["Body"]
     lh["log_health"] --> ht[("health")]
     ht --> trend["change_since_last · change_over_60d · health_trend"]
+    lm["log_meal"] --> ml[("meals")]
+    ml --> nut["nutrition: per-IST-day kcal + macros · daily avg"]
   end
   subgraph people["People"]
     rp["remember_person · log_interaction"] --> pr[("people + interactions")]
@@ -83,11 +85,15 @@ flowchart TB
   `transactions`. `categorise` (`:18`) checks the learned `merchant_category` map first,
   and only on a miss asks the LLM for one word — then **remembers the pattern forever**.
   `net_worth` (`:62`) treats card balances as money owed.
-- **Body.** `log_health` (`:184`) stores a metric and immediately returns the trend
+- **Body.** `log_health` (`:188`) stores a metric and immediately returns the trend
   (change since last, change over 60d) — "a number alone is trivia; the trend is the
-  point."
-- **People.** `log_interaction` (`:263`) updates `last_contact` and resets status to
-  active; `get_people {cold:true}` (`:289`) surfaces threads quiet ≥10 days, measured from
+  point." `log_meal` (`:215`) records food as one row of kcal + macros (the tool desc
+  tells the agent to *estimate* macros when the owner just names the food — an estimate
+  logged beats a precise number never logged) and replies with the day's running totals;
+  `nutrition` (`:241`) returns per-IST-day totals + the period average. The dashboard's
+  Life tab charts the last 14 days as stacked macro-calorie bars.
+- **People.** `log_interaction` (`:315`) updates `last_contact` and resets status to
+  active; `get_people {cold:true}` (`:338`) surfaces threads quiet ≥10 days, measured from
   `last_contact` **or** `created_at` — so someone you added and never followed up with
   still surfaces (relying on `log_interaction` always firing would silently miss people).
 

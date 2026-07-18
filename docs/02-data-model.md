@@ -27,7 +27,7 @@ flowchart TB
     memories; chat_history; profile; reminders; state; research
   end
   subgraph life["Life (Worker-only)"]
-    accounts; holdings; transactions; people; interactions; health; merchant_category
+    accounts; holdings; transactions; people; interactions; health; meals; merchant_category
   end
   subgraph senses["Senses"]
     emails; events; notifications; notify_allow
@@ -127,6 +127,7 @@ No code reads or writes these; left in place so the current dashboard keeps quer
 | `people` | The owner's relationships | `status`, `next_step`, `last_contact` drive cold-thread detection. |
 | `interactions` | Log per person | Updates `people.last_contact` + resets status to active. |
 | `health` | Body metrics over time | weight/waist/sleep/run_km/workout; trends computed on read. |
+| `meals` | Calorie tracking | One row per meal: kcal + protein/carbs/fat grams together (parallel `health` series would drift); macros nullable — the agent estimates them when unstated. Bucketed by IST day on read; migration 009. |
 
 ### Senses
 | Table | Purpose | Key notes |

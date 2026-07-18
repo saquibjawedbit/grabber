@@ -445,12 +445,19 @@ Now output ONLY the JSON object as your final answer message:`;
 
 // ---------- The loop ----------
 
-export async function runAgent(env, userText) {
+export async function runAgent(env, userText, { deadline = Date.now() + 70_000 } = {}) {
   const ctx = await context(env, userText);
   let transcript = "";
   let lastPlain = ""; // clean-channel prose kept as a last resort, never shipped mid-loop
   for (let step = 0; step < MAX_STEPS; step++) {
-    const { text: out, salvaged } = await llm(env, buildPrompt(ctx, userText, transcript, step === MAX_STEPS - 1));
+    // Wall-clock budget, not just a step budget. The webhook holds its response open
+    // while we think (~60s of Telegram patience + post-disconnect grace), so tools get
+    // the time they actually need — but the LAST ~18s is reserved for composing the
+    // answer from the transcript, so a slow turn ends with a real reply, never silence.
+    const remaining = deadline - Date.now();
+    const mustReply = step === MAX_STEPS - 1 || remaining < 18_000;
+    const { text: out, salvaged } = await llm(env, buildPrompt(ctx, userText, transcript, mustReply),
+      { timeoutMs: Math.max(10_000, Math.min(30_000, remaining - 6_000)) });
     console.log(`agent step ${step} (salvaged=${salvaged}): ${out.slice(0, 300) || "(empty)"}`);
     const action = extractJson(out);
     if (!action) {
@@ -486,7 +493,8 @@ export async function runAgent(env, userText) {
   // Out of steps. Never ship loop prose (it can be raw deliberation) — make one
   // protocol-free call that composes an owner-facing answer from the transcript.
   const { text: final, salvaged } = await llm(env,
-    `You are ${ctx.persona.name}, a personal agent. You ran out of tool budget answering the owner's message. From the transcript below, write the best final message you can — answer what you learned, say plainly what you couldn't confirm. Plain text only, no JSON, 1-4 sentences.${voiceBlock(ctx.persona)}\n\nOwner's message: ${userText}\n\nTranscript:${transcript || " (none)"}`);
+    `You are ${ctx.persona.name}, a personal agent. You ran out of tool budget answering the owner's message. From the transcript below, write the best final message you can — answer what you learned, say plainly what you couldn't confirm. Plain text only, no JSON, 1-4 sentences.${voiceBlock(ctx.persona)}\n\nOwner's message: ${userText}\n\nTranscript:${transcript || " (none)"}`,
+    { timeoutMs: Math.max(10_000, deadline - Date.now()) });
   if (final.trim() && !salvaged) return final.slice(0, 3800);
   return "I hit my step limit on that one — ask me a bit more specifically?";
 }

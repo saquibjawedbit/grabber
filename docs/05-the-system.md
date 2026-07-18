@@ -80,13 +80,17 @@ reckoning broke, using the pre-reckoning value `debrief` stashes in `state.strea
 
 ### Generation
 `generateDailyQuests` (`system.js`) hands the LLM the active goals — each with its current
-milestone **and that milestone's planned `steps`** — recent quests (to avoid repeats; steps
-already covered by past quests count as done), and the owner profile, and asks for
-**≤ `MAX_DAILY_QUESTS` (4)** concrete quests as JSON. Main quests are issued from the
-milestone's **next unfinished steps** (resized to fit one day), and the model may add one
-`side` quest — a low-stakes supporting action (+5 XP) that makes the main quests easier.
-Each becomes an `issued` row. The prompt demands checkable-tonight actions, not busywork,
-and allows skipping a goal that has no sensible step today.
+milestone **and that milestone's planned `steps`** — the last 30 quests **with status**
+(✓ done = step covered, ✗ FAILED = step NOT covered, re-issue it rescoped smaller; without
+the status every past quest text read as "done" and failed steps were never re-attempted),
+the owner profile (newest-40 memories — past the cap the oldest fall off, not the newest),
+and the shared `measuredNumbers` block (latest value + 30-day trend per series, same as the
+planner sees — so quests anchor to real numbers and never re-ask for one logged today), and
+asks for **≤ `MAX_DAILY_QUESTS` (4)** concrete quests as JSON. Main quests are issued from
+the milestone's **next unfinished steps** (resized to fit one day), and the model may add
+one `side` quest — a low-stakes supporting action (+5 XP) that makes the main quests
+easier. Each becomes an `issued` row. The prompt demands checkable-tonight actions, not
+busywork, and allows skipping a goal that has no sensible step today.
 
 ## 5.4 Issuance & the reckoning
 
@@ -261,10 +265,18 @@ so the triggers never re-tune a freshly-tuned plan, and logs `plan_adapt` with i
 (Distinct from `replanGoal`, which throws the whole roadmap away and maps a fresh one.)
 
 **The Plans tab** is a consolidated widget: each goal as a horizontal **timeline** (milestone
-dots positioned by target date, a progress fill vs a "today" marker so drift is visible),
-progress %, pace chip, projected date, the milestone list — the **active milestone's steps
-shown open** (today's marching orders), other milestones' steps collapsed behind an
-"N steps" fold — and Adapt / Re-plan buttons. The tab makes the whole mechanism legible:
+dots positioned by target date, a progress fill vs a "today" marker so drift is visible;
+the timeline is **interactive** — hovering a dot shows the milestone's title/status/target/
+done-when in the shared tooltip, clicking it jumps to and flashes that milestone in the
+list, and the today-marker shows progress % vs runway on hover), progress %, pace chip,
+projected date, the milestone list — the **active milestone's steps shown open** (today's
+marching orders), other milestones' steps collapsed behind an "N steps" fold — and per-plan
+actions: Adapt / Re-plan, **＋ Context** (a freeform textarea → `POST /api/goal
+{id,context}` → `addGoalContext`: the fact becomes a durable `project` memory and the plan
+re-tunes around it immediately — the freeform sibling of plan-question answers), ✓ achieved,
+and **🗑 Delete** (`{id,delete:true}` → `deleteGoal`, confirm-gated hard delete: milestones
+and plan questions removed, quests/awards detached but kept as the battle record; non-active
+goals get ↺ Reactivate + Delete). The tab makes the whole mechanism legible:
 a **"How a plan drives you"** explainer at the top (steps → morning quests → milestone fill
 → goal %, and when the reckoning re-tunes), a per-goal **"Why this route"** block showing
 the planner's own reasoning (latest `plan`/`plan_adapt` activity, served as

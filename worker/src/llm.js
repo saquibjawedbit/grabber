@@ -3,9 +3,21 @@
 
 const MODEL = "@cf/openai/gpt-oss-120b";
 
-export async function llm(env, prompt) {
+export async function llm(env, prompt, { timeoutMs = 60_000 } = {}) {
   for (let attempt = 0; attempt < 2; attempt++) {
-    const res = await env.AI.run(MODEL, { input: prompt });
+    let res;
+    try {
+      // Workers AI occasionally hangs. Chat turns run on a hard wall-clock budget
+      // (the webhook window), so a hung call must lose the race and yield the time
+      // back to the loop instead of silently consuming it.
+      res = await Promise.race([
+        env.AI.run(MODEL, { input: prompt }),
+        new Promise((_, rej) => setTimeout(() => rej(new Error("llm call timed out")), timeoutMs)),
+      ]);
+    } catch (e) {
+      console.log(`llm attempt ${attempt} failed: ${String(e).slice(0, 140)}`);
+      continue;
+    }
     const out = res.output || [];
     const msg = out.find(o => o.type === "message");
     const text = msg?.content?.find(c => c.type === "output_text")?.text ?? "";

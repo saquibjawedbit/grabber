@@ -203,6 +203,25 @@
   /* display:grid above outranks the UA rule that makes [hidden] work — without this
      the forms are open before you ask for them. */
   #mem-add[hidden], #doc-edit[hidden], #goal-add[hidden] { display: none; }
+  /* Reminders: editable from the desk; chat: the full agent without reaching for the phone */
+  #rem-add { margin: 0.2rem 0 0.8rem; display: grid; gap: 0.4rem; }
+  #rem-add[hidden] { display: none; }
+  input[type="datetime-local"] {
+    font: inherit; font-size: 0.85rem; color: var(--ink);
+    background: var(--page); border: 1px solid var(--border); border-radius: 7px;
+    padding: 0.4rem 0.5rem; color-scheme: dark;
+  }
+  .rem-acts { flex: none; margin-left: auto; display: inline-flex; gap: 0.15rem; }
+  .rem-acts button, .rem-editing button {
+    background: none; border: 0; font: inherit; font-size: 0.85rem;
+    color: var(--muted); cursor: pointer; padding: 0 0.3rem;
+  }
+  .rem-acts button:hover, .rem-editing button:hover { color: var(--seq); }
+  .rem-editing { display: flex; gap: 0.4rem; align-items: center; padding: 0.5rem 0; border-bottom: 1px solid var(--grid); }
+  .rem-editing input:not([type="datetime-local"]) { flex: 1; }
+  #chat-send { display: flex; gap: 0.4rem; margin-top: 0.65rem; }
+  #chat-send input { flex: 1; }
+  #chat-send button[disabled] { opacity: 0.5; cursor: wait; }
   .goal-actions { display: inline-flex; gap: 0.3rem; margin-left: 0.4rem; vertical-align: middle; }
   .goal-actions button {
     background: none; border: 1px solid var(--border); color: var(--muted); cursor: pointer;
@@ -279,6 +298,18 @@
   .tl-today { position: absolute; top: 4px; width: 2px; height: 22px; background: var(--ink-2); }
   .tl-today::after { content: "today"; position: absolute; top: -13px; left: 50%; transform: translateX(-50%);
     font-size: 0.6rem; color: var(--muted); white-space: nowrap; }
+  /* interactable timeline: dots carry tooltips + click-to-jump; hit area beats the 14px mark */
+  .tl-dot { cursor: pointer; }
+  .tl-dot::after { content: ""; position: absolute; inset: -7px; }
+  .tl-dot:hover { box-shadow: 0 0 0 4px var(--seq-fill); }
+  .pm { border-radius: 8px; transition: background 0.3s; }
+  .pm.flash { background: var(--seq-fill); }
+  /* plan context + delete */
+  .plan-ctx { display: flex; gap: 0.5rem; margin: 0.8rem 0 0.2rem; align-items: flex-start; }
+  .plan-ctx textarea { flex: 1; font: inherit; font-size: 0.86rem; padding: 0.5rem 0.65rem; border-radius: 8px;
+    border: 1px solid var(--border); background: var(--page); color: var(--ink); resize: vertical; min-height: 2.6rem; }
+  .plan-actions button.danger { color: var(--critical); }
+  .plan-actions button.danger:hover:not(:disabled) { border-color: var(--critical); background: color-mix(in srgb, var(--critical) 10%, transparent); }
   .tl-dot { position: absolute; top: 8px; width: 14px; height: 14px; border-radius: 50%; transform: translateX(-50%);
     border: 2px solid var(--surface); background: var(--baseline); box-sizing: border-box; cursor: default; }
   .tl-dot.done { background: var(--good); }
@@ -500,6 +531,27 @@
   .battle-legend i { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 5px; font-style: normal; }
   .battle-sum { font-size: 0.78rem; color: var(--ink-2); margin-top: 0.3rem; font-variant-numeric: tabular-nums; }
 
+  /* ---------- Calorie tracker: 14 days of intake, one stacked column per day.
+     Macro grams don't sum to calories, so the stack is each macro's CALORIES
+     (protein 4/g, carbs 4/g, fat 9/g) — the column height is the day's kcal.
+     Triad #3987e5/#c98500/#9085e9 validated on the card surface (worst adjacent
+     CVD ΔE 17.3); the 2px gaps double as the segment spacer. ---------- */
+  .cal-wrap { display: flex; align-items: flex-end; gap: 4px; height: 150px; margin-top: 0.6rem; }
+  .cal-day { flex: 1; display: flex; flex-direction: column-reverse; gap: 2px; height: 100%;
+    justify-content: flex-start; cursor: default; border-radius: 2px; }
+  .cal-day:hover { background: rgba(111,195,255,0.06); }
+  .cal-seg { width: 100%; border-radius: 2px; min-height: 2px; }
+  .cal-seg.protein { background: var(--seq); }
+  .cal-seg.carbs { background: var(--gold); }
+  .cal-seg.fat { background: var(--cat-fact); }
+  .cal-seg.rest { background: var(--baseline); }   /* kcal logged without macros */
+  .cal-empty { width: 100%; height: 2px; background: var(--grid); border-radius: 2px; }
+  .cal-meal { font-size: 0.85rem; display: flex; justify-content: space-between; gap: 0.6rem;
+    padding: 0.3rem 0; border-bottom: 1px solid var(--grid); }
+  .cal-meal:last-child { border-bottom: 0; }
+  .cal-meal .m-macros { color: var(--muted); font-size: 0.76rem; margin-left: 0.45rem; }
+  .cal-meal .m-kcal { color: var(--ink-2); font-variant-numeric: tabular-nums; white-space: nowrap; }
+
   /* ---------- Small screens: one column, tighter chrome, same window language ---------- */
   @media (max-width: 640px) {
     main { padding: 0.7rem 0.65rem 3rem; }
@@ -592,12 +644,30 @@
           </form>
           <div id="memories"></div>
         </div>
-        <div class="card"><h2>Reminders</h2><div id="reminders"></div></div>
+        <div class="card">
+          <div class="card-head">
+            <h2>Reminders</h2>
+            <button id="rem-add-toggle" class="ghost-btn">Add</button>
+          </div>
+          <form id="rem-add" hidden>
+            <input id="rem-text" placeholder="What should the ping say?" maxlength="300">
+            <div class="row">
+              <input id="rem-when" type="datetime-local">
+              <button type="submit" class="ghost-btn primary">Schedule</button>
+              <span class="teach-status" id="rem-status"></span>
+            </div>
+          </form>
+          <div id="reminders"></div>
+        </div>
       </div>
       <div>
         <div class="card">
           <h2>Conversation <span class="sub" id="chat-count"></span></h2>
           <div id="chat"></div>
+          <form id="chat-send">
+            <input id="chat-in" placeholder="Talk to The System — the full agent, every tool" autocomplete="off" maxlength="4000">
+            <button type="submit" class="ghost-btn primary" id="chat-go">Send</button>
+          </form>
         </div>
         <div class="card">
           <h2>Conversation summary <span class="sub" id="sum-at"></span></h2>
@@ -610,6 +680,10 @@
   <!-- LIFE -->
   <section data-panel="life" hidden>
     <div class="card"><h2>Money, body &amp; people</h2><div id="life-body"></div></div>
+    <div class="card" id="cal-card" hidden>
+      <h2>Calories <span class="sub">daily intake, last 14 days — macros stacked</span></h2>
+      <div id="calories"></div>
+    </div>
     <div class="card">
       <h2>Trends over time <span class="sub">how your life is moving, from the log</span></h2>
       <div id="life-trends"></div>
@@ -965,6 +1039,62 @@ function wireTeach() {
   $("teach-save").onclick = () => teach(false);
   wireMemoryForm();
   wireDocForm();
+  wireReminderForm();
+  wireChatForm();
+}
+
+function wireReminderForm() {
+  $("rem-add-toggle").onclick = () => {
+    const f = $("rem-add");
+    f.hidden = !f.hidden;
+    if (!f.hidden) {
+      if (!$("rem-when").value) $("rem-when").value = remInputValue(Date.now() + 3600_000);
+      $("rem-text").focus();
+    }
+  };
+  $("rem-add").onsubmit = async e => {
+    e.preventDefault();
+    const text = $("rem-text").value.trim();
+    const when = $("rem-when").value;
+    if (!text || !when) { say("rem-status", "Need both the text and a time.", true); return; }
+    say("rem-status", "Scheduling…");
+    try {
+      const r = await api("/api/reminder", { method: "POST", body: { text, due_at: new Date(when).toISOString() } });
+      if (r.error) { say("rem-status", r.error, true); return; }
+      $("rem-text").value = "";
+      $("rem-add").hidden = true;
+      say("rem-status", "");
+      boot();
+    } catch { say("rem-status", "That didn't save.", true); }
+  };
+}
+
+// The dashboard chat is the SAME runAgent loop Telegram gets — every tool, memory
+// recall, persona — not a stripped-down sibling. Replies can take up to ~70s when the
+// agent is using tools; the disabled Send button is the "thinking" indicator.
+function wireChatForm() {
+  $("chat-send").onsubmit = async e => {
+    e.preventDefault();
+    const text = $("chat-in").value.trim();
+    if (!text || $("chat-go").disabled) return;
+    $("chat-in").value = "";
+    $("chat-go").disabled = true;
+    const box = $("chat");
+    box.insertAdjacentHTML("beforeend",
+      `<div class="turn user"><span class="who">You</span><span class="said">${esc(text)}</span><span class="at"></span></div>` +
+      `<div class="turn" id="chat-pending"><span class="who">${esc(agentName)}</span><span class="said">🤔 …</span><span class="at"></span></div>`);
+    box.scrollTop = box.scrollHeight;
+    try {
+      const r = await api("/api/chat", { method: "POST", body: { text } });
+      $("chat-pending").querySelector(".said").textContent = r.reply || r.error || "(no reply)";
+    } catch (err) {
+      $("chat-pending").querySelector(".said").textContent = "⚠️ " + (err.message === "token" ? "bad token" : "the agent hit an error — try again");
+    }
+    $("chat-pending").removeAttribute("id");
+    box.scrollTop = box.scrollHeight;
+    $("chat-go").disabled = false;
+    $("chat-in").focus();
+  };
 }
 
 function wireMemoryForm() {
@@ -1351,13 +1481,15 @@ function planTimeline(g) {
   const end = g.deadline ? new Date(g.deadline).getTime() : (dated.length ? Math.max(...dated) : start + 90 * 864e5);
   const span = Math.max(1, end - start);
   const pos = t => Math.max(0, Math.min(100, ((t - start) / span) * 100));
-  const dots = ms.filter(m => m.target_date).map(m =>
-    `<span class="tl-dot ${esc(m.status)}" style="left:${pos(new Date(m.target_date).getTime()).toFixed(1)}%" title="${esc(m.title)} — ${esc(m.target_date)}"></span>`).join("");
+  // Dots carry their milestone's index so the wire-up pass (below renderPlans) can
+  // attach tooltips + click-to-jump without inlining handlers into this string.
+  const dots = ms.map((m, mi) => ({ m, mi })).filter(x => x.m.target_date).map(({ m, mi }) =>
+    `<span class="tl-dot ${esc(m.status)}" data-goal="${g.id}" data-mi="${mi}" style="left:${pos(new Date(m.target_date).getTime()).toFixed(1)}%"></span>`).join("");
   return `<div class="tl">
       <div class="tl-track"></div>
       <div class="tl-fill" style="width:${Math.max(0, Math.min(100, (g.progress || 0) * 100)).toFixed(1)}%"></div>
       ${dots}
-      <div class="tl-today" style="left:${pos(Date.now()).toFixed(1)}%"></div>
+      <div class="tl-today" data-goal="${g.id}" style="left:${pos(Date.now()).toFixed(1)}%"></div>
     </div>
     <div class="tl-axis"><span>${esc((g.created_at || "").slice(0, 10))}</span><span>${g.deadline ? esc(g.deadline.slice(0, 10)) : "open-ended"}</span></div>`;
 }
@@ -1417,7 +1549,16 @@ function renderPlans(goals, questsToday, planQuestions) {
     const acts = g.status === "active" ? `<div class="plan-actions">
       <button class="primary" data-adapt="${g.id}" onclick="adaptGoal(${g.id})" title="Re-tune the remaining plan to your real progress">Adapt to progress</button>
       <button onclick="replanGoal(${g.id})" title="Map a fresh roadmap from scratch">Re-plan</button>
-      <button onclick="goalStatus(${g.id},'achieved')">✓ achieved</button></div>` : "";
+      <button onclick="toggleCtx(${g.id})" title="Tell the planner a fact — schedule, gear, budget — and it re-tunes around it">＋ Context</button>
+      <button onclick="goalStatus(${g.id},'achieved')">✓ achieved</button>
+      <button class="danger" onclick="deletePlan(${g.id})" title="Delete this goal and its plan permanently">🗑</button></div>`
+    : `<div class="plan-actions">
+      <button onclick="goalStatus(${g.id},'active')" title="Bring this goal back">↺ Reactivate</button>
+      <button class="danger" onclick="deletePlan(${g.id})" title="Delete this goal and its plan permanently">🗑 Delete</button></div>`;
+    const ctxForm = g.status === "active" ? `<div class="plan-ctx" id="ctx-${g.id}" hidden>
+      <textarea id="ctx-text-${g.id}" maxlength="600" placeholder="Tell the planner something it should know — “I can only practice on weekends”, “budget is ₹15k”, “I already know basic chords”…"></textarea>
+      <button class="ghost-btn primary" id="ctx-btn-${g.id}" onclick="sendPlanContext(${g.id})">Save → re-tune</button>
+    </div>` : "";
     return `<div class="plan ${esc(g.status)}">
       <div class="plan-head">
         <div><div class="plan-title">${esc(g.title)}${g.status !== "active" ? ` <span class="meta">(${esc(g.status)})</span>` : ""}</div>${g.target ? `<div class="plan-target">${esc(g.target)}</div>` : ""}</div>
@@ -1431,24 +1572,82 @@ function renderPlans(goals, questsToday, planQuestions) {
         <span>${ms.filter(m => m.status === "done").length}/${ms.length} milestones</span>
       </div>
       ${why}
+      ${ctxForm}
       ${qsHtml}
       ${ms.length ? planTimeline(g) : `<div class="empty">No roadmap yet — hit Re-plan.</div>`}
       ${todayHtml}
-      <div class="pm-list">${ms.map(m => {
+      <div class="pm-list">${ms.map((m, mi) => {
         const steps = m.steps || [];
         // The active milestone's steps are today's marching orders — show them open.
         // Pending/done ones collapse so the plan stays scannable.
         const stepsHtml = !steps.length ? "" : m.status === "active"
           ? `<div class="pm-steps">${steps.map(s => `<div class="pm-step">▸ ${esc(s)}</div>`).join("")}</div>`
           : `<details class="pm-steps-fold"><summary>${steps.length} steps</summary><div class="pm-steps">${steps.map(s => `<div class="pm-step">▸ ${esc(s)}</div>`).join("")}</div></details>`;
-        return `<div class="pm ${esc(m.status)}">
+        return `<div class="pm ${esc(m.status)}" id="pm-${g.id}-${mi}">
         <span class="pm-ic">${MS_ICON[m.status] || "○"}</span>
         <span><span class="pm-t">${esc(m.title)}</span>${m.done_when ? `<div class="pm-when">done when: ${esc(m.done_when)}</div>` : ""}${stepsHtml}</span>
         <span class="pm-date">${m.target_date ? esc(m.target_date.slice(5)) : ""}</span>
       </div>`;}).join("")}</div>
     </div>`;
   }).join("");
+  wireTimelines(box, goals);
 }
+
+// Timeline interactivity: hover a dot → tooltip (title, status, target, done-when);
+// click → jump to that milestone in the list and flash it. The today-marker explains
+// progress vs runway on hover. Handlers attach here, not inline — the tooltip needs
+// the milestone object, not a string-escaped copy of it.
+const MS_LABEL = { done: "✅ done", active: "◉ active — current", pending: "○ pending", skipped: "⤫ skipped" };
+function wireTimelines(box, goals) {
+  const byId = {};
+  for (const g of goals || []) byId[g.id] = g;
+  box.querySelectorAll(".tl-dot").forEach(d => {
+    const g = byId[d.dataset.goal], m = g?.milestones?.[Number(d.dataset.mi)];
+    if (!m) return;
+    d.onpointermove = e => tipShow(
+      `<b>${esc(m.title)}</b><div class="t-cat">${MS_LABEL[m.status] || m.status} · target ${esc(m.target_date || "—")}</div>` +
+      (m.done_when ? `<div class="t-cat">done when: ${esc(m.done_when)}</div>` : ""),
+      e.clientX, e.clientY);
+    d.onpointerleave = tipHide;
+    d.onclick = () => {
+      tipHide();
+      const row = document.getElementById(`pm-${g.id}-${d.dataset.mi}`);
+      if (!row) return;
+      row.scrollIntoView({ behavior: "smooth", block: "center" });
+      row.classList.add("flash");
+      setTimeout(() => row.classList.remove("flash"), 1600);
+    };
+  });
+  box.querySelectorAll(".tl-today").forEach(t => {
+    const g = byId[t.dataset.goal];
+    if (!g) return;
+    t.onpointermove = e => tipShow(
+      `<b>${Math.round((g.progress || 0) * 100)}% done</b><div class="t-cat">today · ${PACE_LABEL[g.pace] || g.pace || ""}${g.days_left != null ? ` · ${g.days_left}d of runway left` : ""}</div>`,
+      e.clientX, e.clientY);
+    t.onpointerleave = tipHide;
+  });
+}
+
+window.toggleCtx = id => {
+  const f = document.getElementById(`ctx-${id}`);
+  if (!f) return;
+  f.hidden = !f.hidden;
+  if (!f.hidden) document.getElementById(`ctx-text-${id}`)?.focus();
+};
+window.sendPlanContext = async id => {
+  const ta = document.getElementById(`ctx-text-${id}`);
+  const text = (ta?.value || "").trim();
+  if (!text) return;
+  const btn = document.getElementById(`ctx-btn-${id}`);
+  if (btn) { btn.disabled = true; btn.textContent = "Saving & re-tuning…"; }
+  try { await api("/api/goal", { method: "POST", body: { id, context: text } }); boot(); }
+  catch { if (btn) { btn.disabled = false; btn.textContent = "Save → re-tune"; } }
+};
+window.deletePlan = async id => {
+  if (!confirm("Delete this goal and its whole plan permanently? Your quest history and XP are kept.")) return;
+  try { await api("/api/goal", { method: "POST", body: { id, delete: true } }); boot(); }
+  catch { /* next load reflects the truth */ }
+};
 
 const ACT_ICON = {
   goal: "⚔️", plan: "🗺️", quest_issued: "📜", quest_done: "✅", quest_failed: "❌",
@@ -1654,6 +1853,92 @@ function renderLifeTrends(health) {
     `Nothing logged yet. Tell the bot “I weigh 71.2 today”, “slept 6.5h”, “ran 5k”, “did a workout” — each becomes a tracked series and charts here over time.`);
 }
 
+// ---------- Calorie tracker (Life tab) ----------
+// One stacked column per IST day: each macro's calories (protein/carbs ×4, fat ×9),
+// plus a muted "rest" segment when logged kcal exceeds what the macros account for —
+// so a meal logged without macros still shows its true height instead of vanishing.
+const MACRO = [["protein", 4, "var(--seq)"], ["carbs", 4, "var(--gold)"], ["fat", 9, "var(--cat-fact)"]];
+
+function renderCalories(meals) {
+  const card = $("cal-card");
+  if (!card) return;
+  if (!meals?.length) { card.hidden = true; return; }
+  card.hidden = false;
+
+  const byDay = new Map();
+  for (const m of meals) {
+    const d = new Date(new Date(m.at).getTime() + 330 * 60000).toISOString().slice(0, 10);
+    const r = byDay.get(d) || { kcal: 0, protein: 0, carbs: 0, fat: 0, items: [] };
+    r.kcal += m.kcal || 0; r.protein += m.protein_g || 0;
+    r.carbs += m.carbs_g || 0; r.fat += m.fat_g || 0;
+    r.items.push(m);
+    byDay.set(d, r);
+  }
+  const days = [];
+  for (let i = 13; i >= 0; i--) {
+    const dt = new Date(Date.now() + 330 * 60000 - i * 864e5);
+    const key = dt.toISOString().slice(0, 10);
+    days.push({ key, dow: "SMTWTFS"[dt.getUTCDay()],
+      ...(byDay.get(key) || { kcal: 0, protein: 0, carbs: 0, fat: 0, items: [] }) });
+  }
+  // Column height must mean kcal — if macro estimates overshoot the stated kcal,
+  // the macro calories win the height so segments never overflow their column.
+  const heightOf = d => Math.max(d.kcal, MACRO.reduce((s, [k, per]) => s + d[k] * per, 0));
+  const max = Math.max(1, ...days.map(heightOf));
+  const today = days[13];
+  const logged = days.filter(d => d.kcal > 0);
+  const avg = Math.round(logged.reduce((s, d) => s + d.kcal, 0) / Math.max(1, logged.length));
+  let anyRest = false;
+
+  const tiles = `<div class="tiles" style="margin-bottom:0.2rem">
+    <div class="tile"><div class="v">${today.kcal ? Math.round(today.kcal).toLocaleString() : "—"}</div><div class="k">kcal today</div></div>
+    <div class="tile"><div class="v">${today.protein ? Math.round(today.protein) + "g" : "—"}</div><div class="k">protein</div></div>
+    <div class="tile"><div class="v">${today.carbs ? Math.round(today.carbs) + "g" : "—"}</div><div class="k">carbs</div></div>
+    <div class="tile"><div class="v">${today.fat ? Math.round(today.fat) + "g" : "—"}</div><div class="k">fat</div></div>
+  </div>`;
+
+  const cols = days.map((d, i) => {
+    const total = heightOf(d);
+    if (!total) return `<div class="cal-day" data-i="${i}"><div class="cal-empty"></div></div>`;
+    const segs = MACRO.map(([k, per]) => {
+      const kc = d[k] * per;
+      return kc ? `<div class="cal-seg ${k}" style="height:${(kc / max * 100).toFixed(1)}%"></div>` : "";
+    }).join("");
+    const rest = Math.max(0, d.kcal - MACRO.reduce((s, [k, per]) => s + d[k] * per, 0));
+    if (rest > 0) anyRest = true;
+    return `<div class="cal-day" data-i="${i}">${segs}${rest > 0 ? `<div class="cal-seg rest" style="height:${(rest / max * 100).toFixed(1)}%"></div>` : ""}</div>`;
+  }).join("");
+
+  const mealRows = today.items.length ? `<div class="meta" style="margin-top:0.9rem">Today's meals</div>` +
+    today.items.map(m => {
+      const macros = [m.protein_g && `P ${Math.round(m.protein_g)}g`, m.carbs_g && `C ${Math.round(m.carbs_g)}g`,
+        m.fat_g && `F ${Math.round(m.fat_g)}g`].filter(Boolean).join(" · ");
+      return `<div class="cal-meal"><span>${esc(m.name)}${macros ? `<span class="m-macros">${macros}</span>` : ""}</span>
+        <span class="m-kcal">${Math.round(m.kcal).toLocaleString()} kcal</span></div>`;
+    }).join("") : "";
+
+  $("calories").innerHTML = `${tiles}
+    <div class="cal-wrap">${cols}</div>
+    <div class="battle-axis">${days.map((d, i) => `<span class="${i === 13 ? "today" : ""}">${d.dow}</span>`).join("")}</div>
+    <div class="battle-legend">
+      <span><i style="background:var(--seq)"></i>protein</span>
+      <span><i style="background:var(--gold)"></i>carbs</span>
+      <span><i style="background:var(--cat-fact)"></i>fat</span>
+      ${anyRest ? `<span><i style="background:var(--baseline)"></i>kcal without macros</span>` : ""}
+    </div>
+    <div class="battle-sum">avg ${avg.toLocaleString()} kcal/day over ${logged.length} logged day${logged.length === 1 ? "" : "s"} · bar height = calories; macro slices are their calorie share (4/4/9 kcal per g)</div>
+    ${mealRows}`;
+
+  $("calories").querySelectorAll(".cal-day").forEach(el => {
+    const d = days[Number(el.dataset.i)];
+    el.addEventListener("mousemove", e => tipShow(d.kcal
+      ? `<b>${Math.round(d.kcal).toLocaleString()} kcal</b> · ${d.items.length} meal${d.items.length === 1 ? "" : "s"}
+         <div class="t-cat">${d.key} · P ${Math.round(d.protein)}g · C ${Math.round(d.carbs)}g · F ${Math.round(d.fat)}g</div>`
+      : `<b>${d.key}</b><div class="t-cat">nothing logged</div>`, e.clientX, e.clientY));
+    el.addEventListener("mouseleave", tipHide);
+  });
+}
+
 function renderSettings(s) {
   if (!s) return;
   $("autonomy-sub").textContent = `${s.autonomy_left_today}/${s.autonomy_budget} actions left today`;
@@ -1699,17 +1984,59 @@ window.goalStatus = async (id, status) => {
   catch { /* the next load reflects the truth */ }
 };
 
+let remRows = [];   // kept so ✎ can prefill the inline editor without a refetch
+
+// datetime-local wants "YYYY-MM-DDTHH:MM" in the BROWSER's zone; the API wants UTC ISO.
+// new Date(<input value>) parses as local, so .toISOString() is the whole conversion.
+const remInputValue = ms => {
+  const d = new Date(ms), p = n => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
+};
+
 function renderReminders(rems) {
-  if (!rems.length) { $("reminders").innerHTML = `<div class="empty">No open reminders. Ask the bot: “remind me Friday 6pm to…”.</div>`; return; }
+  remRows = rems;
+  if (!rems.length) { $("reminders").innerHTML = `<div class="empty">No open reminders. Ask the bot — or the Add button above.</div>`; return; }
   const now = Date.now();
   $("reminders").innerHTML = rems.map(r => {
     const due = Date.parse(r.due_at);
     const over = due < now && !r.notified;
-    return `<div class="rem"><span class="when">${IST.format(due)}</span>
+    return `<div class="rem" id="rem-${r.id}"><span class="when">${IST.format(due)}</span>
       <span>${esc(r.text)}${r.notified ? ` <span class="meta">· delivered</span>` : ""}
-      ${over ? ` <span class="overdue">⚠ overdue</span>` : ""}</span></div>`;
+      ${over ? ` <span class="overdue">⚠ overdue</span>` : ""}</span>
+      <span class="rem-acts">
+        <button title="Edit" onclick="remEdit(${r.id})">✎</button>
+        <button title="Done / cancel" onclick="remDone(${r.id})">✕</button>
+      </span></div>`;
   }).join("");
 }
+
+window.remDone = async id => {
+  try { await api("/api/reminder", { method: "POST", body: { id, done: true } }); boot(); }
+  catch { /* the next load reflects the truth */ }
+};
+window.remEdit = id => {
+  const r = remRows.find(x => x.id === id);
+  if (!r) return;
+  $("rem-" + id).outerHTML = `<form class="rem-editing" onsubmit="return remSave(event, ${id})">
+    <input id="rem-etext-${id}" value="${esc(r.text)}" maxlength="300">
+    <input id="rem-ewhen-${id}" type="datetime-local" value="${remInputValue(Date.parse(r.due_at))}">
+    <button type="submit" title="Save">✔</button>
+    <button type="button" title="Cancel" onclick="renderReminders(remRows)">✕</button>
+  </form>`;
+  $("rem-etext-" + id).focus();
+};
+window.remSave = async (e, id) => {
+  e.preventDefault();
+  const text = $("rem-etext-" + id).value.trim();
+  const when = $("rem-ewhen-" + id).value;
+  try {
+    await api("/api/reminder", { method: "POST", body: {
+      id, ...(text ? { text } : {}), ...(when ? { due_at: new Date(when).toISOString() } : {}),
+    }});
+  } catch { /* the next load reflects the truth */ }
+  boot();
+  return false;
+};
 
 // ---------- knowledge graph (canvas force layout) ----------
 function buildGraph(data) {
@@ -2058,6 +2385,7 @@ async function boot() {
     renderSummary(brain.summary);
     // Life tab
     renderLife(brain.life);
+    renderCalories(brain.life?.meals);
     renderLifeTrends(brain.life?.health);
     renderPeople(brain.life?.people);
     renderTransactions(brain.life?.transactions);

@@ -805,6 +805,50 @@ export async function updateGoal(env, id, fields) {
   return { ok: true, id: Number(id), ...m };
 }
 
+// Hard delete — the goal, its roadmap and its questions are gone for good. Quest rows
+// and awards SURVIVE detached (they're the owner's battle record and XP history; deleting
+// them would rewrite the past). FK order matters: quests/awards detach first, then the
+// NOT-NULL children (plan_questions, milestones), then the goal row itself.
+export async function deleteGoal(env, id) {
+  id = Number(id);
+  const g = await env.DB.prepare("SELECT id, title FROM goals WHERE id = ?").bind(id).first();
+  if (!g) return { error: "no goal with that id" };
+  await env.DB.prepare(
+    "UPDATE quests SET milestone_id = NULL WHERE milestone_id IN (SELECT id FROM milestones WHERE goal_id = ?)")
+    .bind(id).run();
+  await env.DB.prepare("UPDATE quests SET goal_id = NULL WHERE goal_id = ?").bind(id).run();
+  await env.DB.prepare("UPDATE awards SET goal_id = NULL WHERE goal_id = ?").bind(id).run();
+  await env.DB.prepare("DELETE FROM plan_questions WHERE goal_id = ?").bind(id).run();
+  await env.DB.prepare("DELETE FROM milestones WHERE goal_id = ?").bind(id).run();
+  await env.DB.prepare("DELETE FROM goals WHERE id = ?").bind(id).run();
+  await env.DB.prepare("DELETE FROM state WHERE key = ?").bind(`adapt_last_${id}`).run();
+  await logActivity(env, {
+    kind: "goal", actor: "owner",
+    summary: `Deleted goal (and its plan): ${g.title}`,
+  });
+  return { ok: true, deleted: id, title: g.title };
+}
+
+// Freeform context from the owner ("I can only practice on weekends", "budget is ₹15k") —
+// the Plans-tab sibling of plan-question answers: it becomes a durable memory (so every
+// future plan knows it) and immediately re-tunes THIS goal's plan around it.
+export async function addGoalContext(env, id, text) {
+  id = Number(id);
+  text = String(text || "").trim().slice(0, 600);
+  if (!text) return { error: "context text is empty" };
+  const g = await env.DB.prepare("SELECT * FROM goals WHERE id = ?").bind(id).first();
+  if (!g) return { error: "no goal with that id" };
+  try { await saveMemory(env, `${text} (context for goal: ${g.title})`, "project", { source: "plan_context" }); }
+  catch (e) { console.log("plan context memory failed:", String(e).slice(0, 120)); }
+  await logActivity(env, {
+    kind: "plan_question", actor: "owner", goal_id: id,
+    summary: `Gave the planner context: ${text.slice(0, 140)}`,
+  });
+  if (g.status !== "active") return { ok: true, saved: true, replanned: false, note: "goal not active — saved as memory only" };
+  const r = await adaptPlan(env, id);
+  return { ok: true, saved: true, replanned: r.ok === true, questions_asked: r.questions_asked || 0 };
+}
+
 // ---------- Quests ----------
 
 export async function createQuest(env, { goal_id = null, milestone_id = null, text, kind = "daily", due_at }) {
@@ -912,29 +956,20 @@ async function ownerProfile(env) {
     const r = await env.DB.prepare("SELECT content FROM profile WHERE key = ?").bind(key).first();
     if (r) parts.push(r.content.slice(0, 1200));
   }
+  // Newest first: past the 40-cap the OLDEST memories should fall off, not the newest —
+  // the owner's current facts beat their week-one ones. (Reversed back so the block
+  // still reads chronologically.)
   const { results: mems } = await env.DB.prepare(
     `SELECT category, fact FROM memories
-     WHERE category IN ('goal','skill','project','identity','preference') ORDER BY id LIMIT 40`).all();
-  if (mems.length) parts.push(mems.map(m => `- (${m.category}) ${m.fact}`).join("\n"));
+     WHERE category IN ('goal','skill','project','identity','preference') ORDER BY id DESC LIMIT 40`).all();
+  if (mems.length) parts.push(mems.reverse().map(m => `- (${m.category}) ${m.fact}`).join("\n"));
   return parts.join("\n\n") || "(the System knows little about them yet)";
 }
 
-// The profile the PLANNER sees: the static profile PLUS memories recalled by meaning
-// against this specific goal. The static block is capped and category-filtered, so the
-// fact that mattered ("already owns a guitar") routinely missed it — and the plan told
-// the owner to buy one. Embedding recall pulls exactly those goal-relevant facts in.
-async function goalContext(env, goal) {
-  let out = await ownerProfile(env);
-  try {
-    const rel = await recallMemories(env,
-      [goal.title, goal.target, goal.why].filter(Boolean).join(" · "));
-    const fresh = rel.filter(m => m.fact && !out.includes(m.fact)).slice(0, 12)
-      .map(m => `- (${m.category}) ${m.fact}`);
-    if (fresh.length) out += "\n\nKnown facts relevant to THIS goal:\n" + fresh.join("\n");
-  } catch (e) { console.log("goalContext recall failed:", String(e).slice(0, 120)); }
-  // The latest measured numbers — where the owner ACTUALLY is right now — plus each
-  // series' 30-day trajectory. A snapshot ("47.8 kg") plans worse than a trend
-  // ("47.9 → 47.8 over 3 logs in 30d"): the trend says whether the current approach works.
+// Latest value + 30-day trend for every tracked series, as a prompt block. Shared by the
+// planner (goalContext) and quest generation — the quest agent used to be blind to these,
+// so it could issue "weigh yourself" on a day the weight was already logged.
+async function measuredNumbers(env) {
   try {
     const nums = [];
     const trendLine = r => {
@@ -957,8 +992,32 @@ async function goalContext(env, goal) {
               (SELECT value FROM metrics m2 WHERE m2.name = m.name AND datetime(m2.at) >= datetime('now','-30 days') ORDER BY m2.at LIMIT 1) AS first30
        FROM metrics m GROUP BY name ORDER BY at DESC LIMIT 8`).all();
     for (const r of m) nums.push(trendLine(r));
-    if (nums.length) out += "\n\nLatest measured numbers (their real current state, with 30-day trend):\n" + nums.join("\n");
-  } catch (e) { console.log("goalContext metrics failed:", String(e).slice(0, 120)); }
+    if (!nums.length) return "";
+    return "Latest measured numbers (their real current state, with 30-day trend):\n" + nums.join("\n");
+  } catch (e) {
+    console.log("measuredNumbers failed:", String(e).slice(0, 120));
+    return "";
+  }
+}
+
+// The profile the PLANNER sees: the static profile PLUS memories recalled by meaning
+// against this specific goal. The static block is capped and category-filtered, so the
+// fact that mattered ("already owns a guitar") routinely missed it — and the plan told
+// the owner to buy one. Embedding recall pulls exactly those goal-relevant facts in.
+async function goalContext(env, goal) {
+  let out = await ownerProfile(env);
+  try {
+    const rel = await recallMemories(env,
+      [goal.title, goal.target, goal.why].filter(Boolean).join(" · "));
+    const fresh = rel.filter(m => m.fact && !out.includes(m.fact)).slice(0, 12)
+      .map(m => `- (${m.category}) ${m.fact}`);
+    if (fresh.length) out += "\n\nKnown facts relevant to THIS goal:\n" + fresh.join("\n");
+  } catch (e) { console.log("goalContext recall failed:", String(e).slice(0, 120)); }
+  // The latest measured numbers — where the owner ACTUALLY is right now — plus each
+  // series' 30-day trajectory. A snapshot ("47.8 kg") plans worse than a trend
+  // ("47.9 → 47.8 over 3 logs in 30d"): the trend says whether the current approach works.
+  const nums = await measuredNumbers(env);
+  if (nums) out += "\n\n" + nums;
   // Finished deep-research reports that touch this goal. A 10-minute research dig used to
   // stop at the chat agent — the planner never saw it, which defeated the point of running
   // it. Relevance is cheap keyword overlap with the goal; the freshest two make it in.
@@ -1008,7 +1067,7 @@ function parseJson(text) {
 
 // ---------- Quest generation ----------
 
-const GEN_PROMPT = (persona, clock, profile, goals, recent) => `You are ${persona.name}. Issue today's quests for the owner.
+const GEN_PROMPT = (persona, clock, profile, goals, recent, numbers) => `You are ${persona.name}. Issue today's quests for the owner.
 ${voiceBlock(persona)}
 Today is ${clock.today}.${clock.days_since_last_cleared != null ? ` It has been ${clock.days_since_last_cleared} day(s) since they last cleared a quest.` : ""} Current streak: ${clock.streak}.
 
@@ -1024,11 +1083,16 @@ are behind pace. Skip a goal with no sensible step today.
 ## Active goals — current milestone and its planned steps
 ${goals}
 
-## Quests already issued recently — do NOT repeat these (steps they already cover are done)
+## Recent quests (✓ done · ✗ FAILED · · open/skipped)
 ${recent || "(none)"}
+A step covered by a ✓ done quest is complete — do NOT re-issue it. A step whose quest
+✗ FAILED is NOT done: re-issue it today, rescoped smaller if it was too big to clear.
 
 ## What you know about them
 ${profile}
+
+## Their latest measured numbers — anchor quests to these, never re-ask for a number logged today
+${numbers || "(nothing measured yet)"}
 
 Return ONLY JSON:
 {"quests":[{"goal_id": <id or null>, "text": "imperative, specific, checkable tonight", "kind": "daily|milestone|urgent|side"}]}`;
@@ -1054,13 +1118,19 @@ async function generateDailyQuests(env) {
            (steps.length ? `\n    → planned steps:\n${steps.map(s => `       • ${s}`).join("\n")}` : "")
          : `\n    → no milestone yet; pick a concrete first step`));
   }
+  // Status matters: a failed quest's step is NOT covered — without it the model treated
+  // every past quest text as "done" and never re-issued a failed step. 30 rows ≈ a few
+  // days of history across all goals, so cleared steps stay out of rotation longer.
   const { results: recent } = await env.DB.prepare(
-    "SELECT text FROM quests ORDER BY id DESC LIMIT 15").all();
+    "SELECT text, status FROM quests ORDER BY id DESC LIMIT 30").all();
+  const mark = { done: "✓", failed: "✗ FAILED", skipped: "·", issued: "·", doing: "·" };
 
   const persona = await getPersona(env);
   const { text, salvaged } = await llm(env, GEN_PROMPT(
     persona, await clockContext(env, null), await ownerProfile(env),
-    blocks.join("\n"), recent.map(r => `- ${r.text}`).join("\n")));
+    blocks.join("\n"),
+    recent.map(r => `- ${mark[r.status] || "·"} ${r.text}`).join("\n"),
+    await measuredNumbers(env)));
   if (salvaged) return { error: "generation salvaged", created: [] };
   const v = parseJson(text);
   const list = Array.isArray(v?.quests) ? v.quests.slice(0, MAX_DAILY_QUESTS) : [];

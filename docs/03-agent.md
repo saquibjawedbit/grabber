@@ -25,9 +25,31 @@ flowchart TB
 Constants (`agent.js:9-12`): `MAX_STEPS = 8`, `HISTORY_ACTIVE = 24` (recent turns kept
 verbatim), `HISTORY_COMPACT_AT = 48`, `HISTORY_HARD_CAP = 140`.
 
-The loop is in `runAgent` (`agent.js:589`). Each iteration builds the *entire* prompt
+The loop is in `runAgent` (`agent.js`). Each iteration builds the *entire* prompt
 fresh (there's no server-side conversation object — the model is stateless), calls the
 LLM once, and interprets the reply as one JSON object.
+
+### Wall-clock budget — why slow turns used to go silent
+
+The Telegram webhook used to ACK immediately and run the turn in `ctx.waitUntil` — but
+Cloudflare **cancels backgrounded work 30s after the response**, and one gpt-oss call
+alone can take 17-30s. Any turn with real tool use was killed mid-loop: the "🤔 …"
+placeholder was never edited, and (before `[observability]` logging) no trace was left.
+
+The fix is three layers, none of which cuts tool use short prematurely:
+
+1. **The webhook now *awaits* the turn** (`index.js` `handleTelegram` → `converse`) —
+   Telegram waits ~60s for a webhook response, plus the runtime's post-disconnect grace,
+   so the turn gets ~90s instead of 30. Telegram redelivers any update it hasn't had a
+   200 for, so the handler dedups by `update_id` (`INSERT OR IGNORE` into `state`,
+   `tg_update_<id>` keys, purged after 2 days) — first delivery wins, redelivery no-ops.
+2. **`runAgent` takes a `deadline`** (~70s in): steps and tools run normally until the
+   last ~18s, which is reserved for composing the final answer *from the transcript* —
+   the model concludes from the tool results it actually gathered, it doesn't skip them.
+   Each `llm()` call is capped to fit the remaining budget (10-30s, `timeoutMs` race in
+   `llm.js`) so one hung Workers AI call can't silently eat the window.
+3. **A watchdog in `converse`** races the whole turn against 78s — if it still overruns,
+   the placeholder is edited to an honest timeout line. Silence is now impossible.
 
 ## 3.2 The JSON protocol
 
@@ -155,7 +177,7 @@ flowchart LR
   end
   subgraph money["Money / Body / People"]
     net_worth; set_account; set_holding; log_transaction; spending
-    log_health; health_trend
+    log_health; health_trend; log_meal; nutrition
     remember_person; log_interaction; get_people; person_history
   end
 ```

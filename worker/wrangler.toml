@@ -34,6 +34,11 @@ index_name = "grabber-memories"
 [triggers]
 crons = ["0 * * * *"]
 
+# Workers Logs (free tier) — without this a killed webhook turn leaves no trace at all,
+# which is why the silent-no-reply bug was invisible. View: dashboard → Worker → Logs.
+[observability]
+enabled = true
+
 # Secrets (set with `wrangler secret put <NAME>`):
 #   TELEGRAM_BOT_TOKEN   — same bot as the pipeline
 #   TELEGRAM_CHAT_ID     — your chat with the bot

@@ -4,7 +4,7 @@
 import { embedMemory, rememberExchange, runAgent, TOOLS, validateArgs } from "./agent.js";
 import { backfill, extract, forgetMemory, reconcile, saveMemory, unpackVec } from "./memory.js";
 import { DEFAULT_PERSONA, getPersona, resetPersona, setPersona } from "./persona.js";
-import { adaptPlan, announceOpenQuestions, answerPlanQuestion, answerPlanQuestions, checkAwards, createGoal, debrief, getSettings, getSystemState, issueDaily, listAwards, listGoals, listMetrics, listMilestones, listPlanQuestions, listQuests, maybeAdaptOnDone, replanGoal, resolveQuest, runSystem, setAutonomyMode, updateGoal } from "./system.js";
+import { adaptPlan, addGoalContext, announceOpenQuestions, answerPlanQuestion, answerPlanQuestions, checkAwards, createGoal, debrief, deleteGoal, getSettings, getSystemState, issueDaily, listAwards, listGoals, listMetrics, listMilestones, listPlanQuestions, listQuests, maybeAdaptOnDone, replanGoal, resolveQuest, runSystem, setAutonomyMode, updateGoal } from "./system.js";
 import { classifyInbox, googleConnected, ingestNotification, pollCalendar, remindEvents } from "./senses.js";
 import { processBankNotifications } from "./life.js";
 import { generatePerception, getPerception } from "./perception.js";
@@ -260,12 +260,21 @@ function mdToHtml(md) {
 }
 
 async function converse(env, chatId, text, placeholderId, prefix = "") {
+  // The webhook awaits this whole call: ~60s of Telegram patience plus the runtime's
+  // post-disconnect grace. runAgent budgets its loop to land inside that; the outer
+  // race is the watchdog — if the turn still overruns, the owner gets an honest
+  // timeout line, never an eternal "🤔 …".
+  const deadline = Date.now() + 70_000;
   let reply;
   try {
-    reply = await runAgent(env, text);
+    reply = await Promise.race([
+      runAgent(env, text, { deadline }),
+      new Promise(res => setTimeout(() => res(null), 78_000)),
+    ]);
   } catch (e) {
     reply = `⚠️ I hit an error: ${String(e).slice(0, 200)}`;
   }
+  if (reply == null) reply = "⌛ That one ran past my time limit and I lost the thread. Ask me again — smaller pieces land faster.";
   const body = {
     chat_id: chatId, text: prefix + mdToHtml(reply), parse_mode: "HTML", disable_web_page_preview: true,
   };
@@ -343,6 +352,19 @@ async function handleTelegram(request, env, ctx) {
   }
   const update = await request.json();
 
+  // We hold the webhook response open while the agent thinks (a backgrounded turn gets
+  // killed 30s after the response — too short for a real tool-using turn). Telegram
+  // redelivers an update until it gets a 200, so slow turns WILL arrive twice: first
+  // writer wins the INSERT, the redelivery finds the key and exits immediately.
+  if (update.update_id != null) {
+    const seen = await env.DB.prepare(
+      "INSERT OR IGNORE INTO state (key, value, updated_at) VALUES (?, '1', ?)")
+      .bind(`tg_update_${update.update_id}`, new Date().toISOString()).run();
+    if (!seen.meta.changes) return new Response("ok");
+    ctx.waitUntil(env.DB.prepare("DELETE FROM state WHERE key LIKE 'tg_update_%' AND updated_at < ?")
+      .bind(new Date(Date.now() - 2 * 86400000).toISOString()).run());
+  }
+
   const msg = update.message;
   if (msg?.text?.startsWith("/")) {
     await handleCommand(msg.text, msg.chat.id, env);
@@ -355,8 +377,8 @@ async function handleTelegram(request, env, ctx) {
   if (photo) {
     if (!isOwner(msg.chat.id, env)) return new Response("ok");
     const sent = await tg(env, "sendMessage", { chat_id: msg.chat.id, text: "🖼 looking…" });
-    ctx.waitUntil(handlePhoto(env, msg.chat.id, photo.file_id, msg.caption,
-      sent.result?.message_id, photo.mime_type));
+    await handlePhoto(env, msg.chat.id, photo.file_id, msg.caption,
+      sent.result?.message_id, photo.mime_type);
     return new Response("ok");
   }
   if (msg?.document) {
@@ -370,7 +392,7 @@ async function handleTelegram(request, env, ctx) {
     if (!isOwner(msg.chat.id, env)) return new Response("ok");
     const sent = await tg(env, "sendMessage", { chat_id: msg.chat.id, text: "🎧 listening…" });
     const quoted = await replyContext(env, msg);
-    ctx.waitUntil(handleVoice(env, msg.chat.id, audio.file_id, sent.result?.message_id, quoted));
+    await handleVoice(env, msg.chat.id, audio.file_id, sent.result?.message_id, quoted);
     return new Response("ok");
   }
   if (msg?.text) {
@@ -380,10 +402,12 @@ async function handleTelegram(request, env, ctx) {
       });
       return new Response("ok");
     }
-    // Ack Telegram fast; think in the background, then edit the placeholder.
+    // Placeholder first so the owner sees thinking immediately — then AWAIT the turn
+    // (not waitUntil: backgrounded work is killed 30s after the response, which is what
+    // silently ate tool-using turns). The update_id dedup above absorbs redelivery.
     const sent = await tg(env, "sendMessage", { chat_id: msg.chat.id, text: "🤔 …" });
     const quoted = await replyContext(env, msg);
-    ctx.waitUntil(converse(env, msg.chat.id, quoted + msg.text, sent.result?.message_id));
+    await converse(env, msg.chat.id, quoted + msg.text, sent.result?.message_id);
     return new Response("ok");
   }
   if (msg && isOwner(msg.chat.id, env)) {
@@ -495,7 +519,7 @@ async function runReminders(env) {
 
 // ---------- Dashboard API ----------
 
-async function handleApi(url, env, request) {
+async function handleApi(url, env, request, ctx) {
   if (url.searchParams.get("t") !== env.DASH_TOKEN) {
     return Response.json({ error: "bad token" }, { status: 403 });
   }
@@ -547,7 +571,7 @@ async function handleApi(url, env, request) {
     const persona = await getPersona(env);
     // Measured rarity (point 3) and the learned pieces are the most interesting
     // things this system holds — they belong on screen, not only in the ranker.
-    const [rarity, calib, people, txs, health, merchants, briefing] = await Promise.all([
+    const [rarity, calib, people, txs, health, meals, merchants, briefing] = await Promise.all([
       env.DB.prepare(`SELECT term, df, ROUND(idf, 2) AS idf FROM idf
                       WHERE term NOT LIKE 'phrase:%' AND df >= 2
                       ORDER BY idf DESC LIMIT 24`).all(),
@@ -561,6 +585,8 @@ async function handleApi(url, env, request) {
                       FROM transactions ORDER BY at DESC LIMIT 25`).all(),
       env.DB.prepare(`SELECT metric, value, unit, at FROM health
                       WHERE datetime(at) >= datetime('now', '-180 days') ORDER BY at`).all(),
+      env.DB.prepare(`SELECT name, kcal, protein_g, carbs_g, fat_g, at FROM meals
+                      WHERE datetime(at) >= datetime('now', '-30 days') ORDER BY at`).all(),
       env.DB.prepare("SELECT pattern, category FROM merchant_category ORDER BY category, pattern").all(),
       env.DB.prepare("SELECT value, updated_at FROM state WHERE key = 'briefing_text'").first(),
     ]);
@@ -620,6 +646,7 @@ async function handleApi(url, env, request) {
         transactions: txs.results,
         people: people.results,
         health: health.results,
+        meals: meals.results,
       },
       rarity: rarity.results,
       calibration: calib.results,
@@ -683,6 +710,59 @@ async function handleApi(url, env, request) {
   // ---------- Teaching it from the dashboard ----------
   // Telegram was the only way in, which meant anything you wanted it to know had
   // to be typed at a phone. These are the same memory layer, reached from the desk.
+
+  if (url.pathname === "/api/chat" && request.method === "POST") {
+    // Talk to the agent at FULL capability from the dashboard — the exact runAgent
+    // loop Telegram gets (every tool, memory recall, persona), not a stripped-down
+    // sibling. The reply returns synchronously; the history write + memory sweep run
+    // after via waitUntil, mirroring the Telegram path's rememberExchange placement.
+    const { text = "" } = await request.json().catch(() => ({}));
+    const t = String(text).trim().slice(0, 4000);
+    if (!t) return Response.json({ error: "empty message" }, { status: 400 });
+    let reply;
+    try {
+      reply = await runAgent(env, t);
+    } catch (e) {
+      return Response.json({ error: String(e).slice(0, 200) }, { status: 500 });
+    }
+    if (ctx) ctx.waitUntil(rememberExchange(env, t, reply));
+    else await rememberExchange(env, t, reply);
+    return Response.json({ reply });
+  }
+
+  if (url.pathname === "/api/reminder" && request.method === "POST") {
+    // Reminders from the desk: {text, due_at} creates; {id, text?, due_at?} edits;
+    // {id, done:true} completes/cancels. due_at is UTC ISO (the dashboard converts
+    // from the browser's local time before sending).
+    const b = await request.json().catch(() => ({}));
+    if (b.id) {
+      const row = await env.DB.prepare("SELECT * FROM reminders WHERE id = ?").bind(Number(b.id)).first();
+      if (!row) return Response.json({ error: "no reminder with that id" }, { status: 404 });
+      if (b.done) {
+        await env.DB.prepare("UPDATE reminders SET done = 1 WHERE id = ?").bind(row.id).run();
+        return Response.json({ ok: true, id: row.id, done: true });
+      }
+      const due = b.due_at ? Date.parse(b.due_at) : NaN;
+      if (b.due_at && isNaN(due)) return Response.json({ error: "due_at must be an ISO datetime" }, { status: 400 });
+      // A re-timed reminder must fire again even if it already pinged once — reset
+      // notified only when the time actually changes.
+      await env.DB.prepare(
+        "UPDATE reminders SET text = ?, due_at = ?, notified = CASE WHEN ? THEN 0 ELSE notified END WHERE id = ?")
+        .bind(String(b.text ?? row.text).slice(0, 300),
+              b.due_at ? new Date(due).toISOString() : row.due_at,
+              b.due_at ? 1 : 0, row.id).run();
+      const updated = await env.DB.prepare("SELECT id, text, due_at, notified FROM reminders WHERE id = ?").bind(row.id).first();
+      return Response.json({ ok: true, ...updated });
+    }
+    const due = Date.parse(b.due_at || "");
+    if (!String(b.text || "").trim() || isNaN(due)) {
+      return Response.json({ error: "need text and due_at (ISO datetime)" }, { status: 400 });
+    }
+    const row = await env.DB.prepare(
+      "INSERT INTO reminders (text, due_at, created_at) VALUES (?, ?, ?) RETURNING id")
+      .bind(String(b.text).trim().slice(0, 300), new Date(due).toISOString(), new Date().toISOString()).first();
+    return Response.json({ ok: true, id: row.id, fires_at_utc: new Date(due).toISOString() });
+  }
 
   if (url.pathname === "/api/teach" && request.method === "POST") {
     // Paste anything — notes, a bio, a JD, a brain-dump. The extractor mines the
@@ -796,9 +876,18 @@ async function handleApi(url, env, request) {
   }
   if (url.pathname === "/api/goal" && request.method === "POST") {
     // Set a goal from the dashboard (same createGoal the agent's set_goal tool uses),
-    // change its status, or re-map its roadmap. {title,…} creates; {id,status} updates;
-    // {id,replan:true} maps a fresh route.
+    // change its status, re-map its roadmap, feed the planner context, or delete it.
+    // {title,…} creates; {id,status} updates; {id,replan:true} maps a fresh route;
+    // {id,context:"…"} saves a fact + re-tunes; {id,delete:true} removes it for good.
     const body = await request.json().catch(() => ({}));
+    if (body.id && body.delete) {
+      return Response.json(await deleteGoal(env, body.id));
+    }
+    if (body.id && body.context) {
+      const r = await addGoalContext(env, body.id, body.context);
+      if (r.questions_asked) await announceOpenQuestions(env, tg);
+      return Response.json(r, { status: r.error ? 400 : 200 });
+    }
     if (body.id && body.replan) {
       const r = await replanGoal(env, body.id);
       if (r.questions_asked) await announceOpenQuestions(env, tg);
@@ -915,7 +1004,7 @@ export default {
       }
     }
     if (url.pathname === "/telegram" && request.method === "POST") return handleTelegram(request, env, ctx);
-    if (url.pathname.startsWith("/api/")) return handleApi(url, env, request);
+    if (url.pathname.startsWith("/api/")) return handleApi(url, env, request, ctx);
     // The dashboard is one HTML file that changes every deploy — never let a browser
     // or edge cache serve a stale copy, or a UI fix looks broken until a hard reload.
     const res = await env.ASSETS.fetch(request);

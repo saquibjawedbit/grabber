@@ -212,6 +212,52 @@ export const LIFE_TOOLS = {
     },
   },
 
+  log_meal: {
+    group: "Body",
+    desc: 'record something the owner ate. ESTIMATE kcal and macros yourself from the food when the owner doesn\'t state them — a reasonable estimate logged beats a precise number never logged; say it was an estimate. args: {"name": "2 eggs + 2 rotis + chai", "kcal": 520, "protein_g": 20, "carbs_g": 55, "fat_g": 22, "note": "..."}',
+    args: {
+      name: { type: "string", required: true }, kcal: { type: "number", required: true },
+      protein_g: { type: "number" }, carbs_g: { type: "number" }, fat_g: { type: "number" },
+    },
+    run: async (env, args) => {
+      const name = String(args.name || "").trim();
+      const kcal = Number(args.kcal);
+      if (!name || !isFinite(kcal) || kcal <= 0) return { error: "need the food and a positive kcal" };
+      const g = v => (v == null || !isFinite(Number(v)) ? null : Math.max(0, Number(v)));
+      await env.DB.prepare(
+        "INSERT INTO meals (name, kcal, protein_g, carbs_g, fat_g, note, at) VALUES (?,?,?,?,?,?,?)")
+        .bind(name.slice(0, 120), kcal, g(args.protein_g), g(args.carbs_g), g(args.fat_g),
+              String(args.note || "").slice(0, 200), args.at || nowIso()).run();
+      // One meal is trivia; the day is the point — reply with the running total.
+      const today = await env.DB.prepare(`
+        SELECT COUNT(*) AS meals, ROUND(SUM(kcal)) AS kcal,
+               ROUND(SUM(protein_g)) AS protein_g, ROUND(SUM(carbs_g)) AS carbs_g,
+               ROUND(SUM(fat_g)) AS fat_g
+        FROM meals WHERE date(at, '+330 minutes') = date('now', '+330 minutes')`).first();
+      return { ok: true, logged: { name, kcal }, today };
+    },
+  },
+
+  nutrition: {
+    group: "Body",
+    desc: 'what the owner has eaten — per-day kcal + macro totals and the period average. args: {"days": 7}',
+    run: async (env, args) => {
+      const days = Math.min(Math.max(Number(args.days) || 7, 1), 90);
+      const { results } = await env.DB.prepare(`
+        SELECT date(at, '+330 minutes') AS day, COUNT(*) AS meals, ROUND(SUM(kcal)) AS kcal,
+               ROUND(SUM(protein_g)) AS protein_g, ROUND(SUM(carbs_g)) AS carbs_g,
+               ROUND(SUM(fat_g)) AS fat_g
+        FROM meals WHERE datetime(at) >= datetime('now', '-' || ? || ' days')
+        GROUP BY day ORDER BY day`).bind(days).all();
+      if (!results.length) return { error: `no meals logged in the last ${days} days — the owner tells you what they ate, you log_meal it` };
+      const avg = k => Math.round(results.reduce((s, r) => s + (r[k] || 0), 0) / results.length);
+      return {
+        window_days: days, days_logged: results.length, by_day: results,
+        daily_avg: { kcal: avg("kcal"), protein_g: avg("protein_g"), carbs_g: avg("carbs_g"), fat_g: avg("fat_g") },
+      };
+    },
+  },
+
   health_trend: {
     group: "Body",
     desc: 'the history of a body metric. args: {"metric": "weight", "days": 90}',
