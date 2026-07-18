@@ -181,11 +181,29 @@ nightly reckoning, a research job spawned (`agent.js`), an application drafted
 (rank + goals + today's quests + the newest 60 activity rows) and renders it as a
 "what I'm doing to hit your goals" feed — so the owner can see, at a glance, what the
 agent has actually done for them. The dashboard (`worker/public/index.html`) opens on the
-**System** tab (rank hero, the honest "How I see you" read, quests, goals, activity,
-applications). Other tabs: **Brain** (an explorable knowledge graph — zoom/pan/click-to-
-focus/legend-filter/search — plus memories, conversation, reminders), **Life**,
-**Research**, **Senses**, and **Settings** (persona, teach, profile documents). The old
-Opportunities tab was removed.
+**System** tab (rank hero, Awards, the Battle record, the honest "How I see you" read,
+quests, goals, activity, applications). Other tabs: **Plans**, **Brain** (an explorable
+knowledge graph — zoom/pan/click-to-focus/legend-filter/search — plus memories,
+conversation, reminders), **Life**, **Research**, **Senses**, and **Settings** (persona,
+teach, profile documents). The old Opportunities tab was removed.
+
+**The look is the Solo Leveling status window, dark-only** — dark is the medium, not a
+mode. Design tokens at the top of `index.html`: deep-navy void (`--page #05080f`), panel
+navy (`--surface #0a101d`), luminous edge glow (`--glow #6fc3ff` — text/borders ONLY),
+and **validated chart mark colors** (azure `--seq #3987e5`, crimson `--critical #e0485c`,
+gold `#c98500` — checked with the dataviz palette validator against the dark surface;
+red↔green was rejected for deutan-CVD, which is why "cleared" charts in azure, not
+green). The signature element: every card/plan/tile is a **System window** — luminous
+1px border with corner ticks (layered gradients on `::before`), HUD typography
+(Rajdhani, uppercase, letterspaced) for headings/numbers/chips, a hexagonal level
+emblem, and an angular clipped XP bar with a shimmer sweep (disabled under
+`prefers-reduced-motion`). Responsive: sticky scrollable tab bar, tiles/grids collapse
+at 640px/420px, verified at phone width.
+
+**Battle record** (`renderBattle`): one stacked column per IST day over the last 14 —
+cleared (azure) under failed (crimson), 2px gaps, weekday axis with today highlighted,
+hover tooltip with exact counts, legend + totals line. Fed by `quest_history` in
+`GET /api/system`. Hidden until any quest exists in the window.
 
 ## 5.85 Planner, autonomy & progress (the roadmap upgrade)
 
@@ -200,10 +218,15 @@ persistent, time-aware plan it drives. Four capabilities, all in `system.js`:
   with `target_date`s across the runway (runs once on goal-create, lazily at issuance, or
   via `replan_goal`). The planner (and `adaptPlan`) reasons over `goalContext(env, goal)`:
   the static owner profile, **plus** memories recalled by embedding against the goal's
-  title/target/why, **plus the latest measured numbers** from the `health` and `metrics`
-  logs — so it plans from where the owner actually is (it knows they own a Yamaha Pacifica
-  and weigh what their last log says; it won't tell them to buy a guitar or "gain weight"
-  in the abstract). The prompts enforce **specificity**: every milestone measurable and
+  title/target/why, **plus the latest measured numbers with each series' 30-day trend**
+  from the `health` and `metrics` logs (a snapshot plans worse than "47.9 → 47.8 over 3
+  logs" — the trend says whether the current approach works), **plus the freshest 1–2
+  finished deep-research reports** whose question keyword-overlaps the goal (a 10-minute
+  research dig used to stop at the chat agent and never reach the planner), **plus one
+  live web search** for the goal (`searchWeb` in `search.js`: Serper → CSE → DDG →
+  Wikipedia, fail-soft; top 5 snippets) — so it plans from where the owner actually is
+  and what the world currently knows, without turning the one-shot planner into an agent
+  loop. The prompts enforce **specificity**: every milestone measurable and
   concrete (exact numbers/named things, no abstract labels), and each carries `steps` —
   3-6 concrete day-sized actions (stored as JSON, migration 006) that are the raw material
   for daily quests. `generateDailyQuests` issues from the **active** milestone's next

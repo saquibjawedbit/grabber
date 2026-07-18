@@ -873,6 +873,12 @@ async function handleApi(url, env, request) {
       metrics: metrics.metrics,
       awards: (await listAwards(env)).awards,
       plan_questions: (await listPlanQuestions(env, { status: "open" })).questions,
+      // Battle record: per-IST-day quest outcomes for the last 14 days.
+      quest_history: (await env.DB.prepare(`
+        SELECT date(issued_at, '+330 minutes') AS d,
+               SUM(status = 'done') AS done, SUM(status = 'failed') AS failed, COUNT(*) AS n
+        FROM quests WHERE datetime(issued_at) >= datetime('now', '-14 days')
+        GROUP BY d ORDER BY d`).all()).results,
     });
   }
   return Response.json({ error: "not found" }, { status: 404 });

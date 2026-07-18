@@ -172,10 +172,13 @@ apart. Schemas are **opt-in per tool** — currently on the high-traffic and
 expensive-if-wrong tools (memory, reminders, goals/quests, money/people writers,
 applications); untyped tools behave exactly as before. Highlights:
 
-- **`web_search`** (`agent.js:55`) has a 3-tier fallback: Google CSE (if keyed) →
-  DuckDuckGo HTML/lite endpoints (often block datacenter IPs) → Wikipedia opensearch as
-  a last resort. This same tool is what the CI research agent *borrows* over HTTP
-  (see [06](./06-research-agent.md)).
+- **`web_search`** (`agent.js`) delegates to `searchWeb` in `search.js` — a 4-tier
+  fallback: Serper (if `SERPER_API_KEY` set; Google results over a plain JSON API that
+  works from datacenter IPs) → Google CSE (if keyed) → DuckDuckGo HTML/lite endpoints
+  (often block datacenter IPs) → Wikipedia opensearch as a last resort. `search.js` is a
+  separate module because the planner's `goalContext` (`system.js`) uses the same chain,
+  and importing `agent.js` from `system.js` would be a cycle. This same tool is what the
+  CI research agent *borrows* over HTTP (see [06](./06-research-agent.md)).
 - **`web_fetch`** (`agent.js:113`) tries a direct fetch, then falls back to the
   `r.jina.ai` reader proxy.
 - **`spawn_research`** (`agent.js:313`) enforces ≤3 in-flight jobs, inserts the row, and

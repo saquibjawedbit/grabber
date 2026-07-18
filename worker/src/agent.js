@@ -3,6 +3,7 @@ import { LIFE_TOOLS } from "./life.js";
 import { extractJson, llm } from "./llm.js";
 import { CATEGORIES as MEMORY_CATEGORIES, embedMemory, extract, forgetMemory, recallMemories, saveMemory } from "./memory.js";
 import { getPersona, voiceBlock } from "./persona.js";
+import { searchWeb } from "./search.js";
 import { SYSTEM_TOOLS, logActivity } from "./system.js";
 
 export { llm, embedMemory };
@@ -65,58 +66,8 @@ export const TOOLS = {
     desc: 'search the live web for anything. args: {"query": "..."}',
     args: { query: { type: "string", required: true } },
     run: async (env, args) => {
-      const q = String(args.query || "").trim();
-      if (!q) return { error: "empty query" };
-      // 1. Google CSE — reliable from Workers, free 100 queries/day, needs GOOGLE_CSE_KEY.
-      if (env.GOOGLE_CSE_KEY && env.GOOGLE_CSE_ID) {
-        try {
-          const r = await fetch("https://www.googleapis.com/customsearch/v1?key=" + env.GOOGLE_CSE_KEY +
-            "&cx=" + env.GOOGLE_CSE_ID + "&num=6&q=" + encodeURIComponent(q));
-          if (r.ok) {
-            const j = await r.json();
-            const results = (j.items || []).map(i => ({
-              title: i.title, url: i.link, snippet: (i.snippet || "").slice(0, 160),
-            }));
-            if (results.length) return { results, tip: "web_fetch a result URL to read it" };
-          }
-        } catch { /* fall through */ }
-      }
-      // 2. DuckDuckGo endpoints — often block datacenter IPs, but cheap to try.
-      const ddgLink = /<a[^>]*(?:class="result__a"|rel="nofollow")[^>]*href="([^"]+)"[^>]*>([\s\S]*?)<\/a>/g;
-      for (const ep of ["https://html.duckduckgo.com/html/?q=", "https://lite.duckduckgo.com/lite/?q="]) {
-        try {
-          const r = await fetch(ep + encodeURIComponent(q), {
-            headers: { "User-Agent": "Mozilla/5.0 (X11; Linux x86_64; rv:128.0) Gecko/20100101 Firefox/128.0" },
-          });
-          if (!r.ok) continue;
-          const html = await r.text();
-          const results = [];
-          let m;
-          while ((m = ddgLink.exec(html)) && results.length < 6) {
-            let href = m[1];
-            const uddg = /uddg=([^&]+)/.exec(href);
-            if (uddg) try { href = decodeURIComponent(uddg[1]); } catch { /* keep raw */ }
-            if (!/^https?:\/\//.test(href) || /duckduckgo\.com/.test(href)) continue;
-            const title = stripHtml(m[2]).slice(0, 120);
-            if (!title || results.some(x => x.url === href)) continue;
-            results.push({ title, url: href });
-          }
-          if (results.length) return { results, tip: "web_fetch a result URL to read it" };
-        } catch { /* try next */ }
-      }
-      // 3. Wikipedia — always reachable; better than nothing for factual queries.
-      try {
-        const r = await fetch("https://en.wikipedia.org/w/api.php?action=opensearch&limit=5&format=json&search=" +
-          encodeURIComponent(q));
-        const [, titles, , urls] = await r.json();
-        if (titles?.length) {
-          return {
-            results: titles.map((t, i) => ({ title: t, url: urls[i] })),
-            note: "general search engines blocked this request; these are Wikipedia matches — web_fetch one, or fetch a site you already know",
-          };
-        }
-      } catch { /* give up */ }
-      return { error: "all search backends failed — try web_fetch on a specific URL you know" };
+      const r = await searchWeb(env, args.query);
+      return r.results ? { ...r, tip: "web_fetch a result URL to read it" } : r;
     },
   },
 

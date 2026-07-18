@@ -12,6 +12,7 @@
 import { llm } from "./llm.js";
 import { recallMemories, saveMemory } from "./memory.js";
 import { getPersona, voiceBlock } from "./persona.js";
+import { searchWeb } from "./search.js";
 
 const ISSUE_HOUR = 7;       // IST — morning quest issuance
 const DEBRIEF_HOUR = 21;    // IST — evening reckoning
@@ -931,18 +932,58 @@ async function goalContext(env, goal) {
       .map(m => `- (${m.category}) ${m.fact}`);
     if (fresh.length) out += "\n\nKnown facts relevant to THIS goal:\n" + fresh.join("\n");
   } catch (e) { console.log("goalContext recall failed:", String(e).slice(0, 120)); }
-  // The latest measured numbers — where the owner ACTUALLY is right now. Plans anchored
-  // to "gain weight" instead of "47.9 kg today, 60 kg target" come out generic.
+  // The latest measured numbers — where the owner ACTUALLY is right now — plus each
+  // series' 30-day trajectory. A snapshot ("47.8 kg") plans worse than a trend
+  // ("47.9 → 47.8 over 3 logs in 30d"): the trend says whether the current approach works.
   try {
     const nums = [];
+    const trendLine = r => {
+      const name = r.metric || r.name, u = r.unit ? " " + r.unit : "";
+      let s = `- ${name}: ${r.value}${u} (logged ${String(r.at).slice(0, 10)})`;
+      if (r.n30 >= 2 && r.first30 != null && r.first30 !== r.value) {
+        s += ` — 30d trend: ${r.first30} → ${r.value}${u} over ${r.n30} logs`;
+      }
+      return s;
+    };
     const { results: h } = await env.DB.prepare(
-      `SELECT metric, value, unit, MAX(at) AS at FROM health GROUP BY metric ORDER BY at DESC LIMIT 8`).all();
-    for (const r of h) nums.push(`- ${r.metric}: ${r.value}${r.unit ? " " + r.unit : ""} (logged ${String(r.at).slice(0, 10)})`);
+      `SELECT metric, value, unit, MAX(at) AS at,
+              (SELECT COUNT(*) FROM health h2 WHERE h2.metric = h.metric AND datetime(h2.at) >= datetime('now','-30 days')) AS n30,
+              (SELECT value FROM health h2 WHERE h2.metric = h.metric AND datetime(h2.at) >= datetime('now','-30 days') ORDER BY h2.at LIMIT 1) AS first30
+       FROM health h GROUP BY metric ORDER BY at DESC LIMIT 8`).all();
+    for (const r of h) nums.push(trendLine(r));
     const { results: m } = await env.DB.prepare(
-      `SELECT name, value, unit, MAX(at) AS at FROM metrics GROUP BY name ORDER BY at DESC LIMIT 8`).all();
-    for (const r of m) nums.push(`- ${r.name}: ${r.value}${r.unit ? " " + r.unit : ""} (logged ${String(r.at).slice(0, 10)})`);
-    if (nums.length) out += "\n\nLatest measured numbers (their real current state):\n" + nums.join("\n");
+      `SELECT name, value, unit, MAX(at) AS at,
+              (SELECT COUNT(*) FROM metrics m2 WHERE m2.name = m.name AND datetime(m2.at) >= datetime('now','-30 days')) AS n30,
+              (SELECT value FROM metrics m2 WHERE m2.name = m.name AND datetime(m2.at) >= datetime('now','-30 days') ORDER BY m2.at LIMIT 1) AS first30
+       FROM metrics m GROUP BY name ORDER BY at DESC LIMIT 8`).all();
+    for (const r of m) nums.push(trendLine(r));
+    if (nums.length) out += "\n\nLatest measured numbers (their real current state, with 30-day trend):\n" + nums.join("\n");
   } catch (e) { console.log("goalContext metrics failed:", String(e).slice(0, 120)); }
+  // Finished deep-research reports that touch this goal. A 10-minute research dig used to
+  // stop at the chat agent — the planner never saw it, which defeated the point of running
+  // it. Relevance is cheap keyword overlap with the goal; the freshest two make it in.
+  try {
+    const tokens = [goal.title, goal.target].filter(Boolean).join(" ").toLowerCase().match(/[a-z]{4,}/g) || [];
+    if (tokens.length) {
+      const { results: res } = await env.DB.prepare(
+        "SELECT question, report_md FROM research WHERE status = 'done' ORDER BY id DESC LIMIT 10").all();
+      const rel = res.filter(r => {
+        const q = String(r.question || "").toLowerCase();
+        return tokens.some(t => q.includes(t));
+      }).slice(0, 2);
+      if (rel.length) out += "\n\nDeep-research reports the System already ran (use these findings):\n" +
+        rel.map(r => `Q: ${r.question}\n${String(r.report_md || "").slice(0, 700)}`).join("\n---\n");
+    }
+  } catch (e) { console.log("goalContext research failed:", String(e).slice(0, 120)); }
+  // One live web search per plan call (Serper → CSE → DDG → Wikipedia, see search.js) —
+  // fresh outside knowledge without turning the one-shot planner into an agent loop.
+  try {
+    const s = await searchWeb(env, [goal.title, goal.target].filter(Boolean).join(" "), 5);
+    if (s.results?.length) {
+      out += "\n\nFresh web results for this goal (snippets — use the ideas, don't cite URLs):\n" +
+        s.results.slice(0, 5).map(r => `- ${r.title}${r.snippet ? ` — ${r.snippet}` : ""}`).join("\n");
+    }
+  } catch (e) { console.log("goalContext search failed:", String(e).slice(0, 120)); }
   // What the owner told the System when it asked — the highest-signal facts of all —
   // plus what's still pending, so the planner never re-asks an open question.
   try {

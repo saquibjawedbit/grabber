@@ -1,91 +1,123 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#05080f">
 <title>The System — grabber</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;600;700&display=swap" rel="stylesheet">
 <style>
+  /* ---- The System: a Solo Leveling status window. Dark is not a mode, it's the
+     medium — the System only renders in darkness. Chart mark colors (--seq,
+     --critical, --gold) are validated for the dark surface; glow tokens are for
+     text/borders only, never data marks. ---- */
   :root {
-    color-scheme: light;
-    --page:        #f9f9f7;
-    --surface:     #fcfcfb;
-    --ink:         #0b0b0b;
-    --ink-2:       #52514e;
-    --muted:       #898781;
-    --grid:        #e1e0d9;
-    --baseline:    #c3c2b7;
-    --border:      rgba(11,11,11,0.10);
-    --seq:         #2a78d6;           /* single-hue magnitude (bars) */
-    --seq-fill:    rgba(42, 120, 214, 0.13);
-    --critical:    #d03b3b;
-    --good:        #0ca30c;
+    color-scheme: dark;
+    --page:        #05080f;
+    --surface:     #0a101d;
+    --surface-2:   #0d1524;
+    --ink:         #e8f1ff;
+    --ink-2:       #9fb3d1;
+    --muted:       #5d7194;
+    --grid:        #14203a;
+    --baseline:    #24344f;
+    --border:      rgba(90,160,255,0.16);
+    --glow:        #6fc3ff;           /* UI luminescence — text & edges only */
+    --glow-soft:   rgba(111,195,255,0.35);
+    --seq:         #3987e5;           /* validated mark azure */
+    --seq-fill:    rgba(57,135,229,0.16);
+    --critical:    #e0485c;           /* validated mark crimson */
+    --good:        #33c07a;
     --warn:        #c98500;
-    --accent:      #2a78d6;
-    --cat-identity:   #2a78d6;
-    --cat-preference: #008300;
-    --cat-skill:      #e87ba4;
-    --cat-goal:       #eda100;
-    --cat-project:    #1baf7a;
-    --cat-contact:    #eb6834;
-    --cat-health:     #0f9b9b;
-    --cat-money:      #7a6a1f;
-    --cat-fact:       #4a3aa7;
-    --cat-doc:        #898781;
-  }
-  @media (prefers-color-scheme: dark) {
-    :root {
-      color-scheme: dark;
-      --page:        #0d0d0d;
-      --surface:     #1a1a19;
-      --ink:         #ffffff;
-      --ink-2:       #c3c2b7;
-      --muted:       #898781;
-      --grid:        #2c2c2a;
-      --baseline:    #383835;
-      --border:      rgba(255,255,255,0.10);
-      --seq:         #3987e5;
-      --seq-fill:    rgba(57, 135, 229, 0.16);
-      --critical:    #ef6b64;
-      --good:        #3fbf68;
-      --warn:        #d59b2a;
-      --accent:      #3987e5;
-      --cat-identity:   #3987e5;
-      --cat-preference: #008300;
-      --cat-skill:      #d55181;
-      --cat-goal:       #c98500;
-      --cat-project:    #199e70;
-      --cat-contact:    #d95926;
-      --cat-health:     #2ab3b3;
-      --cat-money:      #b3a04a;
-      --cat-fact:       #9085e9;
-    }
+    --gold:        #c98500;
+    --accent:      #3987e5;
+    --font-hud:    "Rajdhani", ui-monospace, "Segoe UI", sans-serif;
+    --cat-identity:   #3987e5;
+    --cat-preference: #35a552;
+    --cat-skill:      #d55181;
+    --cat-goal:       #c98500;
+    --cat-project:    #199e70;
+    --cat-contact:    #d95926;
+    --cat-health:     #2ab3b3;
+    --cat-money:      #b3a04a;
+    --cat-fact:       #9085e9;
+    --cat-doc:        #5d7194;
   }
   * { box-sizing: border-box; }
   body {
-    margin: 0; background: var(--page); color: var(--ink);
+    margin: 0; color: var(--ink);
+    background:
+      radial-gradient(90rem 40rem at 70% -10%, rgba(57,135,229,0.08), transparent 60%),
+      radial-gradient(60rem 30rem at 0% 110%, rgba(111,195,255,0.04), transparent 55%),
+      var(--page);
+    background-attachment: fixed;
     font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
     line-height: 1.5;
   }
   main { max-width: 1060px; margin: 0 auto; padding: 1.2rem 1rem 4rem; }
   header { display: flex; align-items: baseline; gap: 0.8rem; flex-wrap: wrap; margin: 0.6rem 0 1rem; }
-  h1 { font-size: 1.25rem; margin: 0; }
-  h2 { font-size: 0.95rem; margin: 0 0 0.75rem; }
-  .sub { color: var(--muted); font-size: 0.85rem; font-weight: 400; }
-  .card {
-    background: var(--surface); border: 1px solid var(--border);
-    border-radius: 12px; padding: 1rem 1.1rem; margin: 0 0 1rem;
+  h1 {
+    font-family: var(--font-hud); font-size: 1.35rem; font-weight: 700; margin: 0;
+    text-transform: uppercase; letter-spacing: 0.22em;
+    text-shadow: 0 0 18px var(--glow-soft);
   }
-  .tabs { display: flex; gap: 0.25rem; margin: 0 0 1rem; flex-wrap: wrap; border-bottom: 1px solid var(--grid); }
+  h1 .h1-glyph { color: var(--glow); }
+  h2 {
+    font-family: var(--font-hud); font-size: 0.92rem; font-weight: 600; margin: 0 0 0.75rem;
+    text-transform: uppercase; letter-spacing: 0.14em; color: var(--ink);
+  }
+  h2::before { content: "◈ "; color: var(--glow); font-size: 0.8em; }
+  .sub { color: var(--muted); font-size: 0.85rem; font-weight: 400; font-family: system-ui, sans-serif;
+    text-transform: none; letter-spacing: normal; }
+  /* The signature: every panel is a System window — luminous edge, corner ticks. */
+  .card, .plan, .tile {
+    position: relative;
+    background: linear-gradient(180deg, rgba(111,195,255,0.045), rgba(111,195,255,0) 26%), var(--surface);
+    border: 1px solid var(--border); border-radius: 6px;
+    box-shadow: 0 0 0 1px rgba(0,0,0,0.35), 0 8px 30px rgba(0,0,0,0.35);
+  }
+  .card::before, .plan::before, .tile::before {
+    content: ""; position: absolute; inset: -1px; pointer-events: none; border-radius: 6px;
+    background:
+      linear-gradient(var(--glow), var(--glow)) 0 0 / 16px 2px,
+      linear-gradient(var(--glow), var(--glow)) 0 0 / 2px 16px,
+      linear-gradient(var(--glow), var(--glow)) 100% 0 / 16px 2px,
+      linear-gradient(var(--glow), var(--glow)) 100% 0 / 2px 16px,
+      linear-gradient(var(--glow), var(--glow)) 0 100% / 16px 2px,
+      linear-gradient(var(--glow), var(--glow)) 0 100% / 2px 16px,
+      linear-gradient(var(--glow), var(--glow)) 100% 100% / 16px 2px,
+      linear-gradient(var(--glow), var(--glow)) 100% 100% / 2px 16px;
+    background-repeat: no-repeat;
+    opacity: 0.38;
+  }
+  .card { padding: 1rem 1.1rem; margin: 0 0 1rem; }
+  .tabs {
+    display: flex; gap: 0.15rem; margin: 0 0 1rem; border-bottom: 1px solid var(--grid);
+    overflow-x: auto; scrollbar-width: none; flex-wrap: nowrap;
+    position: sticky; top: 0; z-index: 5;
+    background: color-mix(in srgb, var(--page) 88%, transparent);
+    backdrop-filter: blur(8px);
+  }
+  .tabs::-webkit-scrollbar { display: none; }
   .tabs button {
     background: none; border: 0; border-bottom: 2px solid transparent; margin-bottom: -1px;
-    padding: 0.5rem 0.9rem; font: inherit; font-size: 0.9rem; color: var(--muted);
-    cursor: pointer; border-radius: 6px 6px 0 0;
+    padding: 0.55rem 0.85rem; font-family: var(--font-hud); font-size: 0.86rem; font-weight: 600;
+    text-transform: uppercase; letter-spacing: 0.1em; color: var(--muted);
+    cursor: pointer; white-space: nowrap;
   }
   .tabs button:hover { color: var(--ink); }
-  .tabs button.on { color: var(--ink); border-bottom-color: var(--seq); font-weight: 600; }
+  .tabs button.on { color: var(--glow); border-bottom-color: var(--glow); text-shadow: 0 0 12px var(--glow-soft); }
   section[data-panel] { display: grid; gap: 0; }
   section[data-panel][hidden] { display: none; }
-  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)); gap: 0.75rem; margin-bottom: 1rem; }
-  .tile { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 0.8rem 1rem; }
-  .tile .v { font-size: 1.7rem; font-weight: 650; letter-spacing: -0.02em; }
-  .tile .k { color: var(--ink-2); font-size: 0.8rem; }
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 0.75rem; margin-bottom: 1rem; }
+  .tile { padding: 0.75rem 0.95rem; }
+  .tile .v { font-family: var(--font-hud); font-size: 1.8rem; font-weight: 700; letter-spacing: 0.01em; font-variant-numeric: tabular-nums; }
+  .tile .k { color: var(--muted); font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.12em; font-family: var(--font-hud); font-weight: 600; }
+  /* Panels materialize once on load. */
+  @media (prefers-reduced-motion: no-preference) {
+    .card, .plan, .tile { animation: sys-in 0.45s ease both; }
+    .card:nth-child(2) { animation-delay: 0.05s; } .card:nth-child(3) { animation-delay: 0.1s; }
+    @keyframes sys-in { from { opacity: 0; transform: translateY(7px); } to { opacity: 1; transform: none; } }
+  }
   .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; align-items: start; }
   @media (max-width: 800px) { .cols { grid-template-columns: 1fr; } }
   .legend { display: flex; flex-wrap: wrap; gap: 0.35rem 0.9rem; margin-top: 0.5rem; font-size: 0.78rem; color: var(--ink-2); }
@@ -210,7 +242,8 @@
   .seg button.on { background: var(--seq); color: #fff; font-weight: 600; }
   /* metrics charts */
   .metric-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 0.9rem; }
-  .metric-card { border: 1px solid var(--border); border-radius: 10px; padding: 0.7rem 0.8rem; background: var(--surface); }
+  .metric-card { border: 1px solid var(--border); border-radius: 6px; padding: 0.7rem 0.8rem; background: var(--surface-2); }
+  .metric-val { font-family: var(--font-hud); }
   .metric-head { display: flex; align-items: baseline; justify-content: space-between; gap: 0.5rem; }
   .metric-name { font-size: 0.82rem; color: var(--ink-2); text-transform: capitalize; }
   .metric-val { font-size: 1.35rem; font-weight: 650; letter-spacing: -0.02em; font-variant-numeric: tabular-nums; }
@@ -225,8 +258,8 @@
     color: var(--muted); font-size: 0.78rem; border: 1px dashed var(--border); border-radius: 8px; }
   .metric-foot { font-size: 0.72rem; color: var(--muted); font-variant-numeric: tabular-nums; }
   .metric-up { color: var(--good); } .metric-down { color: var(--critical); }
-  /* Plans widget — a timeline per goal */
-  .plan { background: var(--surface); border: 1px solid var(--border); border-radius: 12px; padding: 1rem 1.1rem; margin: 0 0 1rem; }
+  /* Plans widget — a timeline per goal (panel chrome comes from the shared System-window rule) */
+  .plan { padding: 1rem 1.1rem; margin: 0 0 1rem; }
   .plan.achieved { opacity: 0.72; }
   .plan-head { display: flex; align-items: flex-start; justify-content: space-between; gap: 0.8rem; flex-wrap: wrap; }
   .plan-title { font-size: 1.05rem; font-weight: 650; letter-spacing: -0.01em; }
@@ -369,28 +402,42 @@
   .legend span:hover { background: color-mix(in srgb, var(--ink) 7%, transparent); }
   .legend span.off { opacity: 0.32; text-decoration: line-through; }
 
-  /* ---------- The System ---------- */
+  /* ---------- The System status window ---------- */
   .rank-card {
     background:
-      radial-gradient(120% 140% at 100% 0%, var(--seq-fill), transparent 60%),
+      radial-gradient(120% 160% at 100% 0%, rgba(57,135,229,0.14), transparent 60%),
+      linear-gradient(180deg, rgba(111,195,255,0.05), transparent 30%),
       var(--surface);
-    border-color: color-mix(in srgb, var(--seq) 28%, var(--border));
+    border-color: color-mix(in srgb, var(--glow) 30%, var(--border));
   }
-  .rank-top { display: flex; align-items: center; gap: 1.1rem; flex-wrap: wrap; }
+  .rank-card::before { opacity: 0.7; }
+  .rank-top { display: flex; align-items: center; gap: 1.2rem; flex-wrap: wrap; }
   .rank-lv {
-    flex: none; display: grid; place-items: center; width: 4.2rem; height: 4.2rem;
-    border-radius: 16px; background: var(--seq); color: #fff; line-height: 1;
-    box-shadow: 0 6px 20px color-mix(in srgb, var(--seq) 35%, transparent);
+    flex: none; display: grid; place-items: center; width: 4.6rem; height: 5.1rem;
+    clip-path: polygon(50% 0%, 100% 25%, 100% 75%, 50% 100%, 0% 75%, 0% 25%);
+    background: linear-gradient(160deg, color-mix(in srgb, var(--glow) 45%, var(--seq)), var(--seq) 70%);
+    color: #fff; line-height: 1;
+    filter: drop-shadow(0 0 14px var(--glow-soft));
   }
-  .rank-lv .n { font-size: 1.9rem; font-weight: 700; letter-spacing: -0.03em; }
-  .rank-lv .l { font-size: 0.6rem; text-transform: uppercase; letter-spacing: 0.12em; opacity: 0.85; }
+  .rank-lv .n { font-family: var(--font-hud); font-size: 2.1rem; font-weight: 700; }
+  .rank-lv .l { font-family: var(--font-hud); font-size: 0.56rem; text-transform: uppercase; letter-spacing: 0.18em; opacity: 0.9; }
   .rank-main { flex: 1; min-width: 12rem; }
-  .rank-xp-row { display: flex; justify-content: space-between; align-items: baseline; font-size: 0.82rem; color: var(--ink-2); margin-bottom: 0.3rem; }
-  .xp-track { height: 10px; border-radius: 999px; background: var(--grid); overflow: hidden; }
-  .xp-fill { height: 100%; border-radius: 999px; background: linear-gradient(90deg, color-mix(in srgb, var(--seq) 70%, #fff), var(--seq)); transition: width 0.6s ease; }
+  .rank-xp-row { display: flex; justify-content: space-between; align-items: baseline; gap: 0.6rem; flex-wrap: wrap;
+    font-family: var(--font-hud); font-size: 0.85rem; font-weight: 600; letter-spacing: 0.05em; color: var(--ink-2); margin-bottom: 0.35rem; }
+  .rank-title { color: var(--glow); text-transform: uppercase; letter-spacing: 0.16em; font-weight: 700;
+    text-shadow: 0 0 12px var(--glow-soft); }
+  .xp-track { position: relative; height: 12px; border: 1px solid var(--baseline); background: var(--grid);
+    clip-path: polygon(6px 0, 100% 0, calc(100% - 6px) 100%, 0 100%); overflow: hidden; }
+  .xp-fill { position: relative; height: 100%; background: linear-gradient(90deg, var(--seq), var(--glow)); transition: width 0.6s ease; }
+  @media (prefers-reduced-motion: no-preference) {
+    .xp-fill::after { content: ""; position: absolute; inset: 0; transform: translateX(-100%);
+      background: linear-gradient(90deg, transparent, rgba(255,255,255,0.35), transparent);
+      animation: xp-sweep 3.2s ease-in-out infinite; }
+    @keyframes xp-sweep { 0%, 55% { transform: translateX(-100%); } 85%, 100% { transform: translateX(100%); } }
+  }
   .rank-streak { flex: none; text-align: center; padding-left: 0.4rem; }
-  .rank-streak .s { font-size: 1.7rem; font-weight: 700; letter-spacing: -0.02em; }
-  .rank-streak .k { font-size: 0.7rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; }
+  .rank-streak .s { font-family: var(--font-hud); font-size: 1.8rem; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .rank-streak .k { font-family: var(--font-hud); font-size: 0.62rem; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.14em; }
 
   .quest { display: flex; align-items: flex-start; gap: 0.6rem; padding: 0.55rem 0; border-bottom: 1px solid var(--grid); font-size: 0.9rem; }
   .quest:last-child { border-bottom: 0; }
@@ -421,15 +468,61 @@
   #activity { max-height: 30rem; overflow-y: auto; }
 
   #gate { max-width: 380px; margin: 4rem auto; text-align: center; padding: 0 1rem; }
-  #gate input { width: 100%; padding: 0.55rem 0.8rem; border-radius: 8px; border: 1px solid var(--baseline);
+  #gate h1 { margin-bottom: 0.5rem; }
+  #gate input { width: 100%; padding: 0.55rem 0.8rem; border-radius: 6px; border: 1px solid var(--baseline);
     background: var(--surface); color: var(--ink); font-size: 0.95rem; }
-  #gate button { margin-top: 0.7rem; padding: 0.5rem 1.4rem; border-radius: 8px; border: 1px solid var(--border);
-    background: var(--seq); color: #fff; font-size: 0.9rem; cursor: pointer; }
+  #gate button { margin-top: 0.7rem; padding: 0.5rem 1.4rem; border-radius: 6px; border: 1px solid var(--border);
+    background: var(--seq); color: #fff; font-size: 0.9rem; cursor: pointer; font-family: var(--font-hud);
+    font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; }
+
+  /* ---------- HUD detailing ---------- */
+  .ghost-btn:hover:not(:disabled) { color: var(--glow); border-color: var(--glow-soft); box-shadow: 0 0 10px rgba(111,195,255,0.12); }
+  .qpill, .pace, .auto-chip, .conf-chip, .badge, .chip { font-family: var(--font-hud); font-weight: 600; }
+  .seg button.on { background: var(--seq); color: #fff; text-shadow: 0 0 8px rgba(255,255,255,0.4); }
+  .prog-fill, .tl-fill { background: linear-gradient(90deg, var(--seq), var(--glow)); }
+  .tl-dot.active { background: var(--glow); box-shadow: 0 0 8px var(--glow-soft); }
+  ::selection { background: rgba(57,135,229,0.4); }
+
+  /* ---------- Battle record: 14 days of quests, cleared vs failed ---------- */
+  .battle-wrap { display: flex; align-items: flex-end; gap: 4px; height: 130px; margin-top: 0.6rem; }
+  .battle-day { flex: 1; display: flex; flex-direction: column-reverse; gap: 2px; height: 100%;
+    justify-content: flex-start; cursor: default; border-radius: 2px; }
+  .battle-day:hover { background: rgba(111,195,255,0.06); }
+  .battle-seg { width: 100%; border-radius: 2px 2px 0 0; min-height: 3px; }
+  .battle-seg.done { background: var(--seq); }
+  .battle-seg.failed { background: var(--critical); }
+  .battle-empty { width: 100%; height: 2px; background: var(--grid); border-radius: 2px; }
+  .battle-axis { display: flex; gap: 4px; margin-top: 0.25rem; }
+  .battle-axis span { flex: 1; text-align: center; font-size: 0.62rem; color: var(--muted);
+    font-family: var(--font-hud); font-weight: 600; text-transform: uppercase; }
+  .battle-axis span.today { color: var(--glow); }
+  .battle-legend { display: flex; gap: 1rem; margin-top: 0.5rem; font-size: 0.74rem; color: var(--ink-2); }
+  .battle-legend i { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 5px; font-style: normal; }
+  .battle-sum { font-size: 0.78rem; color: var(--ink-2); margin-top: 0.3rem; font-variant-numeric: tabular-nums; }
+
+  /* ---------- Small screens: one column, tighter chrome, same window language ---------- */
+  @media (max-width: 640px) {
+    main { padding: 0.7rem 0.65rem 3rem; }
+    h1 { font-size: 1.1rem; letter-spacing: 0.16em; }
+    .card, .plan { padding: 0.85rem 0.85rem; }
+    .tiles { grid-template-columns: repeat(auto-fit, minmax(96px, 1fr)); gap: 0.5rem; }
+    .tile .v { font-size: 1.45rem; }
+    .rank-top { gap: 0.8rem; }
+    .rank-lv { width: 3.9rem; height: 4.3rem; }
+    .rank-streak .s { font-size: 1.4rem; }
+    .plan-head, .card-head { flex-direction: column; align-items: flex-start; gap: 0.4rem; }
+    .metric-grid, .award-grid { grid-template-columns: 1fr 1fr; }
+    #graph { height: 380px; }
+    .rem .when { width: 7rem; }
+  }
+  @media (max-width: 420px) {
+    .metric-grid, .award-grid { grid-template-columns: 1fr; }
+  }
 </style>
 
 <main id="app" hidden>
   <header>
-    <h1>⚔️ The System</h1>
+    <h1><span class="h1-glyph">⟨</span> The System <span class="h1-glyph">⟩</span></h1>
     <span class="sub" id="asof"></span>
   </header>
 
@@ -533,6 +626,10 @@
     <div class="card" id="awards-card" hidden>
       <h2>Awards <span class="sub" id="awards-sub"></span></h2>
       <div id="awards" class="award-grid"></div>
+    </div>
+    <div class="card" id="battle-card" hidden>
+      <h2>Battle record <span class="sub">last 14 days of quests</span></h2>
+      <div id="battle"></div>
     </div>
     <div class="card perception" id="perception-card">
       <div class="perc-head">
@@ -1143,6 +1240,46 @@ function renderAwards(awards) {
         <span class="award-at">${esc(String(a.awarded_at).slice(0, 10))} · +${a.xp} XP</span>
       </span>
     </div>`).join("");
+}
+
+// 14 days of quest outcomes as one stacked column per day — cleared in azure, failed in
+// crimson (validated pair; 2px gaps between segments). Hover a day for the exact counts.
+function renderBattle(history) {
+  const card = $("battle-card");
+  if (!card) return;
+  const byDate = new Map((history || []).map(r => [r.d, r]));
+  const days = [];
+  for (let i = 13; i >= 0; i--) {
+    const dt = new Date(Date.now() + 330 * 60000 - i * 864e5);
+    const key = dt.toISOString().slice(0, 10);
+    const r = byDate.get(key) || { done: 0, failed: 0 };
+    days.push({ key, dow: "SMTWTFS"[dt.getUTCDay()], done: r.done || 0, failed: r.failed || 0 });
+  }
+  const anyQuests = days.some(d => d.done + d.failed);
+  if (!anyQuests) { card.hidden = true; return; }
+  card.hidden = false;
+  const max = Math.max(1, ...days.map(d => d.done + d.failed));
+  const pct = n => Math.round((n / max) * 100);
+  $("battle").innerHTML = `
+    <div class="battle-wrap">${days.map((d, i) => `
+      <div class="battle-day" data-i="${i}">
+        ${d.done + d.failed === 0 ? `<div class="battle-empty"></div>` : `
+          ${d.done ? `<div class="battle-seg done" style="height:${pct(d.done)}%"></div>` : ""}
+          ${d.failed ? `<div class="battle-seg failed" style="height:${pct(d.failed)}%"></div>` : ""}`}
+      </div>`).join("")}
+    </div>
+    <div class="battle-axis">${days.map((d, i) => `<span class="${i === 13 ? "today" : ""}">${d.dow}</span>`).join("")}</div>
+    <div class="battle-legend">
+      <span><i style="background:var(--seq)"></i>cleared</span>
+      <span><i style="background:var(--critical)"></i>failed</span>
+    </div>
+    <div class="battle-sum">${days.reduce((a, d) => a + d.done, 0)} cleared · ${days.reduce((a, d) => a + d.failed, 0)} failed over 14 days</div>`;
+  $("battle").querySelectorAll(".battle-day").forEach(el => {
+    const d = days[Number(el.dataset.i)];
+    el.addEventListener("mousemove", e => tipShow(
+      `<b>${d.key}</b><br>✅ ${d.done} cleared · ❌ ${d.failed} failed`, e.clientX, e.clientY));
+    el.addEventListener("mouseleave", tipHide);
+  });
 }
 
 function renderQuests(quests) {
@@ -1903,6 +2040,7 @@ async function boot() {
     // System tab
     renderRank(sys.rank, sys.awards);
     renderAwards(sys.awards);
+    renderBattle(sys.quest_history);
     renderPerception(brain.perception);
     $("perc-refresh").onclick = refreshPerception;
     renderQuests(sys.quests_today);

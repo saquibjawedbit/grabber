@@ -46,7 +46,7 @@ flowchart TB
 | `/api/tool` | GET | **Run one agent tool directly** — `?name=&args=<json>`, applying the same `validateArgs` boundary check as the agent loop (doc 03 §3.5). This is also what the CI research agent calls to borrow the Worker's IP for `web_search` (doc 06). |
 | `/api/cron` | GET | Manually trigger cron work — flags `?senses=1&system=1&issue=1&debrief=1&force=1` (`issue`/`debrief` force one half of The System). |
 | `/api/rank` | GET | The System's level/XP/streak + active goals. |
-| `/api/system` | GET | The dashboard **System tab** payload: `rank` (level/XP/streak), `goals` (each with `progress`, `pace`, `projected`, and its `milestones` roadmap), `quests_today`, `activity` (the work log, newest 60, with `actor`/`reasoning`), and `settings` (autonomy mode + budget). |
+| `/api/system` | GET | The dashboard **System tab** payload: `rank` (level/XP/streak + `title` hunter rank), `goals` (each with `progress`, `pace`, `projected`, its `milestones` roadmap, and `plan_reasoning`/`plan_at`), `quests_today`, `quest_history` (per-IST-day done/failed counts, last 14 days — the Battle record chart), `activity` (the work log, newest 60, with `actor`/`reasoning`), `awards`, `plan_questions` (open), and `settings` (autonomy mode + budget). |
 | `/api/goal` | POST | Set a goal (`{title,…}` → `createGoal`, which also maps the roadmap), change status (`{id,status}`), or re-map the roadmap (`{id,replan:true}`). Powers the dashboard's "Set a goal" form and per-goal buttons. |
 | `/api/settings` | POST | `{autonomy_mode: off\|suggest\|act}` — the dashboard's autonomy control. |
 

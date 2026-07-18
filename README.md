@@ -116,6 +116,11 @@ Google CSE setup (5 min, free, 100 queries/day — grabber uses ~24):
 1. [programmablesearchengine.google.com](https://programmablesearchengine.google.com) → create engine → enable **Search the entire web** → copy the engine ID → `GOOGLE_CSE_ID`.
 2. [Custom Search JSON API](https://developers.google.com/custom-search/v1/overview) → get an API key → `GOOGLE_CSE_KEY`.
 
+Serper (recommended — primary web search for the chat agent *and* the planner's
+one-search-per-plan): [serper.dev](https://serper.dev) → free API key (2,500 credits) →
+`wrangler secret put SERPER_API_KEY`. Falls back to CSE → DuckDuckGo → Wikipedia when
+unset or exhausted (`worker/src/search.js`).
+
 ### Optional: Telegram relay channels (poor-man's Twitter firehose)
 API creds from [my.telegram.org](https://my.telegram.org), then
 `python pipeline/scripts/make_session.py` → `TELETHON_SESSION` secret.
