@@ -94,6 +94,7 @@ XP / level / streak are not a table — they live as `state` rows (`xp`, `level`
 | Table | Purpose | Written by | Key notes |
 |-------|---------|-----------|-----------|
 | `goals` | The owner's real objectives | `system.js` (`set_goal`, chat) | `status` `active\|achieved\|dropped`; cached `progress` `0..1` recomputed on quest/milestone change; everything is judged against active goals. |
+| `awards` | One-time recognitions — streaks, quest totals, rank promotions, 30-day transformations | `grantAward()`/`checkAwards()` in `system.js` (nightly debrief + after every ✅) | `key` UNIQUE + INSERT OR IGNORE → idempotent grants; carries bonus `xp`, optional `goal_id`; migration 007. |
 | `milestones` | The persistent **roadmap** per goal | `planGoal()` in `system.js` | ordered `seq`; `done_when`, `steps` (JSON array of concrete day-sized actions — the quest source material, migration 006), `target_date`, `status` `pending\|active\|done\|skipped`. Daily quests are issued from the `active` milestone's steps. |
 | `quests` | Concrete done-tonight tasks | `system.js` (`issueDaily`, `add_quest`) | `milestone_id` links the quest to the milestone it advances; `status` `issued→doing→done\|failed\|skipped`; `xp` by kind; resolution moves XP + streak + progress. |
 | `activity` | The System's work log | `logActivity()` in `system.js` | `actor` `owner\|system`; `reasoning` (why, for autonomous moves); `kind` adds `plan\|plan_adapt\|milestone_done\|autonomous\|metric`. Powers the dashboard feed via `/api/system`. |

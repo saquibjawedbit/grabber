@@ -241,7 +241,40 @@ so the triggers never re-tune a freshly-tuned plan, and logs `plan_adapt` with i
 dots positioned by target date, a progress fill vs a "today" marker so drift is visible),
 progress %, pace chip, projected date, the milestone list — the **active milestone's steps
 shown open** (today's marching orders), other milestones' steps collapsed behind an
-"N steps" fold — and Adapt / Re-plan buttons.
+"N steps" fold — and Adapt / Re-plan buttons. The tab makes the whole mechanism legible:
+a **"How a plan drives you"** explainer at the top (steps → morning quests → milestone fill
+→ goal %, and when the reckoning re-tunes), a per-goal **"Why this route"** block showing
+the planner's own reasoning (latest `plan`/`plan_adapt` activity, served as
+`plan_reasoning`/`plan_at` on each goal in `/api/system`), and a **"Today's quests"**
+section inside each plan card linking today's quests to the active milestone, with a note
+on how much of the goal each milestone is worth.
+
+## 5.87 Awards
+
+XP rewards a day; **awards** reward the arc. The `awards` table (migration 007) holds
+one-time recognitions — `key` is UNIQUE and grants go through `grantAward` with
+`INSERT OR IGNORE`, so every check is idempotent. Each grant adds bonus XP, logs an
+`award` activity, and announces on Telegram (suppressed in quiet hours — the badge still
+lands silently). `checkAwards` (`system.js`) is pure SQL and runs **nightly in the
+debrief** (after the streak/progress are final; tonight's earnings feed the reckoning
+message as `awards_earned_tonight`) and **after every ✅** (via `ctx.waitUntil`, so quest
+totals and rank promotions land the moment they're crossed). Manual trigger:
+`/api/cron?awards=1`. The catalog:
+
+- **Streaks** — 3 (Ignition 🔥), 7, 14, **30 (30 Days of Discipline 🏆)**, 60, 100 days.
+- **Quests cleared** — 10 / 50 / 100 / 250 totals.
+- **Hunter ranks** — `rankTitle(level)` maps the level to E/D/C/B/A/S rank (D at L3, C at
+  L5, B at L7, A at L9, S at L11); each promotion is an award (+40 XP) and the current
+  title shows in the dashboard's rank hero and `/api/rank`.
+- **First Gate Cleared** — first milestone ever completed.
+- **Goal Achieved** — per achieved goal (+100 XP).
+- **30-Day Transformation** (+50 XP, per goal) — the "I did 30 days and see visible
+  change" award: the goal is ≥30 days old, ≥12 of its quests cleared in the last 30 days,
+  and either route progress ≥20% or a goal-linked metric measurably moved (first → last
+  value in the window, quoted in the award detail).
+
+Awards surface on the **System tab** (Awards card + 🏆 count in the rank hero) and via the
+`list_awards` agent tool.
 
 **Metrics & trends.** Two logs feed the dashboard's charts. **Body/habit** numbers (weight,
 waist, sleep, runs, workouts) go to `log_health` (the `health` table) and chart on the

@@ -110,11 +110,18 @@ export async function listMetrics(env, { name = null, limit = 300 } = {}) {
 export function levelFor(xp) { return Math.floor(Math.sqrt(Math.max(0, xp) / 100)) + 1; }
 export function xpForLevel(l) { return (l - 1) * (l - 1) * 100; }
 
+// Hunter ranks (the Solo Leveling ladder): promotion is an award, not just a number.
+const RANKS = [[11, "S"], [9, "A"], [7, "B"], [5, "C"], [3, "D"]];
+export function rankTitle(level) {
+  for (const [min, r] of RANKS) if (level >= min) return `${r}-Rank Hunter`;
+  return "E-Rank Hunter";
+}
+
 export async function getSystemState(env) {
   const xp = Number(await getState(env, "xp") || 0);
   const level = levelFor(xp);
   return {
-    xp, level,
+    xp, level, title: rankTitle(level),
     streak: Number(await getState(env, "streak") || 0),
     streak_best: Number(await getState(env, "streak_best") || 0),
     xp_into_level: xp - xpForLevel(level),
@@ -128,6 +135,119 @@ async function addXp(env, delta) {
   await setState(env, "xp", xp);
   await setState(env, "level", levelFor(xp));
   return { xp, level: levelFor(xp), leveled_up: levelFor(xp) > levelFor(prev), leveled_down: levelFor(xp) < levelFor(prev) };
+}
+
+// ---------- Awards: recognition for sustained effort, not just per-quest XP ----------
+//
+// XP rewards a single day; awards reward the arc — a streak held, a rank climbed, a plan
+// followed for 30 days with visible, measured change. Grants are idempotent (UNIQUE key +
+// INSERT OR IGNORE), carry bonus XP, log to the activity feed, and announce on Telegram
+// (skipped in quiet hours — the badge still lands, the trumpet waits).
+
+export async function listAwards(env) {
+  const { results } = await env.DB.prepare(
+    "SELECT id, key, title, icon, detail, goal_id, xp, awarded_at FROM awards ORDER BY id DESC").all();
+  return { count: results.length, awards: results };
+}
+
+async function grantAward(env, tg, { key, title, icon = "🏆", detail = null, goal_id = null, xp = 25 }) {
+  const r = await env.DB.prepare(
+    "INSERT OR IGNORE INTO awards (key, title, icon, detail, goal_id, xp, awarded_at) VALUES (?,?,?,?,?,?,?)")
+    .bind(key, title, icon, detail, goal_id, xp, new Date().toISOString()).run();
+  if (!r.meta.changes) return null;   // already earned
+  const st = await addXp(env, xp);
+  await logActivity(env, {
+    kind: "award", goal_id,
+    summary: `Award earned: ${icon} ${title}`,
+    detail: [detail, `+${xp} bonus XP → level ${st.level}`].filter(Boolean).join(" · "),
+  });
+  const t = ist();
+  const quiet = t.hour >= QUIET_START || t.hour < QUIET_END;
+  if (tg && !quiet) {
+    await tg(env, "sendMessage", {
+      chat_id: env.TELEGRAM_CHAT_ID, parse_mode: "HTML",
+      text: `${icon} <b>AWARD — ${esc(title)}</b>\n${detail ? esc(detail) + "\n" : ""}<i>+${xp} bonus XP</i>`,
+    });
+  }
+  return { key, title };
+}
+
+const STREAK_AWARDS = [[3, "Ignition", "🔥"], [7, "One Week of Iron", "⚡"], [14, "Two-Week Resolve", "🗡️"],
+                       [30, "30 Days of Discipline", "🏆"], [60, "Unbreakable — 60 Days", "💎"], [100, "Centurion", "👑"]];
+const CLEARED_AWARDS = [[10, "First Blood — 10 quests"], [50, "Half-Century — 50 quests"],
+                        [100, "Relentless — 100 quests"], [250, "Machine — 250 quests"]];
+
+// The full pass. Cheap (pure SQL) — runs nightly in the reckoning and after every cleared
+// quest, so totals/ranks land the moment they're crossed. Returns the awards granted now.
+export async function checkAwards(env, tg) {
+  const granted = [];
+  try {
+    const st = await getSystemState(env);
+    for (const [days, title, icon] of STREAK_AWARDS) {
+      if (st.streak >= days || st.streak_best >= days) {
+        const g = await grantAward(env, tg, { key: `streak_${days}`, title, icon, detail: `${days}-day clean streak` });
+        if (g) granted.push(g);
+      }
+    }
+    const cleared = (await env.DB.prepare("SELECT COUNT(*) AS n FROM quests WHERE status = 'done'").first()).n;
+    for (const [n, title] of CLEARED_AWARDS) {
+      if (cleared >= n) {
+        const g = await grantAward(env, tg, { key: `cleared_${n}`, title, icon: "⚔️", detail: `${cleared} quests cleared` });
+        if (g) granted.push(g);
+      }
+    }
+    for (const [min, r] of RANKS) {
+      if (st.level >= min) {
+        const g = await grantAward(env, tg, {
+          key: `rank_${r}`, title: `Rank Up: ${r}-Rank Hunter`, icon: "🎖️",
+          detail: `Reached level ${min}`, xp: 40,
+        });
+        if (g) granted.push(g);
+        break;   // only the highest earned rank; lower ones were granted on the way up
+      }
+    }
+    const firstMs = await env.DB.prepare("SELECT COUNT(*) AS n FROM milestones WHERE status = 'done'").first();
+    if (firstMs.n >= 1) {
+      const g = await grantAward(env, tg, { key: "first_milestone", title: "First Gate Cleared", icon: "🏁", detail: "First milestone completed" });
+      if (g) granted.push(g);
+    }
+    // Goal achieved → its own trophy.
+    const { results: achieved } = await env.DB.prepare("SELECT id, title FROM goals WHERE status = 'achieved'").all();
+    for (const goal of achieved) {
+      const g = await grantAward(env, tg, {
+        key: `goal_${goal.id}`, title: `Goal Achieved: ${goal.title.slice(0, 80)}`, icon: "🏅",
+        goal_id: goal.id, xp: 100, detail: "The System delivered. Set the next one.",
+      });
+      if (g) granted.push(g);
+    }
+    // The 30-day transformation: a plan followed for a month with visible change —
+    // sustained quest work AND measured movement (goal progress, or a metric that moved).
+    const { results: goals } = await env.DB.prepare(
+      "SELECT * FROM goals WHERE status = 'active'").all();
+    for (const goal of goals) {
+      const age = daysBetween(goal.created_at, new Date().toISOString());
+      if (age < 30) continue;
+      const q = await env.DB.prepare(
+        `SELECT SUM(status='done') AS d, COUNT(*) AS n FROM quests
+         WHERE goal_id = ? AND datetime(issued_at) >= datetime('now', '-30 days')`).bind(goal.id).first();
+      const done30 = q.d || 0;
+      const metric = await env.DB.prepare(
+        `SELECT (SELECT value FROM metrics WHERE goal_id = ?1 ORDER BY at DESC LIMIT 1) AS last,
+                (SELECT value FROM metrics WHERE goal_id = ?1 AND datetime(at) >= datetime('now','-30 days') ORDER BY at LIMIT 1) AS first`)
+        .bind(goal.id).first();
+      const moved = metric?.last != null && metric?.first != null && metric.last !== metric.first;
+      if (done30 >= 12 && ((goal.progress || 0) >= 0.2 || moved)) {
+        const g = await grantAward(env, tg, {
+          key: `transform30_${goal.id}`, icon: "🌗", xp: 50, goal_id: goal.id,
+          title: `30-Day Transformation: ${goal.title.slice(0, 70)}`,
+          detail: `${done30} quests cleared in 30 days · ${Math.round((goal.progress || 0) * 100)}% of the route done` +
+                  (moved ? ` · measured change: ${metric.first} → ${metric.last}` : ""),
+        });
+        if (g) granted.push(g);
+      }
+    }
+  } catch (e) { console.log("checkAwards failed:", String(e).slice(0, 150)); }
+  return granted;
 }
 
 // ---------- Temporal context: the agent always knows what day it is ----------
@@ -868,11 +988,15 @@ export async function debrief(env, tg, { force = false } = {}) {
     }
   } catch (e) { console.log("nightly adapt failed:", String(e).slice(0, 120)); }
 
+  // Awards land after the streak/progress are final, so tonight's earnings count.
+  const awardsTonight = await checkAwards(env, tg);
+
   const st = await getSystemState(env);
   const facts = {
     date: t.date, done, failed, auto_failed_for_inaction: autoFailed,
     quests: today.map(q => ({ text: q.text, status: q.status })),
     streak_days: streak, level: st.level, xp: st.xp,
+    awards_earned_tonight: awardsTonight.map(a => a.title),
   };
   await logActivity(env, {
     kind: "reckoning",
@@ -1104,6 +1228,11 @@ export const SYSTEM_TOOLS = {
     group: "Goals & Quests",
     desc: "the owner's level, XP, and streak. args: {}",
     run: (env) => getSystemState(env),
+  },
+  list_awards: {
+    group: "Goals & Quests",
+    desc: "the awards the owner has earned (streaks, rank promotions, 30-day transformations). args: {}",
+    run: (env) => listAwards(env),
   },
   log_metric: {
     group: "Metrics",

@@ -260,6 +260,24 @@
   .pm.done .pm-t { color: var(--muted); text-decoration: line-through; }
   .pm.active .pm-t { font-weight: 600; }
   .pm .pm-when { color: var(--muted); font-size: 0.76rem; margin-top: 0.1rem; }
+  .plan-explain { margin-top: 0.6rem; font-size: 0.8rem; color: var(--ink-2); line-height: 1.55; }
+  .plan-why { margin: 0.6rem 0 0.2rem; font-size: 0.8rem; color: var(--ink-2); line-height: 1.5;
+    background: var(--bg-2, rgba(127,127,127,0.06)); border-radius: 8px; padding: 0.5rem 0.65rem; }
+  .plan-why-at { color: var(--muted); font-size: 0.72rem; margin-left: 0.4rem; }
+  .plan-today { margin: 0.65rem 0 0.2rem; border: 1px solid var(--border); border-radius: 8px; padding: 0.55rem 0.65rem; }
+  .plan-today .pt-h { font-size: 0.78rem; font-weight: 650; margin-bottom: 0.35rem; }
+  .plan-today .pt-q { font-size: 0.8rem; line-height: 1.45; padding: 0.12rem 0; }
+  .plan-today .pt-q.done { opacity: 0.65; text-decoration: line-through; }
+  .plan-today .pt-x { color: var(--muted); font-size: 0.72rem; margin-left: 0.3rem; }
+  .plan-today .pt-note { color: var(--muted); font-size: 0.72rem; margin-top: 0.35rem; }
+  .rank-title { font-weight: 700; letter-spacing: 0.02em; }
+  .award-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 0.6rem; }
+  .award { display: flex; gap: 0.55rem; align-items: flex-start; border: 1px solid var(--border); border-radius: 10px; padding: 0.55rem 0.65rem; }
+  .award-ic { font-size: 1.3rem; line-height: 1; }
+  .award-body { display: grid; gap: 0.1rem; }
+  .award-t { font-size: 0.82rem; font-weight: 650; }
+  .award-d { font-size: 0.74rem; color: var(--ink-2); }
+  .award-at { font-size: 0.7rem; color: var(--muted); font-variant-numeric: tabular-nums; }
   .pm-steps { margin-top: 0.3rem; display: grid; gap: 0.15rem; }
   .pm-step { font-size: 0.78rem; color: var(--ink-2); line-height: 1.35; }
   .pm-steps-fold summary { font-size: 0.74rem; color: var(--muted); cursor: pointer; margin-top: 0.2rem; }
@@ -425,6 +443,15 @@
         <h2>Your plans <span class="sub" id="plans-sub"></span></h2>
         <span class="sub">the roadmap adapts to your progress — nightly, and on demand</span>
       </div>
+      <div class="plan-explain">
+        <b>How a plan drives you:</b> the goal is broken into milestones, each with concrete
+        day-sized steps · every morning at <b>07:00</b> the System issues quests from the
+        <i>active</i> milestone's next steps · clearing them fills the milestone (≥60% done
+        advances it), and each milestone is an equal share of the goal's progress · at
+        <b>21:00</b> the reckoning scores the day and re-tunes the plan to how you actually
+        moved · sustained work earns <b>awards</b> — streaks, rank promotions, and the
+        30-day transformation when a month of quests shows measured change.
+      </div>
     </div>
     <div id="plans"></div>
   </section>
@@ -494,6 +521,10 @@
   <!-- SYSTEM -->
   <section data-panel="system">
     <div class="card rank-card" id="rank-card"></div>
+    <div class="card" id="awards-card" hidden>
+      <h2>Awards <span class="sub" id="awards-sub"></span></h2>
+      <div id="awards" class="award-grid"></div>
+    </div>
     <div class="card perception" id="perception-card">
       <div class="perc-head">
         <h2>How I see you <span class="sub" id="perc-conf"></span></h2>
@@ -1067,14 +1098,14 @@ function renderResearch(jobs) {
 }
 
 // ---------- The System ----------
-function renderRank(r) {
+function renderRank(r, awards) {
   const into = r.xp_into_level ?? 0, toNext = r.xp_to_next ?? 0;
   const pct = Math.max(3, Math.round((into / Math.max(1, into + toNext)) * 100));
   $("rank-card").innerHTML = `
     <div class="rank-top">
       <div class="rank-lv"><span class="n">${r.level}</span><span class="l">level</span></div>
       <div class="rank-main">
-        <div class="rank-xp-row"><span><b>${r.xp}</b> XP</span><span>${toNext} to level ${r.level + 1}</span></div>
+        <div class="rank-xp-row"><span class="rank-title">${esc(r.title || "")}</span><span><b>${r.xp}</b> XP</span><span>${toNext} to level ${r.level + 1}</span>${awards?.length ? `<span>🏆 ${awards.length}</span>` : ""}</div>
         <div class="xp-track"><div class="xp-fill" style="width:${pct}%"></div></div>
       </div>
       <div class="rank-streak">
@@ -1086,6 +1117,23 @@ function renderRank(r) {
         <div class="k">best</div>
       </div>
     </div>`;
+}
+
+function renderAwards(awards) {
+  const card = $("awards-card");
+  if (!card) return;
+  if (!awards?.length) { card.hidden = true; return; }
+  card.hidden = false;
+  $("awards-sub").textContent = `${awards.length} earned`;
+  $("awards").innerHTML = awards.map(a => `
+    <div class="award" title="${esc(a.detail || "")}">
+      <span class="award-ic">${esc(a.icon || "🏆")}</span>
+      <span class="award-body">
+        <span class="award-t">${esc(a.title)}</span>
+        ${a.detail ? `<span class="award-d">${esc(a.detail)}</span>` : ""}
+        <span class="award-at">${esc(String(a.awarded_at).slice(0, 10))} · +${a.xp} XP</span>
+      </span>
+    </div>`).join("");
 }
 
 function renderQuests(quests) {
@@ -1168,7 +1216,7 @@ function planTimeline(g) {
     <div class="tl-axis"><span>${esc((g.created_at || "").slice(0, 10))}</span><span>${g.deadline ? esc(g.deadline.slice(0, 10)) : "open-ended"}</span></div>`;
 }
 
-function renderPlans(goals) {
+function renderPlans(goals, questsToday) {
   const box = $("plans");
   if (!box) return;
   const active = (goals || []).filter(g => g.status === "active");
@@ -1177,9 +1225,21 @@ function renderPlans(goals) {
     box.innerHTML = `<div class="card"><div class="empty">No plans yet. Set a goal on the System tab and the System maps a milestone route you can track — and adapt — here.</div></div>`;
     return;
   }
+  const QI = { done: "✅", failed: "❌", doing: "⏳", issued: "▫️", skipped: "⤫" };
   box.innerHTML = goals.map(g => {
     const ms = g.milestones || [];
     const pct = Math.round((g.progress || 0) * 100);
+    const activeM = ms.find(m => m.status === "active");
+    // The plan's own explanation of itself: why this route, and what it demands today.
+    const why = g.plan_reasoning ? `<div class="plan-why">🧭 <b>Why this route:</b> ${esc(g.plan_reasoning)}
+      <span class="plan-why-at">planned ${esc(String(g.plan_at || "").slice(0, 10))}</span></div>` : "";
+    const today = (questsToday || []).filter(q => q.goal_id === g.id);
+    const todayHtml = today.length ? `<div class="plan-today">
+      <div class="pt-h">⚔️ Today's quests${activeM ? ` → <i>${esc(activeM.title)}</i>` : ""}</div>
+      ${today.map(q => `<div class="pt-q ${esc(q.status)}">${QI[q.status] || "▫️"} ${esc(q.text)}
+        <span class="pt-x">${q.kind === "side" ? "side · " : ""}+${q.xp} XP</span></div>`).join("")}
+      <div class="pt-note">each cleared quest fills the milestone above — ${ms.length ? `every milestone is ${Math.round(100 / ms.length)}% of this goal` : "and moves the goal"}</div>
+    </div>` : "";
     const acts = g.status === "active" ? `<div class="plan-actions">
       <button class="primary" data-adapt="${g.id}" onclick="adaptGoal(${g.id})" title="Re-tune the remaining plan to your real progress">Adapt to progress</button>
       <button onclick="replanGoal(${g.id})" title="Map a fresh roadmap from scratch">Re-plan</button>
@@ -1196,7 +1256,9 @@ function renderPlans(goals) {
         ${g.projected ? `<span>projected <b>${esc(g.projected)}</b></span>` : ""}
         <span>${ms.filter(m => m.status === "done").length}/${ms.length} milestones</span>
       </div>
+      ${why}
       ${ms.length ? planTimeline(g) : `<div class="empty">No roadmap yet — hit Re-plan.</div>`}
+      ${todayHtml}
       <div class="pm-list">${ms.map(m => {
         const steps = m.steps || [];
         // The active milestone's steps are today's marching orders — show them open.
@@ -1215,7 +1277,7 @@ function renderPlans(goals) {
 
 const ACT_ICON = {
   goal: "⚔️", plan: "🗺️", quest_issued: "📜", quest_done: "✅", quest_failed: "❌",
-  reckoning: "🌑", milestone_done: "🏁", research: "🔎", application: "📄", autonomous: "⚡", metric: "📈", plan_adapt: "🧭", note: "•",
+  reckoning: "🌑", milestone_done: "🏁", research: "🔎", application: "📄", autonomous: "⚡", metric: "📈", plan_adapt: "🧭", award: "🏆", note: "•",
 };
 
 function renderActivity(items) {
@@ -1801,7 +1863,8 @@ async function boot() {
     $("asof").textContent = "as of " + IST.format(new Date());
     renderTiles(sys, brain.totals);
     // System tab
-    renderRank(sys.rank);
+    renderRank(sys.rank, sys.awards);
+    renderAwards(sys.awards);
     renderPerception(brain.perception);
     $("perc-refresh").onclick = refreshPerception;
     renderQuests(sys.quests_today);
@@ -1811,7 +1874,7 @@ async function boot() {
     renderApplications(brain.applications);
     wireGoalForm();
     // Plans tab
-    renderPlans(sys.goals);
+    renderPlans(sys.goals, sys.quests_today);
     // Brain tab
     renderMemories(brain.memories);
     renderChat(brain.chat);

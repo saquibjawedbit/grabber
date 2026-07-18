@@ -4,7 +4,7 @@
 import { embedMemory, rememberExchange, runAgent, TOOLS, validateArgs } from "./agent.js";
 import { backfill, extract, forgetMemory, reconcile, saveMemory, unpackVec } from "./memory.js";
 import { DEFAULT_PERSONA, getPersona, resetPersona, setPersona } from "./persona.js";
-import { adaptPlan, createGoal, debrief, getSettings, getSystemState, issueDaily, listGoals, listMetrics, listMilestones, listQuests, maybeAdaptOnDone, replanGoal, resolveQuest, runSystem, setAutonomyMode, updateGoal } from "./system.js";
+import { adaptPlan, checkAwards, createGoal, debrief, getSettings, getSystemState, issueDaily, listAwards, listGoals, listMetrics, listMilestones, listQuests, maybeAdaptOnDone, replanGoal, resolveQuest, runSystem, setAutonomyMode, updateGoal } from "./system.js";
 import { classifyInbox, googleConnected, ingestNotification, pollCalendar, remindEvents } from "./senses.js";
 import { processBankNotifications } from "./life.js";
 import { generatePerception, getPerception } from "./perception.js";
@@ -427,8 +427,12 @@ async function handleTelegram(request, env, ctx) {
     }
     await tg(env, "answerCallbackQuery", { callback_query_id: cb.id, text: toast });
     // A ✅ re-evaluates the goal's plan against what just happened — in the background,
-    // so the button toast never waits on an LLM call (cooldown-gated inside).
-    if (r.status === "done" && r.goal_id) ctx.waitUntil(maybeAdaptOnDone(env, r.goal_id));
+    // so the button toast never waits on an LLM call (cooldown-gated inside) — and runs
+    // the award check so a crossed threshold (quest totals, rank) lands immediately.
+    if (r.status === "done") {
+      ctx.waitUntil(checkAwards(env, tg));
+      if (r.goal_id) ctx.waitUntil(maybeAdaptOnDone(env, r.goal_id));
+    }
     return new Response("ok");
   }
   await tg(env, "answerCallbackQuery", { callback_query_id: cb.id });
@@ -783,6 +787,7 @@ async function handleApi(url, env, request) {
     let system = "skipped";
     if (q("issue")) system = { issue: await issueDaily(env, tg, { force: true }) };
     else if (q("debrief")) system = { debrief: await debrief(env, tg, { force: true }) };
+    else if (q("awards")) system = { awards: await checkAwards(env, tg) };
     else if (q("system")) system = await runSystem(env, tg, { force: q("force"), spawn: (en, args) => TOOLS.spawn_research.run(en, args) });
     return Response.json({ ok: true, money, senses, system });
   }
@@ -829,13 +834,24 @@ async function handleApi(url, env, request) {
       getSettings(env),
       listMetrics(env, {}),
     ]);
-    // Attach each goal's roadmap.
-    const goals = await Promise.all(goalsR.goals.map(async g => ({ ...g, milestones: await listMilestones(env, g.id) })));
+    // Attach each goal's roadmap + the reasoning behind its latest plan, so the
+    // dashboard can show WHY the route looks the way it does, not just what it is.
+    const goals = await Promise.all(goalsR.goals.map(async g => {
+      const [milestones, plan] = await Promise.all([
+        listMilestones(env, g.id),
+        env.DB.prepare(
+          `SELECT reasoning, at, kind FROM activity
+           WHERE goal_id = ? AND kind IN ('plan','plan_adapt') AND reasoning IS NOT NULL
+           ORDER BY id DESC LIMIT 1`).bind(g.id).first(),
+      ]);
+      return { ...g, milestones, plan_reasoning: plan?.reasoning || null, plan_at: plan?.at || null };
+    }));
     return Response.json({
       rank, goals, settings,
       quests_today: questsToday.results,
       activity: activity.results,
       metrics: metrics.metrics,
+      awards: (await listAwards(env)).awards,
     });
   }
   return Response.json({ error: "not found" }, { status: 404 });
