@@ -815,6 +815,8 @@ async function handleApi(url, env, request) {
       return Response.json(await updateGoal(env, body.id, { status }));
     }
     const r = await createGoal(env, body);
+    // The initial plan may have asked questions — ping them out right away.
+    if (r.ok) { try { await announceOpenQuestions(env, tg); } catch { /* never blocks creation */ } }
     return Response.json(r, { status: r.error ? 400 : 200 });
   }
   if (url.pathname === "/api/settings" && request.method === "POST") {

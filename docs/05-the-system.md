@@ -257,12 +257,16 @@ an **"ASK WHAT YOU'RE MISSING"** clause: produce the best plan anyway, and emit 
 short `questions` when a missing fact would materially change the route. The lifecycle
 (`plan_questions` table, migration 008):
 
-1. **Asked** — `recordPlanQuestions` stores them (≤3 open per goal, case-insensitive dedup
-   against everything ever asked for that goal; `goalContext` lists open ones back to the
-   planner as "do NOT re-ask").
-2. **Announced** — `announceOpenQuestions(env, tg)` sends unannounced ones to Telegram in
-   one message; quiet hours defer to the next outlet (morning issuance, the reckoning, a
-   ✅-triggered adapt, a manual adapt/replan from the dashboard).
+1. **Asked** — `recordPlanQuestions` stores them (≤3 open per goal, ≤5 asked per goal per
+   24h — answered questions trigger re-plans which ask more, and without the daily cap the
+   loop became an endless intake interview; case-insensitive dedup against everything ever
+   asked for that goal; `goalContext` lists open ones back to the planner as "do NOT
+   re-ask", and the prompts forbid re-asking a topic answered even approximately).
+2. **Announced** — `announceOpenQuestions(env, tg)` pings the owner. Never-announced
+   questions go out on **every hourly cron tick** (plus immediately after goal creation
+   and every adapt path), so an ask reaches the owner within the hour it arose; quiet
+   hours defer to the next non-quiet tick. The morning issuance also re-pings **stale**
+   open questions (ignored 2+ days; `announced` counts the nags, capped at 3).
 3. **Answered** — three ways, all landing in `answerPlanQuestion`: the owner replies in
    chat (open questions ride in every agent prompt with instruction to call the
    `answer_plan_question` tool once per answered question, even in passing), the Plans tab

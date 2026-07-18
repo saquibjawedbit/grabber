@@ -379,10 +379,18 @@ async function advanceMilestones(env, goalId) {
 // and on the Plans tab. Answering stores the fact (plan_questions + a memory) and
 // re-plans the goal immediately — ask → answer → better plan, all day.
 
-const MAX_OPEN_QUESTIONS = 3;   // per goal — the mentor probes, it doesn't interrogate
+const MAX_OPEN_QUESTIONS = 3;      // per goal — the mentor probes, it doesn't interrogate
+const MAX_QUESTIONS_PER_DAY = 5;   // per goal — answered questions trigger re-plans which
+                                   // ask more; without this cap the loop becomes an
+                                   // endless intake interview (observed live: 14 questions
+                                   // on one goal in 20 minutes)
 
 async function recordPlanQuestions(env, goalId, questions) {
   if (!Array.isArray(questions) || !questions.length) return 0;
+  const asked24h = (await env.DB.prepare(
+    "SELECT COUNT(*) AS n FROM plan_questions WHERE goal_id = ? AND datetime(asked_at) >= datetime('now','-1 day')")
+    .bind(goalId).first()).n;
+  if (asked24h >= MAX_QUESTIONS_PER_DAY) return 0;
   const now = new Date().toISOString();
   let added = 0;
   for (const q of questions.slice(0, MAX_OPEN_QUESTIONS)) {
@@ -463,25 +471,34 @@ export async function answerPlanQuestions(env, { answers }) {
   return { ok: true, answered, replanned_goals: replanned };
 }
 
-// Send unannounced open questions to Telegram — one message, all pending. Skipped in
-// quiet hours (they stay unannounced and go out with the next call, e.g. the morning
-// issuance). Called wherever a plan may have just been made and a tg handle exists.
-export async function announceOpenQuestions(env, tg) {
+// Ping the owner with pending questions — one message, all of them. New (never-announced)
+// questions go out at the first opportunity: this runs on EVERY hourly cron tick, plus
+// right after goal creation and every adapt path, so the ask reaches the owner within the
+// hour of the planner needing it. Quiet hours defer (the badge of `announced` stays 0 and
+// the next non-quiet tick sends it). With includeStale (the morning issuance), open
+// questions ignored for 2+ days get re-pinged — `announced` counts the nags, capped at 3.
+export async function announceOpenQuestions(env, tg, { includeStale = false } = {}) {
   if (!tg) return { skipped: "no tg" };
   const t = ist();
   if (t.hour >= QUIET_START || t.hour < QUIET_END) return { skipped: "quiet hours" };
+  const stale = includeStale
+    ? " OR (q.announced BETWEEN 1 AND 2 AND datetime(q.asked_at) <= datetime('now','-2 days'))" : "";
   const { results } = await env.DB.prepare(
-    `SELECT q.id, q.question, g.title FROM plan_questions q JOIN goals g ON g.id = q.goal_id
-     WHERE q.status = 'open' AND q.announced = 0 ORDER BY q.id LIMIT 9`).all();
+    `SELECT q.id, q.question, q.announced, g.title FROM plan_questions q JOIN goals g ON g.id = q.goal_id
+     WHERE q.status = 'open' AND (q.announced = 0${stale}) ORDER BY q.id LIMIT 9`).all();
   if (!results.length) return { none: true };
-  const lines = results.map(q => `▫️ <b>${esc(q.title.slice(0, 60))}</b>: ${esc(q.question)}`).join("\n");
+  const fresh = results.filter(q => !q.announced), nag = results.filter(q => q.announced);
+  const line = q => `▫️ <b>${esc(q.title.slice(0, 60))}</b>: ${esc(q.question)}`;
+  const parts = [];
+  if (fresh.length) parts.push(`🗺️ <b>The System needs facts to plan you better.</b>\n\n${fresh.map(line).join("\n")}`);
+  if (nag.length) parts.push(`⏳ <b>Still waiting on these — your plan is running on guesses:</b>\n\n${nag.map(line).join("\n")}`);
   const r = await tg(env, "sendMessage", {
     chat_id: env.TELEGRAM_CHAT_ID, parse_mode: "HTML",
-    text: `🗺️ <b>The System needs facts to plan you better.</b>\n\n${lines}\n\n<i>Just answer here — the plan updates itself.</i>`,
+    text: `${parts.join("\n\n")}\n\n<i>Just answer here — the plan updates itself.</i>`,
   });
   if (r.ok) {
     for (const q of results) {
-      await env.DB.prepare("UPDATE plan_questions SET announced = 1 WHERE id = ?").bind(q.id).run();
+      await env.DB.prepare("UPDATE plan_questions SET announced = announced + 1 WHERE id = ?").bind(q.id).run();
     }
   }
   return { announced: results.length };
@@ -520,7 +537,10 @@ SPECIFICITY RULES — a plan the owner can act on today, not a syllabus:
 ASK WHAT YOU'RE MISSING: if a fact you don't have would materially change this plan — a body
 measurement, hours genuinely free per day, equipment or budget, current skill level, an
 existing routine — list up to 3 short questions for the owner in "questions". Still produce
-the best plan you can WITHOUT the answers. Never ask what the context already answers.
+the best plan you can WITHOUT the answers. Never ask what the context already answers, and
+never re-ask a topic the owner already answered — even approximately ("around 1500-2000")
+— plan with their approximation instead of demanding precision. Most plans need ZERO
+questions; an interrogation is a failed plan.
 
 Return ONLY JSON:
 {"reasoning":"one or two sentences on the route you chose",
@@ -634,8 +654,10 @@ needs it, buffer before any deadline.
 
 ASK WHAT YOU'RE MISSING: if a fact you don't have would materially improve this plan (a
 measurement, hours free, equipment, budget, skill level), list up to 3 short questions in
-"questions" — but still produce the best plan without the answers, and never ask what the
-context already answers or what you've already asked.
+"questions" — but still produce the best plan without the answers. Never ask what the
+context already answers or what you've already asked, and never re-ask a topic answered
+approximately — plan with the approximation. Most adapts need ZERO new questions; an
+interrogation is a failed plan.
 
 Return ONLY JSON:
 {"reasoning":"one sentence: what you changed and why","questions":["short question","..."],"milestones":[{"title":"...","done_when":"...","weeks_from_now":<number>,"steps":["concrete day-sized action","..."]}]}`;
@@ -1059,8 +1081,9 @@ export async function issueDaily(env, tg, { force = false } = {}) {
         .bind(sent.result.message_id, row.id).run();
     }
   }
-  // Morning is also when overnight planner questions go out (quiet hours held them back).
-  try { await announceOpenQuestions(env, tg); } catch { /* never blocks issuance */ }
+  // Morning is when overnight questions go out (quiet hours held them back) and when
+  // stale unanswered ones get re-pinged — the plan is guessing until they're answered.
+  try { await announceOpenQuestions(env, tg, { includeStale: true }); } catch { /* never blocks issuance */ }
   return { issued: created.length };
 }
 
@@ -1297,6 +1320,13 @@ export async function autonomyTick(env, tg, { force = false, spawn = null } = {}
 export async function runSystem(env, tg, { force = false, spawn = null } = {}) {
   const t = ist();
   const out = {};
+  // Every hourly tick: ping any never-announced planner questions (quiet-hours guarded),
+  // so "I need your waist size to plan this" reaches the owner within the hour it arose —
+  // not at the next fixed slot.
+  try {
+    const a = await announceOpenQuestions(env, tg);
+    if (a.announced) out.questions = a;
+  } catch { /* never blocks the slots below */ }
   if (force || t.hour === ISSUE_HOUR) out.issue = await issueDaily(env, tg, { force });
   if (force || t.hour === AUTONOMY_HOUR) out.autonomy = await autonomyTick(env, tg, { force, spawn });
   if (force || t.hour === DEBRIEF_HOUR) out.debrief = await debrief(env, tg, { force });
