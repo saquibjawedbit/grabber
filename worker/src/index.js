@@ -4,7 +4,7 @@
 import { embedMemory, rememberExchange, runAgent, TOOLS, validateArgs } from "./agent.js";
 import { backfill, extract, forgetMemory, reconcile, saveMemory, unpackVec } from "./memory.js";
 import { DEFAULT_PERSONA, getPersona, resetPersona, setPersona } from "./persona.js";
-import { adaptPlan, addGoalContext, announceOpenQuestions, answerPlanQuestion, answerPlanQuestions, awardCatalog, checkAwards, createGoal, debrief, deleteGoal, getSettings, getSystemState, issueDaily, listAwards, listGoals, listMetrics, listMilestones, listPlanQuestions, listQuests, maybeAdaptOnDone, replanGoal, resolveQuest, runSystem, setAutonomyMode, updateGoal } from "./system.js";
+import { adaptPlan, addGoalContext, announceOpenQuestions, answerPlanQuestion, answerPlanQuestions, awardCatalog, checkAwards, claimReward, createGoal, debrief, deleteGoal, getSettings, getSystemState, issueDaily, listAwards, listGoals, listMetrics, listMilestones, listPlanQuestions, listQuests, maybeAdaptOnDone, replanGoal, resolveQuest, runSystem, setAutonomyMode, updateGoal } from "./system.js";
 import { classifyInbox, googleConnected, ingestNotification, pollCalendar, remindEvents } from "./senses.js";
 import { processBankNotifications } from "./life.js";
 import { generatePerception, getPerception } from "./perception.js";
@@ -762,6 +762,15 @@ async function handleApi(url, env, request, ctx) {
       "INSERT INTO reminders (text, due_at, created_at) VALUES (?, ?, ?) RETURNING id")
       .bind(String(b.text).trim().slice(0, 300), new Date(due).toISOString(), new Date().toISOString()).first();
     return Response.json({ ok: true, id: row.id, fires_at_utc: new Date(due).toISOString() });
+  }
+
+  if (url.pathname === "/api/award-claim" && request.method === "POST") {
+    // The owner marks an award's tangible reward redeemed from the dashboard.
+    // {id} claims; {id, unclaim:true} reverses a mis-tap.
+    const b = await request.json().catch(() => ({}));
+    if (!b.id) return Response.json({ error: "need an award id" }, { status: 400 });
+    const r = await claimReward(env, { id: Number(b.id), unclaim: !!b.unclaim });
+    return Response.json(r, r.error ? { status: 404 } : undefined);
   }
 
   if (url.pathname === "/api/teach" && request.method === "POST") {

@@ -361,6 +361,23 @@ earned badges in colour, then locked ones dimmed with a progress bar toward thei
 This is why the card stays visible from day one (before the first award, it's a to-do
 ladder) instead of hiding until something crosses.
 
+**Tangible rewards** (migration 010: `awards.reward`, `awards.reward_claimed_at`). A badge
+is a game token; the **reward** is the owner cashing it in for something real — a coffee, a
+dinner out, "spend ₹5,000 on yourself, guilt-free." `generateReward` (`system.js`) writes
+one short, specific treat when an award is **first** earned (only when the `INSERT` changed,
+so the LLM never fires on the nightly re-checks of already-earned badges): it recalls what
+memory knows the owner enjoys (food, hobbies, wants) and sizes the treat to the win via
+`rewardTier(xp)` — small ≤ ₹800 for daily badges (xp < 45), a ₹1,000–2,500 treat for
+ranks/transformations, a ₹3,000–5,000 splurge for a goal delivered (xp ≥ 90). It's
+fail-soft: any empty/salvaged/errored generation falls back to a generic tier-sized line, so
+a reward never blocks the grant. The reward rides the Telegram announce (`🎁 Your reward:`)
+and shows on the Awards card under the badge. The owner marks it redeemed — **Claim your
+reward ✓** on the dashboard (`POST /api/award-claim {id}` → `claimReward`) or the
+`claim_reward` agent tool — which stamps `reward_claimed_at` (idempotent; `{unclaim:true}`
+reverses a mis-tap). `checkAwards` also carries a **bounded self-heal**: up to 3 earned
+awards with a `NULL` reward get one generated per pass, covering badges earned before this
+shipped or a generation that failed.
+
 **Metrics & trends.** Three logs feed the dashboard's charts, and the agent's rules
 (`agent.js`) route each kind to the right one. **Food** — any meal/snack/drink — **always**
 goes to `log_meal` (the `meals` table, kcal + macro estimates) and charts on the **Life →

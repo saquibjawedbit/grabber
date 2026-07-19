@@ -147,8 +147,75 @@ async function addXp(env, delta) {
 
 export async function listAwards(env) {
   const { results } = await env.DB.prepare(
-    "SELECT id, key, title, icon, detail, goal_id, xp, awarded_at FROM awards ORDER BY id DESC").all();
+    "SELECT id, key, title, icon, detail, goal_id, xp, awarded_at, reward, reward_claimed_at FROM awards ORDER BY id DESC").all();
   return { count: results.length, awards: results };
+}
+
+// The owner marks a reward redeemed ("I treated myself"). Idempotent — re-claiming keeps
+// the first timestamp. {unclaim:true} clears it (mis-tap). Returns the updated row.
+export async function claimReward(env, { id, key, unclaim = false } = {}) {
+  const row = id
+    ? await env.DB.prepare("SELECT * FROM awards WHERE id = ?").bind(Number(id)).first()
+    : key ? await env.DB.prepare("SELECT * FROM awards WHERE key = ?").bind(String(key)).first() : null;
+  if (!row) return { error: "no award with that id/key" };
+  if (unclaim) {
+    await env.DB.prepare("UPDATE awards SET reward_claimed_at = NULL WHERE id = ?").bind(row.id).run();
+    return { ok: true, id: row.id, reward_claimed_at: null };
+  }
+  const at = row.reward_claimed_at || new Date().toISOString();
+  await env.DB.prepare("UPDATE awards SET reward_claimed_at = ? WHERE id = ?").bind(at, row.id).run();
+  return { ok: true, id: row.id, title: row.title, reward: row.reward, reward_claimed_at: at };
+}
+
+// A badge is a game token; a REWARD is the owner cashing it in for something real —
+// a dinner, a night out, "spend ₹5000 on yourself, guilt-free". The System grants the
+// permission to enjoy, sized to the win: a 3-day streak buys a coffee, a goal delivered
+// buys the splurge. It's personalised from what memory knows the owner actually likes,
+// so the treat lands specific ("that ramen place you keep mentioning"), not generic.
+//
+// Tier by the award's bonus XP — the same number that already encodes how big the win is
+// (daily badges 25, ranks 40, transformations 50, goal-achieved 100).
+function rewardTier(xp) {
+  if (xp >= 90) return { size: "a real splurge — a proper night out or something you've wanted for a while", budget: "₹3,000–5,000" };
+  if (xp >= 45) return { size: "a solid treat — a nice dinner out, an experience, a small want", budget: "₹1,000–2,500" };
+  return { size: "a small, immediate treat — a good coffee, a snack you love, a tiny indulgence", budget: "₹200–800" };
+}
+const rewardFallback = xp => {
+  const t = rewardTier(xp);
+  return `You earned it — take ${t.size.split(" — ")[1] || "a treat"} on yourself (${t.budget}), guilt-free.`;
+};
+
+// One short, tangible reward line for a freshly-earned award. Fail-soft: any error, empty,
+// or salvaged reasoning falls back to a generic tier-sized treat — a reward must never
+// block the award grant. Memory-driven, so it names things the owner actually enjoys.
+async function generateReward(env, { title, detail, xp = 25, goal_id = null }) {
+  const tier = rewardTier(xp);
+  try {
+    const persona = await getPersona(env);
+    let likes = "";
+    try {
+      const rel = await recallMemories(env,
+        "things the owner enjoys — food, hobbies, treats, places, wants, fun, what they'd spend on themselves");
+      likes = rel.filter(m => m.fact).slice(0, 10).map(m => `- ${m.fact}`).join("\n");
+    } catch { /* recall is best-effort; a generic treat still works */ }
+    const prompt = `${voiceBlock(persona)}
+
+The owner just earned this award: "${title}"${detail ? ` (${detail})` : ""}.
+As their reward, grant them ONE tangible, real-world treat to enjoy — ${tier.size}, roughly ${tier.budget}.
+${likes ? `What memory knows they actually enjoy:\n${likes}\n` : ""}
+Rules:
+- ONE sentence, ≤ 30 words, second person ("Go...", "Treat yourself to...").
+- Name a SPECIFIC real thing (a meal, an outing, a purchase, an experience), tied to what they like when you can.
+- Include a rough rupee figure in the ${tier.budget} range.
+- It is permission to enjoy, earned — warm but brief. No preamble, no quotes. Return only the sentence.`;
+    const { text, salvaged } = await llm(env, prompt);
+    const line = String(text || "").trim().replace(/^["'\s]+|["'\s]+$/g, "");
+    if (salvaged || !line || line.length < 8) return rewardFallback(xp);
+    return line.slice(0, 300);
+  } catch (e) {
+    console.log("generateReward failed:", String(e).slice(0, 120));
+    return rewardFallback(xp);
+  }
 }
 
 // The full award ladder — earned AND still-locked — so the dashboard can show what's
@@ -170,6 +237,8 @@ export async function awardCatalog(env) {
       key, icon: got?.icon || icon, title: got?.title || title,
       detail: got?.detail || null,
       earned: !!got, awarded_at: got?.awarded_at || null, xp: got?.xp ?? null,
+      reward: got?.reward || null, reward_claimed_at: got?.reward_claimed_at || null,
+      id: got?.id ?? null,
       current: Math.min(current, target), target,
       pct: Math.max(0, Math.min(1, target ? current / target : 0)),
     };
@@ -186,7 +255,8 @@ export async function awardCatalog(env) {
   const known = new Set(catalog.map(c => c.key));
   for (const [key, a] of earned) {
     if (known.has(key)) continue;
-    catalog.push({ key, icon: a.icon, title: a.title, detail: a.detail,
+    catalog.push({ key, id: a.id, icon: a.icon, title: a.title, detail: a.detail,
+      reward: a.reward || null, reward_claimed_at: a.reward_claimed_at || null,
       earned: true, awarded_at: a.awarded_at, xp: a.xp, current: 1, target: 1, pct: 1 });
   }
   // Earned first (newest first), then locked ordered by how close they are.
@@ -202,20 +272,25 @@ async function grantAward(env, tg, { key, title, icon = "🏆", detail = null, g
     .bind(key, title, icon, detail, goal_id, xp, new Date().toISOString()).run();
   if (!r.meta.changes) return null;   // already earned
   const st = await addXp(env, xp);
+  // The tangible reward — generated only now, on a genuinely NEW award (the INSERT changed),
+  // so the LLM never fires on the nightly re-checks of already-earned badges.
+  const reward = await generateReward(env, { title, detail, xp, goal_id });
+  if (reward) await env.DB.prepare("UPDATE awards SET reward = ? WHERE key = ?").bind(reward, key).run();
   await logActivity(env, {
     kind: "award", goal_id,
     summary: `Award earned: ${icon} ${title}`,
-    detail: [detail, `+${xp} bonus XP → level ${st.level}`].filter(Boolean).join(" · "),
+    detail: [detail, `+${xp} bonus XP → level ${st.level}`, reward ? `Reward: ${reward}` : null].filter(Boolean).join(" · "),
   });
   const t = ist();
   const quiet = t.hour >= QUIET_START || t.hour < QUIET_END;
   if (tg && !quiet) {
     await tg(env, "sendMessage", {
       chat_id: env.TELEGRAM_CHAT_ID, parse_mode: "HTML",
-      text: `${icon} <b>AWARD — ${esc(title)}</b>\n${detail ? esc(detail) + "\n" : ""}<i>+${xp} bonus XP</i>`,
+      text: `${icon} <b>AWARD — ${esc(title)}</b>\n${detail ? esc(detail) + "\n" : ""}<i>+${xp} bonus XP</i>` +
+            (reward ? `\n\n🎁 <b>Your reward:</b> ${esc(reward)}` : ""),
     });
   }
-  return { key, title };
+  return { key, title, reward };
 }
 
 const STREAK_AWARDS = [[3, "Ignition", "🔥"], [7, "One Week of Iron", "⚡"], [14, "Two-Week Resolve", "🗡️"],
@@ -291,6 +366,15 @@ export async function checkAwards(env, tg) {
         });
         if (g) granted.push(g);
       }
+    }
+    // Self-heal: any earned award still missing its tangible reward (earned before this
+    // feature shipped, or a generation that failed) gets one now — bounded to 3 per pass
+    // so a fresh DB with a backlog never fires a burst of LLM calls in one run.
+    const { results: missing } = await env.DB.prepare(
+      "SELECT key, title, detail, xp, goal_id FROM awards WHERE reward IS NULL ORDER BY id LIMIT 3").all();
+    for (const a of missing) {
+      const reward = await generateReward(env, a);
+      if (reward) await env.DB.prepare("UPDATE awards SET reward = ? WHERE key = ?").bind(reward, a.key).run();
     }
   } catch (e) { console.log("checkAwards failed:", String(e).slice(0, 150)); }
   return granted;
@@ -1573,8 +1657,14 @@ export const SYSTEM_TOOLS = {
   },
   list_awards: {
     group: "Goals & Quests",
-    desc: "the awards the owner has earned (streaks, rank promotions, 30-day transformations). args: {}",
+    desc: "the awards the owner has earned (streaks, rank promotions, 30-day transformations) — each carries a tangible real-world `reward` and whether it's been claimed. args: {}",
     run: (env) => listAwards(env),
+  },
+  claim_reward: {
+    group: "Goals & Quests",
+    desc: 'mark an award\'s tangible reward as redeemed — the owner took the treat. Use the award id from list_awards. args: {"id": <n>}',
+    args: { id: { type: "number", required: true } },
+    run: (env, a) => claimReward(env, a),
   },
   list_plan_questions: {
     group: "Goals & Quests",

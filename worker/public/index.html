@@ -351,6 +351,15 @@
   .award-t { font-size: 0.82rem; font-weight: 650; }
   .award-d { font-size: 0.74rem; color: var(--ink-2); }
   .award-at { font-size: 0.7rem; color: var(--muted); font-variant-numeric: tabular-nums; }
+  /* The tangible reward: a warm gold treat line the owner earned, with a claim control. */
+  .award-reward { display: block; margin-top: 0.4rem; font-size: 0.76rem; line-height: 1.35;
+    color: var(--gold); border-top: 1px dashed var(--border); padding-top: 0.4rem; }
+  .award-claim { margin-top: 0.35rem; font: inherit; font-size: 0.72rem; font-weight: 600;
+    cursor: pointer; color: var(--gold); background: transparent;
+    border: 1px solid var(--gold); border-radius: 999px; padding: 0.16rem 0.6rem; }
+  .award-claim:hover { background: var(--gold); color: #100a02; }
+  .award-claimed { display: inline-block; margin-top: 0.35rem; font-size: 0.72rem; font-weight: 600;
+    color: var(--good); font-variant-numeric: tabular-nums; }
   /* Locked awards: shown dimmed with a progress bar toward the threshold, so the ladder
      is visible before the first badge is earned. */
   .award.locked { opacity: 0.9; border-style: dashed; }
@@ -1400,6 +1409,10 @@ function renderAwards(awards, catalog) {
         <span class="award-t">${esc(a.title)}</span>
         ${a.detail ? `<span class="award-d">${esc(a.detail)}</span>` : ""}
         <span class="award-at">${esc(String(a.awarded_at).slice(0, 10))}${a.xp != null ? ` · +${a.xp} XP` : ""}</span>
+        ${a.reward ? `<span class="award-reward">🎁 ${esc(a.reward)}</span>
+          ${a.reward_claimed_at
+            ? `<span class="award-claimed">✓ Claimed · ${esc(String(a.reward_claimed_at).slice(0, 10))}</span>`
+            : (a.id != null ? `<button class="award-claim" onclick="awardClaim(${a.id})">Claim your reward ✓</button>` : "")}` : ""}
       </span>
     </div>`).join("")
     : `<div class="empty">None earned yet — clear quests, hold a streak, and these light up. Here's the ladder:</div>`;
@@ -1422,6 +1435,12 @@ function renderAwards(awards, catalog) {
     </div>`;
   }).join("");
 }
+
+// The owner cashes in a reward. Optimistic-free: just reload — boot() repaints from truth.
+window.awardClaim = async id => {
+  try { await api("/api/award-claim", { method: "POST", body: { id } }); boot(); }
+  catch { /* the next load reflects the truth */ }
+};
 
 // 14 days of quest outcomes as one stacked column per day — cleared in azure, failed in
 // crimson (validated pair; 2px gaps between segments). Hover a day for the exact counts.

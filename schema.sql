@@ -382,7 +382,9 @@ CREATE TABLE IF NOT EXISTS awards (
   detail     TEXT,                             -- what earned it, with the numbers
   goal_id    INTEGER REFERENCES goals(id),
   xp         INTEGER NOT NULL DEFAULT 25,      -- bonus XP granted with the award
-  awarded_at TEXT NOT NULL
+  awarded_at TEXT NOT NULL,
+  reward     TEXT,                             -- tangible real-world treat, from memories, scaled to the win
+  reward_claimed_at TEXT                       -- when the owner marked the treat redeemed (NULL = still owed)
 );
 
 -- The planner's questions back to the owner: facts it needs to plan better (waist size,

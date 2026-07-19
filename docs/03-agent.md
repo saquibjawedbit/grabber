@@ -159,6 +159,7 @@ flowchart LR
   subgraph gq["Goals & Quests"]
     set_goal; list_goals; update_goal; drop_goal
     add_quest; list_quests; complete_quest; get_rank
+    list_awards; claim_reward
   end
   subgraph web["Web & research"]
     web_search; web_fetch; spawn_research; get_research
