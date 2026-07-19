@@ -654,21 +654,6 @@
           </form>
           <div id="memories"></div>
         </div>
-        <div class="card">
-          <div class="card-head">
-            <h2>Reminders</h2>
-            <button id="rem-add-toggle" class="ghost-btn">Add</button>
-          </div>
-          <form id="rem-add" hidden>
-            <input id="rem-text" placeholder="What should the ping say?" maxlength="300">
-            <div class="row">
-              <input id="rem-when" type="datetime-local">
-              <button type="submit" class="ghost-btn primary">Schedule</button>
-              <span class="teach-status" id="rem-status"></span>
-            </div>
-          </form>
-          <div id="reminders"></div>
-        </div>
       </div>
       <div>
         <div class="card">
@@ -722,6 +707,21 @@
             <button id="quests-issue" class="ghost-btn" title="Generate today's quests now">Issue now</button>
           </div>
           <div id="quests"></div>
+        </div>
+        <div class="card">
+          <div class="card-head">
+            <h2>Reminders <span class="sub">timed pings the System will send you</span></h2>
+            <button id="rem-add-toggle" class="ghost-btn">Add</button>
+          </div>
+          <form id="rem-add" hidden>
+            <input id="rem-text" placeholder="What should the ping say?" maxlength="300">
+            <div class="row">
+              <input id="rem-when" type="datetime-local">
+              <button type="submit" class="ghost-btn primary">Schedule</button>
+              <span class="teach-status" id="rem-status"></span>
+            </div>
+          </form>
+          <div id="reminders"></div>
         </div>
       </div>
       <div>

@@ -187,11 +187,12 @@ nightly reckoning, a research job spawned (`agent.js`), an application drafted
 agent has actually done for them. The dashboard (`worker/public/index.html`) opens on the
 **System** tab, laid out as an overview that reads top→bottom as *status → momentum →
 today's action → tracking → recognition → reflection → lever*: the **rank hero**, the
-**Battle record** heatmap, a balanced two-column **Today's quests | Goals** row, the
+**Battle record** heatmap, a balanced two-column row of **Today's quests** + **Reminders**
+(timed pings you can add/edit/cancel) on the left and **Goals** on the right, the
 full-width **"what I'm doing to hit your goals"** work log, **Metrics** charts, the
 **Awards** ladder, the honest **"How I see you"** read, and **Applications**. Other tabs: **Plans**, **Brain** (an explorable
-knowledge graph — zoom/pan/click-to-focus/legend-filter/search — plus memories,
-conversation, reminders), **Life**, **Research**, **Senses**, and **Settings** (persona,
+knowledge graph — zoom/pan/click-to-focus/legend-filter/search — plus memories and
+conversation), **Life**, **Research**, **Senses**, and **Settings** (persona,
 teach, profile documents). The old Opportunities tab was removed.
 
 **The look is the Solo Leveling status window, dark-only** — dark is the medium, not a
