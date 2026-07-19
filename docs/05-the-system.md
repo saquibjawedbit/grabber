@@ -90,7 +90,11 @@ asks for **≤ `MAX_DAILY_QUESTS` (4)** concrete quests as JSON. Main quests are
 the milestone's **next unfinished steps** (resized to fit one day), and the model may add
 one `side` quest — a low-stakes supporting action (+5 XP) that makes the main quests
 easier. Each becomes an `issued` row. The prompt demands checkable-tonight actions, not
-busywork, and allows skipping a goal that has no sensible step today.
+busywork, and allows skipping a goal that has no sensible step today. Quest text is
+**owner-facing prose, never tool-call syntax** — the prompt forbids embedding `log_metric(…)`
+or any function call (the model used to write "log each meal with `log_metric(...)`", which
+both leaked internals and steered food to the wrong log); a nutrition quest reads "eat
+≥2,700 kcal and tell me each meal", and the System records what the owner reports itself.
 
 ## 5.4 Issuance & the reckoning
 
@@ -357,12 +361,16 @@ earned badges in colour, then locked ones dimmed with a progress bar toward thei
 This is why the card stays visible from day one (before the first award, it's a to-do
 ladder) instead of hiding until something crosses.
 
-**Metrics & trends.** Two logs feed the dashboard's charts. **Body/habit** numbers (weight,
-waist, sleep, runs, workouts) go to `log_health` (the `health` table) and chart on the
-**Life → Trends** section — a line per level metric, bars per count metric. **Everything
-else** moving toward a goal (MRR, leetcode solved, minutes practiced) goes to `log_metric`
-(the `metrics` table) and charts on the **System** tab. The agent's rules route each kind
-to the right log so it forms one series over time.
+**Metrics & trends.** Three logs feed the dashboard's charts, and the agent's rules
+(`agent.js`) route each kind to the right one. **Food** — any meal/snack/drink — **always**
+goes to `log_meal` (the `meals` table, kcal + macro estimates) and charts on the **Life →
+Calories** tracker; the rule is explicit that a raw `calorie_intake` number in `log_metric`
+must NOT be used for food, because it never reaches that tracker (this was a real bug — the
+model logged eaten food as a generic metric and the Calorie card stayed empty). **Body/habit**
+numbers (weight, waist, sleep, runs, workouts) go to `log_health` (the `health` table) and
+chart on the **Life → Trends** section — a line per level metric, bars per count metric.
+**Everything else** moving toward a goal (MRR, leetcode solved, minutes practiced) goes to
+`log_metric` (the `metrics` table) and charts on the **System** tab.
 
 Both sections share one interactive chart (`drawTrend` in `public/index.html`): a
 **time-proportional x-axis** (uneven logging reads as uneven — an index-based x would lie

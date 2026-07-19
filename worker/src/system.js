@@ -1122,6 +1122,11 @@ sized to fit one day). Never vague ("work on the project"), never busywork. You 
 small "side" quest — a low-stakes supporting action (prep, a habit, recovery, outreach) that
 makes the main quests easier — only if it genuinely helps today.
 
+Quest text is read by the OWNER — write plain human instructions, never tool-call syntax.
+For eating/nutrition quests say e.g. "eat ≥2,700 kcal and tell me each meal" — NEVER
+"log_metric(...)" or any function call. The owner just reports what they ate in chat and the
+System records it (with macro estimates) itself; do not instruct them to call a tool.
+
 At most ${MAX_DAILY_QUESTS} quests across ALL goals — fewer is stronger. Prioritise goals that
 are behind pace. Skip a goal with no sensible step today.
 
