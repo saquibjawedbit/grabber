@@ -4,7 +4,7 @@
 import { embedMemory, rememberExchange, runAgent, TOOLS, validateArgs } from "./agent.js";
 import { backfill, extract, forgetMemory, reconcile, saveMemory, unpackVec } from "./memory.js";
 import { DEFAULT_PERSONA, getPersona, resetPersona, setPersona } from "./persona.js";
-import { adaptPlan, addGoalContext, announceOpenQuestions, answerPlanQuestion, answerPlanQuestions, checkAwards, createGoal, debrief, deleteGoal, getSettings, getSystemState, issueDaily, listAwards, listGoals, listMetrics, listMilestones, listPlanQuestions, listQuests, maybeAdaptOnDone, replanGoal, resolveQuest, runSystem, setAutonomyMode, updateGoal } from "./system.js";
+import { adaptPlan, addGoalContext, announceOpenQuestions, answerPlanQuestion, answerPlanQuestions, awardCatalog, checkAwards, createGoal, debrief, deleteGoal, getSettings, getSystemState, issueDaily, listAwards, listGoals, listMetrics, listMilestones, listPlanQuestions, listQuests, maybeAdaptOnDone, replanGoal, resolveQuest, runSystem, setAutonomyMode, updateGoal } from "./system.js";
 import { classifyInbox, googleConnected, ingestNotification, pollCalendar, remindEvents } from "./senses.js";
 import { processBankNotifications } from "./life.js";
 import { generatePerception, getPerception } from "./perception.js";
@@ -961,6 +961,9 @@ async function handleApi(url, env, request, ctx) {
       activity: activity.results,
       metrics: metrics.metrics,
       awards: (await listAwards(env)).awards,
+      // The full ladder (earned + locked with progress) so the Awards panel shows what's
+      // next instead of vanishing until the first threshold crosses.
+      award_catalog: (await awardCatalog(env)).catalog,
       plan_questions: (await listPlanQuestions(env, { status: "open" })).questions,
       // Battle record: per-IST-day quest outcomes for the last 14 days.
       quest_history: (await env.DB.prepare(`

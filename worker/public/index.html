@@ -351,6 +351,17 @@
   .award-t { font-size: 0.82rem; font-weight: 650; }
   .award-d { font-size: 0.74rem; color: var(--ink-2); }
   .award-at { font-size: 0.7rem; color: var(--muted); font-variant-numeric: tabular-nums; }
+  /* Locked awards: shown dimmed with a progress bar toward the threshold, so the ladder
+     is visible before the first badge is earned. */
+  .award.locked { opacity: 0.9; border-style: dashed; }
+  .award.locked .award-ic { filter: grayscale(1); opacity: 0.5; }
+  .award.locked .award-t { color: var(--ink-2); }
+  .award-prog { display: flex; align-items: center; gap: 0.45rem; margin-top: 0.15rem; }
+  .award-prog .apt { flex: 1; height: 5px; border-radius: 999px; background: var(--grid); overflow: hidden; }
+  .award-prog .apf { height: 100%; border-radius: 999px; background: var(--baseline); }
+  .award-prog .apn { font-size: 0.68rem; color: var(--muted); font-variant-numeric: tabular-nums; white-space: nowrap; font-family: var(--font-hud); }
+  .awards-next { font-size: 0.74rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em;
+    font-family: var(--font-hud); font-weight: 600; margin: 0.9rem 0 0.5rem; }
   .pm-steps { margin-top: 0.3rem; display: grid; gap: 0.15rem; }
   .pm-step { font-size: 0.78rem; color: var(--ink-2); line-height: 1.35; }
   .pm-steps-fold summary { font-size: 0.74rem; color: var(--muted); cursor: pointer; margin-top: 0.2rem; }
@@ -531,21 +542,20 @@
   .battle-legend i { display: inline-block; width: 9px; height: 9px; border-radius: 2px; margin-right: 5px; font-style: normal; }
   .battle-sum { font-size: 0.78rem; color: var(--ink-2); margin-top: 0.3rem; font-variant-numeric: tabular-nums; }
 
-  /* ---------- Calorie tracker: 14 days of intake, one stacked column per day.
-     Macro grams don't sum to calories, so the stack is each macro's CALORIES
-     (protein 4/g, carbs 4/g, fat 9/g) — the column height is the day's kcal.
+  /* ---------- Calorie tracker: one stacked SVG column per day; column height = the
+     day's kcal, each slice a macro's CALORIES (protein 4/g, carbs 4/g, fat 9/g).
      Triad #3987e5/#c98500/#9085e9 validated on the card surface (worst adjacent
-     CVD ΔE 17.3); the 2px gaps double as the segment spacer. ---------- */
-  .cal-wrap { display: flex; align-items: flex-end; gap: 4px; height: 150px; margin-top: 0.6rem; }
-  .cal-day { flex: 1; display: flex; flex-direction: column-reverse; gap: 2px; height: 100%;
-    justify-content: flex-start; cursor: default; border-radius: 2px; }
-  .cal-day:hover { background: rgba(111,195,255,0.06); }
-  .cal-seg { width: 100%; border-radius: 2px; min-height: 2px; }
-  .cal-seg.protein { background: var(--seq); }
-  .cal-seg.carbs { background: var(--gold); }
-  .cal-seg.fat { background: var(--cat-fact); }
-  .cal-seg.rest { background: var(--baseline); }   /* kcal logged without macros */
-  .cal-empty { width: 100%; height: 2px; background: var(--grid); border-radius: 2px; }
+     CVD ΔE 17.3); a 2px geometry inset is the segment spacer. ---------- */
+  .cal-box { margin: 0.6rem 0 0.4rem; }
+  .cal-box svg { display: block; width: 100%; height: auto; cursor: crosshair; }
+  .cal-box .axis { fill: var(--muted); font-size: 10px; font-variant-numeric: tabular-nums; }
+  .cal-box .cal-grid { stroke: var(--grid); stroke-width: 1; }
+  .cal-seg { stroke: none; }
+  .cal-seg.protein { fill: var(--seq); }
+  .cal-seg.carbs { fill: var(--gold); }
+  .cal-seg.fat { fill: var(--cat-fact); }
+  .cal-seg.rest { fill: var(--baseline); }   /* kcal logged without macros */
+  .cal-hl { fill: none; stroke: var(--ink-2); stroke-width: 1.5; }
   .cal-meal { font-size: 0.85rem; display: flex; justify-content: space-between; gap: 0.6rem;
     padding: 0.3rem 0; border-bottom: 1px solid var(--grid); }
   .cal-meal:last-child { border-bottom: 0; }
@@ -694,25 +704,16 @@
     </div>
   </section>
 
-  <!-- SYSTEM -->
+  <!-- SYSTEM — overview, top→bottom: status · momentum · today's action · tracking · recognition · reflection · levers -->
   <section data-panel="system">
+    <!-- STATUS: where you stand -->
     <div class="card rank-card" id="rank-card"></div>
-    <div class="card" id="awards-card" hidden>
-      <h2>Awards <span class="sub" id="awards-sub"></span></h2>
-      <div id="awards" class="award-grid"></div>
-    </div>
+    <!-- MOMENTUM: your last 14 days at a glance -->
     <div class="card" id="battle-card" hidden>
       <h2>Battle record <span class="sub">last 14 days of quests</span></h2>
       <div id="battle"></div>
     </div>
-    <div class="card perception" id="perception-card">
-      <div class="perc-head">
-        <h2>How I see you <span class="sub" id="perc-conf"></span></h2>
-        <button id="perc-refresh" class="ghost-btn">Refresh</button>
-      </div>
-      <div id="perception"></div>
-      <div class="sub" id="perc-at"></div>
-    </div>
+    <!-- ACTION: what to do today (left) and what you're driving toward (right) -->
     <div class="cols">
       <div>
         <div class="card">
@@ -722,6 +723,8 @@
           </div>
           <div id="quests"></div>
         </div>
+      </div>
+      <div>
         <div class="card">
           <div class="card-head">
             <h2>Goals <span class="sub" id="goals-sub"></span></h2>
@@ -742,17 +745,34 @@
           <div id="goals"></div>
         </div>
       </div>
-      <div>
-        <div class="card">
-          <h2>What I'm doing to hit your goals <span class="sub">the System's work log</span></h2>
-          <div id="activity"></div>
-        </div>
-      </div>
     </div>
+    <!-- What the System is doing for you — a full-width work log -->
+    <div class="card">
+      <h2>What I'm doing to hit your goals <span class="sub">the System's work log</span></h2>
+      <div id="activity"></div>
+    </div>
+    <!-- TRACKING: numbers moving over time -->
     <div class="card">
       <h2>Metrics <span class="sub">numbers the agent is tracking for you</span></h2>
       <div id="metrics"></div>
     </div>
+    <!-- RECOGNITION: what you've earned -->
+    <div class="card" id="awards-card" hidden>
+      <h2>Awards <span class="sub" id="awards-sub"></span></h2>
+      <div id="awards" class="award-grid"></div>
+      <div class="awards-next" id="awards-locked-head" hidden>Locked — what's next</div>
+      <div id="awards-locked" class="award-grid"></div>
+    </div>
+    <!-- REFLECTION: the System's honest read of you -->
+    <div class="card perception" id="perception-card">
+      <div class="perc-head">
+        <h2>How I see you <span class="sub" id="perc-conf"></span></h2>
+        <button id="perc-refresh" class="ghost-btn">Refresh</button>
+      </div>
+      <div id="perception"></div>
+      <div class="sub" id="perc-at"></div>
+    </div>
+    <!-- LEVER: the mentor gets things done for you -->
     <div class="card" id="apps-card">
       <h2>Applications <span class="sub" id="apps-sub"></span></h2>
       <p class="teach-hint">The mentor's lever for clearing a barrier to a goal — point the bot at any job and a ready-to-send pack lands here.</p>
@@ -1355,21 +1375,52 @@ function renderRank(r, awards) {
     </div>`;
 }
 
-function renderAwards(awards) {
+// The full ladder: earned badges in colour, then locked ones dimmed with a progress bar
+// toward their threshold — so the panel shows what's coming instead of vanishing until the
+// first award crosses. `catalog` (from /api/system) already merges earned + locked; the
+// older `awards` list is the fallback if an old worker hasn't shipped the catalog yet.
+function renderAwards(awards, catalog) {
   const card = $("awards-card");
   if (!card) return;
-  if (!awards?.length) { card.hidden = true; return; }
+  const items = catalog?.length ? catalog
+    : (awards || []).map(a => ({ ...a, earned: true }));
+  if (!items.length) { card.hidden = true; return; }
   card.hidden = false;
-  $("awards-sub").textContent = `${awards.length} earned`;
-  $("awards").innerHTML = awards.map(a => `
+
+  const earned = items.filter(a => a.earned);
+  const locked = items.filter(a => !a.earned);
+  $("awards-sub").textContent = earned.length
+    ? `${earned.length} earned${locked.length ? ` · ${locked.length} to go` : ""}`
+    : `${locked.length} to unlock — none earned yet`;
+
+  $("awards").innerHTML = earned.length ? earned.map(a => `
     <div class="award" title="${esc(a.detail || "")}">
       <span class="award-ic">${esc(a.icon || "🏆")}</span>
       <span class="award-body">
         <span class="award-t">${esc(a.title)}</span>
         ${a.detail ? `<span class="award-d">${esc(a.detail)}</span>` : ""}
-        <span class="award-at">${esc(String(a.awarded_at).slice(0, 10))} · +${a.xp} XP</span>
+        <span class="award-at">${esc(String(a.awarded_at).slice(0, 10))}${a.xp != null ? ` · +${a.xp} XP` : ""}</span>
       </span>
-    </div>`).join("");
+    </div>`).join("")
+    : `<div class="empty">None earned yet — clear quests, hold a streak, and these light up. Here's the ladder:</div>`;
+
+  const head = $("awards-locked-head"), box = $("awards-locked");
+  if (!locked.length) { head.hidden = true; box.innerHTML = ""; return; }
+  head.hidden = false;
+  box.innerHTML = locked.map(a => {
+    const pct = Math.round((a.pct || 0) * 100);
+    const prog = a.target > 1
+      ? `<span class="award-prog"><span class="apt"><span class="apf" style="width:${Math.max(2, pct)}%"></span></span>
+         <span class="apn">${a.current}/${a.target}</span></span>`
+      : `<span class="award-d">not yet</span>`;
+    return `<div class="award locked" title="${esc(a.title)}">
+      <span class="award-ic">${esc(a.icon || "🏆")}</span>
+      <span class="award-body">
+        <span class="award-t">🔒 ${esc(a.title)}</span>
+        ${prog}
+      </span>
+    </div>`;
+  }).join("");
 }
 
 // 14 days of quest outcomes as one stacked column per day — cleared in azure, failed in
@@ -1859,12 +1910,32 @@ function renderLifeTrends(health) {
 // so a meal logged without macros still shows its true height instead of vanishing.
 const MACRO = [["protein", 4, "var(--seq)"], ["carbs", 4, "var(--gold)"], ["fat", 9, "var(--cat-fact)"]];
 
+// Column height must mean kcal — if macro estimates overshoot the stated kcal, the macro
+// calories win the height so segments never overflow their column.
+const calHeightOf = d => Math.max(d.kcal, MACRO.reduce((s, [k, per]) => s + d[k] * per, 0));
+const CAL_RANGES = [["7d", 7], ["14d", 14], ["30d", 30]];
+let _calMeals = null, calRange = 14;
+
 function renderCalories(meals) {
   const card = $("cal-card");
   if (!card) return;
   if (!meals?.length) { card.hidden = true; return; }
   card.hidden = false;
+  _calMeals = meals;
+  drawCalCard();
+}
 
+// A rect whose TOP two corners are rounded (the column's data-end), bottom square so it
+// meets the segment below cleanly.
+function topRoundRect(x, y, w, h, r) {
+  r = Math.min(r, w / 2, h);
+  return `M${x},${(y + h).toFixed(1)} L${x},${(y + r).toFixed(1)} Q${x},${y} ${(x + r).toFixed(1)},${y} `
+    + `L${(x + w - r).toFixed(1)},${y} Q${(x + w).toFixed(1)},${y} ${(x + w).toFixed(1)},${(y + r).toFixed(1)} `
+    + `L${(x + w).toFixed(1)},${(y + h).toFixed(1)} Z`;
+}
+
+function drawCalCard() {
+  const meals = _calMeals || [];
   const byDay = new Map();
   for (const m of meals) {
     const d = new Date(new Date(m.at).getTime() + 330 * 60000).toISOString().slice(0, 10);
@@ -1875,20 +1946,16 @@ function renderCalories(meals) {
     byDay.set(d, r);
   }
   const days = [];
-  for (let i = 13; i >= 0; i--) {
+  for (let i = calRange - 1; i >= 0; i--) {
     const dt = new Date(Date.now() + 330 * 60000 - i * 864e5);
     const key = dt.toISOString().slice(0, 10);
-    days.push({ key, dow: "SMTWTFS"[dt.getUTCDay()],
+    days.push({ key, at: key + "T00:00:00+05:30", dow: "SMTWTFS"[dt.getUTCDay()],
       ...(byDay.get(key) || { kcal: 0, protein: 0, carbs: 0, fat: 0, items: [] }) });
   }
-  // Column height must mean kcal — if macro estimates overshoot the stated kcal,
-  // the macro calories win the height so segments never overflow their column.
-  const heightOf = d => Math.max(d.kcal, MACRO.reduce((s, [k, per]) => s + d[k] * per, 0));
-  const max = Math.max(1, ...days.map(heightOf));
-  const today = days[13];
+  const today = days[days.length - 1];
   const logged = days.filter(d => d.kcal > 0);
   const avg = Math.round(logged.reduce((s, d) => s + d.kcal, 0) / Math.max(1, logged.length));
-  let anyRest = false;
+  const anyRest = days.some(d => d.kcal - MACRO.reduce((s, [k, per]) => s + d[k] * per, 0) > 1);
 
   const tiles = `<div class="tiles" style="margin-bottom:0.2rem">
     <div class="tile"><div class="v">${today.kcal ? Math.round(today.kcal).toLocaleString() : "—"}</div><div class="k">kcal today</div></div>
@@ -1896,18 +1963,6 @@ function renderCalories(meals) {
     <div class="tile"><div class="v">${today.carbs ? Math.round(today.carbs) + "g" : "—"}</div><div class="k">carbs</div></div>
     <div class="tile"><div class="v">${today.fat ? Math.round(today.fat) + "g" : "—"}</div><div class="k">fat</div></div>
   </div>`;
-
-  const cols = days.map((d, i) => {
-    const total = heightOf(d);
-    if (!total) return `<div class="cal-day" data-i="${i}"><div class="cal-empty"></div></div>`;
-    const segs = MACRO.map(([k, per]) => {
-      const kc = d[k] * per;
-      return kc ? `<div class="cal-seg ${k}" style="height:${(kc / max * 100).toFixed(1)}%"></div>` : "";
-    }).join("");
-    const rest = Math.max(0, d.kcal - MACRO.reduce((s, [k, per]) => s + d[k] * per, 0));
-    if (rest > 0) anyRest = true;
-    return `<div class="cal-day" data-i="${i}">${segs}${rest > 0 ? `<div class="cal-seg rest" style="height:${(rest / max * 100).toFixed(1)}%"></div>` : ""}</div>`;
-  }).join("");
 
   const mealRows = today.items.length ? `<div class="meta" style="margin-top:0.9rem">Today's meals</div>` +
     today.items.map(m => {
@@ -1918,8 +1973,11 @@ function renderCalories(meals) {
     }).join("") : "";
 
   $("calories").innerHTML = `${tiles}
-    <div class="cal-wrap">${cols}</div>
-    <div class="battle-axis">${days.map((d, i) => `<span class="${i === 13 ? "today" : ""}">${d.dow}</span>`).join("")}</div>
+    <div class="trend-tools">
+      <div class="seg seg-sm">${CAL_RANGES.map(([l, nn]) => `<button data-n="${nn}" class="${calRange === nn ? "on" : ""}">${l}</button>`).join("")}</div>
+      <span class="hint">hover a bar for the full macro breakdown</span>
+    </div>
+    <div class="cal-box" id="cal-box"></div>
     <div class="battle-legend">
       <span><i style="background:var(--seq)"></i>protein</span>
       <span><i style="background:var(--gold)"></i>carbs</span>
@@ -1928,16 +1986,87 @@ function renderCalories(meals) {
     </div>
     <div class="battle-sum">avg ${avg.toLocaleString()} kcal/day over ${logged.length} logged day${logged.length === 1 ? "" : "s"} · bar height = calories; macro slices are their calorie share (4/4/9 kcal per g)</div>
     ${mealRows}`;
-
-  $("calories").querySelectorAll(".cal-day").forEach(el => {
-    const d = days[Number(el.dataset.i)];
-    el.addEventListener("mousemove", e => tipShow(d.kcal
-      ? `<b>${Math.round(d.kcal).toLocaleString()} kcal</b> · ${d.items.length} meal${d.items.length === 1 ? "" : "s"}
-         <div class="t-cat">${d.key} · P ${Math.round(d.protein)}g · C ${Math.round(d.carbs)}g · F ${Math.round(d.fat)}g</div>`
-      : `<b>${d.key}</b><div class="t-cat">nothing logged</div>`, e.clientX, e.clientY));
-    el.addEventListener("mouseleave", tipHide);
-  });
+  $("calories").querySelectorAll(".seg-sm button").forEach(b => b.onclick = () => { calRange = Number(b.dataset.n); drawCalCard(); });
+  drawCalChart($("cal-box"), days);
 }
+
+// Big interactive stacked-bar chart: y-axis in kcal, one column per day, macro slices
+// stacked (protein → carbs → fat → any macro-less kcal), hover for the full breakdown.
+function drawCalChart(el, days) {
+  const w = Math.max(320, el.clientWidth || 640), h = 264;
+  const padL = 46, padR = 12, padT = 12, padB = 26;
+  const iw = w - padL - padR, ih = h - padT - padB;
+  const max = Math.max(1, ...days.map(calHeightOf));
+  const top = max * 1.08;
+  const Y = v => padT + ih - (v / top) * ih;
+  const n = days.length, slot = iw / n;
+  const bw = Math.min(40, Math.max(5, slot * 0.66));
+
+  const ticks = [0, 0.25, 0.5, 0.75, 1].map(f => Math.round(top * f));
+  const grid = ticks.map(v => `<line class="cal-grid" x1="${padL}" x2="${w - padR}" y1="${Y(v).toFixed(1)}" y2="${Y(v).toFixed(1)}"></line>`
+    + `<text class="axis" x="${padL - 6}" y="${(Y(v) + 3).toFixed(1)}" text-anchor="end">${fmtV(v)}</text>`).join("");
+
+  const STACK = [["protein", 4, "protein"], ["carbs", 4, "carbs"], ["fat", 9, "fat"]];
+  const cols = days.map((d, i) => {
+    const cx = padL + slot * i + slot / 2, x = cx - bw / 2;
+    const segList = STACK.map(([k, per, cls]) => ({ cls, kc: d[k] * per })).filter(s => s.kc > 0);
+    const rest = Math.max(0, d.kcal - STACK.reduce((s, [k, per]) => s + d[k] * per, 0));
+    if (rest > 0.5) segList.push({ cls: "rest", kc: rest });
+    if (!segList.length) return "";
+    const lastIdx = segList.length - 1;
+    let acc = 0;
+    const parts = segList.map((s, si) => {
+      const y0 = Y(acc), y1 = Y(acc + s.kc); acc += s.kc;
+      const segTop = y1 + 1, segH = Math.max(1, (y0 - y1) - 2);   // 2px surface inset = spacer
+      return si === lastIdx
+        ? `<path class="cal-seg ${s.cls}" d="${topRoundRect(x, segTop, bw, segH, 4)}"></path>`
+        : `<rect class="cal-seg ${s.cls}" x="${x.toFixed(1)}" y="${segTop.toFixed(1)}" width="${bw.toFixed(1)}" height="${segH.toFixed(1)}"></rect>`;
+    }).join("");
+    return `<g>${parts}</g>`;
+  }).join("");
+
+  const showEvery = n > 20 ? 5 : n > 10 ? 2 : 1;
+  const xlab = days.map((d, i) => {
+    const cx = padL + slot * i + slot / 2, isToday = i === n - 1;
+    return `<text class="axis" x="${cx.toFixed(1)}" y="${h - 12}" text-anchor="middle"${isToday ? ' style="fill:var(--glow);font-weight:600"' : ""}>${d.dow}</text>`
+      + ((i % showEvery === 0 || isToday) ? `<text class="axis" x="${cx.toFixed(1)}" y="${h - 2}" text-anchor="middle" style="font-size:8px">${d.key.slice(8)}</text>` : "");
+  }).join("");
+
+  el.innerHTML = `<svg viewBox="0 0 ${w} ${h}" role="img" aria-label="daily calorie intake with protein/carbs/fat breakdown, last ${n} days">
+    ${grid}${cols}${xlab}
+    <rect class="cal-hl" x="0" y="${padT}" width="${(bw + 6).toFixed(1)}" height="${ih}" rx="4" visibility="hidden"></rect>
+  </svg>`;
+
+  const svg = el.firstElementChild, hl = svg.querySelector(".cal-hl");
+  svg.onpointermove = e => {
+    const r = svg.getBoundingClientRect();
+    const px = (e.clientX - r.left) * (w / r.width);
+    const i = Math.max(0, Math.min(n - 1, Math.floor((px - padL) / slot)));
+    const d = days[i], cx = padL + slot * i + slot / 2;
+    hl.setAttribute("x", (cx - (bw + 6) / 2).toFixed(1));
+    hl.setAttribute("visibility", "visible");
+    const total = Math.round(d.kcal) || 0, denom = calHeightOf(d) || 1;
+    const rows = [["Protein", d.protein, 4], ["Carbs", d.carbs, 4], ["Fat", d.fat, 9]]
+      .filter(([, g]) => g > 0)
+      .map(([lab, g, per]) => `<div class="t-cat">${lab}: <b style="color:var(--ink)">${Math.round(g)} g</b> · ${Math.round(g * per)} kcal · ${Math.round(g * per / denom * 100)}%</div>`)
+      .join("");
+    const rest = Math.max(0, d.kcal - (d.protein * 4 + d.carbs * 4 + d.fat * 9));
+    tipShow(`<b>${total ? total.toLocaleString() + " kcal" : "no meals logged"}</b>`
+      + `<div class="t-cat">${fmtD(d.at)}</div>${rows}`
+      + (rest > 1 ? `<div class="t-cat">Other: ${Math.round(rest)} kcal (no macros)</div>` : ""),
+      e.clientX, e.clientY);
+  };
+  svg.onpointerleave = () => { hl.setAttribute("visibility", "hidden"); tipHide(); };
+}
+
+// The calorie chart draws at real pixel width; redraw it (and the trend charts) on resize.
+addEventListener("resize", (() => {
+  let t;
+  return () => {
+    clearTimeout(t);
+    t = setTimeout(() => { if (_calMeals && !$("cal-card")?.hidden) drawCalCard(); }, 160);
+  };
+})());
 
 function renderSettings(s) {
   if (!s) return;
@@ -2366,7 +2495,7 @@ async function boot() {
     renderTiles(sys, brain.totals);
     // System tab
     renderRank(sys.rank, sys.awards);
-    renderAwards(sys.awards);
+    renderAwards(sys.awards, sys.award_catalog);
     renderBattle(sys.quest_history);
     renderPerception(brain.perception);
     $("perc-refresh").onclick = refreshPerception;

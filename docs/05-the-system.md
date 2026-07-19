@@ -185,8 +185,11 @@ nightly reckoning, a research job spawned (`agent.js`), an application drafted
 (rank + goals + today's quests + the newest 60 activity rows) and renders it as a
 "what I'm doing to hit your goals" feed — so the owner can see, at a glance, what the
 agent has actually done for them. The dashboard (`worker/public/index.html`) opens on the
-**System** tab (rank hero, Awards, the Battle record, the honest "How I see you" read,
-quests, goals, activity, applications). Other tabs: **Plans**, **Brain** (an explorable
+**System** tab, laid out as an overview that reads top→bottom as *status → momentum →
+today's action → tracking → recognition → reflection → lever*: the **rank hero**, the
+**Battle record** heatmap, a balanced two-column **Today's quests | Goals** row, the
+full-width **"what I'm doing to hit your goals"** work log, **Metrics** charts, the
+**Awards** ladder, the honest **"How I see you"** read, and **Applications**. Other tabs: **Plans**, **Brain** (an explorable
 knowledge graph — zoom/pan/click-to-focus/legend-filter/search — plus memories,
 conversation, reminders), **Life**, **Research**, **Senses**, and **Settings** (persona,
 teach, profile documents). The old Opportunities tab was removed.
@@ -344,7 +347,14 @@ totals and rank promotions land the moment they're crossed). Manual trigger:
   value in the window, quoted in the award detail).
 
 Awards surface on the **System tab** (Awards card + 🏆 count in the rank hero) and via the
-`list_awards` agent tool.
+`list_awards` agent tool. The Awards card shows the **whole ladder**, not just what's
+earned: `awardCatalog` (`system.js`) merges the earned rows with every still-locked
+threshold — reusing the same `STREAK_AWARDS`/`CLEARED_AWARDS`/`RANKS` constants
+`checkAwards` grants from, so catalogue and grant logic can't drift — and returns each with
+`current`/`target`/`pct`. `/api/system` ships it as `award_catalog`; the dashboard renders
+earned badges in colour, then locked ones dimmed with a progress bar toward their threshold.
+This is why the card stays visible from day one (before the first award, it's a to-do
+ladder) instead of hiding until something crosses.
 
 **Metrics & trends.** Two logs feed the dashboard's charts. **Body/habit** numbers (weight,
 waist, sleep, runs, workouts) go to `log_health` (the `health` table) and chart on the

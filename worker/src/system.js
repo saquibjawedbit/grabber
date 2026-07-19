@@ -151,6 +151,51 @@ export async function listAwards(env) {
   return { count: results.length, awards: results };
 }
 
+// The full award ladder — earned AND still-locked — so the dashboard can show what's
+// coming and how close the owner is, instead of an empty card until the first threshold
+// crosses. Built from the SAME STREAK_AWARDS/CLEARED_AWARDS/RANKS constants checkAwards
+// grants from, so the catalogue and the grant logic can never drift. Per-goal awards
+// (goal-achieved, 30-day transformation) are dynamic, so they appear here only once
+// earned — pulled from the awards table and merged in.
+export async function awardCatalog(env) {
+  const st = await getSystemState(env);
+  const cleared = (await env.DB.prepare("SELECT COUNT(*) AS n FROM quests WHERE status = 'done'").first()).n;
+  const msDone = (await env.DB.prepare("SELECT COUNT(*) AS n FROM milestones WHERE status = 'done'").first()).n;
+  const bestStreak = Math.max(st.streak, st.streak_best);
+  const earned = new Map((await listAwards(env)).awards.map(a => [a.key, a]));
+
+  const item = (key, icon, title, current, target) => {
+    const got = earned.get(key);
+    return {
+      key, icon: got?.icon || icon, title: got?.title || title,
+      detail: got?.detail || null,
+      earned: !!got, awarded_at: got?.awarded_at || null, xp: got?.xp ?? null,
+      current: Math.min(current, target), target,
+      pct: Math.max(0, Math.min(1, target ? current / target : 0)),
+    };
+  };
+
+  const catalog = [
+    ...STREAK_AWARDS.map(([days, title, icon]) => item(`streak_${days}`, icon, title, bestStreak, days)),
+    ...CLEARED_AWARDS.map(([n, title]) => item(`cleared_${n}`, "⚔️", title, cleared, n)),
+    ...[...RANKS].reverse().map(([min, r]) =>
+      item(`rank_${r}`, "🎖️", `Rank Up: ${r}-Rank Hunter`, st.level, min)),
+    item("first_milestone", "🏁", "First Gate Cleared", msDone, 1),
+  ];
+  // Dynamic per-goal awards live only in the table — surface any that were earned.
+  const known = new Set(catalog.map(c => c.key));
+  for (const [key, a] of earned) {
+    if (known.has(key)) continue;
+    catalog.push({ key, icon: a.icon, title: a.title, detail: a.detail,
+      earned: true, awarded_at: a.awarded_at, xp: a.xp, current: 1, target: 1, pct: 1 });
+  }
+  // Earned first (newest first), then locked ordered by how close they are.
+  catalog.sort((a, b) =>
+    (b.earned - a.earned) ||
+    (a.earned ? String(b.awarded_at).localeCompare(String(a.awarded_at)) : b.pct - a.pct));
+  return { count: catalog.length, earned: [...earned].length, catalog };
+}
+
 async function grantAward(env, tg, { key, title, icon = "🏆", detail = null, goal_id = null, xp = 25 }) {
   const r = await env.DB.prepare(
     "INSERT OR IGNORE INTO awards (key, title, icon, detail, goal_id, xp, awarded_at) VALUES (?,?,?,?,?,?,?)")
