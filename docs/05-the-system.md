@@ -200,17 +200,31 @@ conversation), **Life**, **Research**, **Senses**, and **Settings** (persona,
 teach, profile documents). The old Opportunities tab was removed.
 
 **The look is the Solo Leveling status window, dark-only** — dark is the medium, not a
-mode. Design tokens at the top of `index.html`: deep-navy void (`--page #05080f`), panel
-navy (`--surface #0a101d`), luminous edge glow (`--glow #6fc3ff` — text/borders ONLY),
-and **validated chart mark colors** (azure `--seq #3987e5`, crimson `--critical #e0485c`,
-gold `#c98500` — checked with the dataviz palette validator against the dark surface;
-red↔green was rejected for deutan-CVD, which is why "cleared" charts in azure, not
-green). The signature element: every card/plan/tile is a **System window** — luminous
-1px border with corner ticks (layered gradients on `::before`), HUD typography
-(Rajdhani, uppercase, letterspaced) for headings/numbers/chips, a hexagonal level
-emblem, and an angular clipped XP bar with a shimmer sweep (disabled under
-`prefers-reduced-motion`). Responsive: sticky scrollable tab bar, tiles/grids collapse
-at 640px/420px, verified at phone width.
+mode. Design tokens at the top of `index.html`: deep-navy void (`--page #05080f`),
+translucent glass panels (`--panel rgba(12,18,32,.62)` + `backdrop-filter: blur(3px)`),
+luminous edge glow (`--glow #6fc3ff` — text/borders ONLY), and **chart mark colors**
+azure `--seq #3987e5`, crimson `--critical #e5546b`, gold `--gold #e8b64a`. The triad
+was checked with the dataviz palette validator against the dark surface and later
+brightened for the HUD refresh; red↔green stays rejected for deutan-CVD, which is why
+"cleared" charts in azure, not green. Ten `--cat-*` hues stay spread around the wheel so
+the knowledge graph's categories never collide.
+
+Three type families carry the HUD: **Rajdhani** (uppercase, letterspaced) for headings,
+numbers and the rank, **Space Grotesk** for body copy, **IBM Plex Mono** for every
+small-caps read-out — chips, timestamps, tile labels, axis ticks.
+
+The signature element: every card/plan/tile is a **System window** — a squared glass
+plate with 2px bracketed corners (layered gradients on `::before`), materialising once
+on load with a blur-in (`mat`). Nothing in a window is rounded; the only curves left are
+status dots and graph nodes. Lists render as stacks of discrete slabs rather than
+hairline-separated rows. Other signatures: a hexagonal level emblem, an XP bar seated in
+a 2px socket with a shimmer sweep, a blinking `<persona> ONLINE` liveness chip in the
+header, KPI tiles that carry a second line (the rank a level earns you, the best a
+streak is chasing), and two fixed backdrop layers — a cold glow off the top edge and a
+survey grid that drifts one 64px cell every 20s, masked out below the fold. The token
+gate is the System's summons screen: one pulsing lit window in the dark. All animation
+is disabled under `prefers-reduced-motion`. Responsive: sticky scrollable tab bar,
+tiles/grids collapse at 640px/420px, verified at phone width.
 
 **Battle record** (`renderBattle`): one stacked column per IST day over the last 14 —
 cleared (azure) under failed (crimson), 2px gaps, weekday axis with today highlighted,

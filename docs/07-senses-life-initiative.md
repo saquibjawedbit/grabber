@@ -95,8 +95,10 @@ flowchart TB
   `public/index.html`): one column per IST day, height = the day's kcal, each slice a
   macro's *calories* (protein 4/g, carbs 4/g, fat 9/g, + any macro-less kcal on top);
   a kcal y-axis, a **7d/14d/30d** range toggle, and a per-bar hover tooltip breaking the
-  day into protein/carbs/fat grams + kcal + % share. Colours are the validated triad
-  `#3987e5`/`#c98500`/`#9085e9` (worst adjacent CVD ΔE 17.3 on the card surface).
+  day into protein/carbs/fat grams + kcal + % share. Colours are the azure/gold/indigo
+  triad `#3987e5`/`#e8b64a`/`#9085e9` — validated at `#3987e5`/`#c98500`/`#9085e9`
+  (worst adjacent CVD ΔE 17.3 on the card surface), with the HUD refresh only
+  brightening the gold, which moves it further from both neighbours.
 - **People.** `log_interaction` (`:315`) updates `last_contact` and resets status to
   active; `get_people {cold:true}` (`:338`) surfaces threads quiet ≥10 days, measured from
   `last_contact` **or** `created_at` — so someone you added and never followed up with

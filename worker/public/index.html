@@ -4,7 +4,7 @@
 <title>The System — grabber</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@500;600;700&display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Rajdhani:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&family=IBM+Plex+Mono:wght@400;500;600&display=swap" rel="stylesheet">
 <style>
   /* ---- The System: a Solo Leveling status window. Dark is not a mode, it's the
      medium — the System only renders in darkness. Chart mark colors (--seq,
@@ -13,110 +13,192 @@
   :root {
     color-scheme: dark;
     --page:        #05080f;
-    --surface:     #0a101d;
-    --surface-2:   #0d1524;
-    --ink:         #e8f1ff;
-    --ink-2:       #9fb3d1;
-    --muted:       #5d7194;
-    --grid:        #14203a;
+    /* Panels are translucent glass over the drifting grid, not opaque plates —
+       the grid has to read *through* the window for the HUD illusion to hold. */
+    --panel:       rgba(12,18,32,0.62);
+    --surface:     rgba(12,18,32,0.62);
+    --surface-2:   rgba(8,12,24,0.5);
+    --ink:         #e8eefb;
+    --ink-2:       #c3cbe6;
+    --muted:       #7f8bad;
+    --grid:        rgba(90,160,255,0.12);
     --baseline:    #24344f;
-    --border:      rgba(90,160,255,0.16);
+    --border:      color-mix(in srgb, var(--seq) 26%, transparent);
     --glow:        #6fc3ff;           /* UI luminescence — text & edges only */
     --glow-soft:   rgba(111,195,255,0.35);
     --seq:         #3987e5;           /* validated mark azure */
     --seq-fill:    rgba(57,135,229,0.16);
-    --critical:    #e0485c;           /* validated mark crimson */
-    --good:        #33c07a;
-    --warn:        #c98500;
-    --gold:        #c98500;
+    --critical:    #e5546b;           /* validated mark crimson */
+    --good:        #3ecf8e;
+    --warn:        #e8b64a;
+    --gold:        #e8b64a;
     --accent:      #3987e5;
     --font-hud:    "Rajdhani", ui-monospace, "Segoe UI", sans-serif;
+    --font-body:   "Space Grotesk", system-ui, -apple-system, sans-serif;
+    --font-mono:   "IBM Plex Mono", ui-monospace, Menlo, monospace;
+    /* Ten graph categories, ten separable hues. Retuned to the brighter HUD palette
+       but kept spread around the wheel — `fact` and `identity` collide the moment
+       both drift toward azure, and the graph is unreadable when they do. */
     --cat-identity:   #3987e5;
-    --cat-preference: #35a552;
+    --cat-preference: #6fc3ff;
     --cat-skill:      #d55181;
-    --cat-goal:       #c98500;
-    --cat-project:    #199e70;
-    --cat-contact:    #d95926;
+    --cat-goal:       #e8b64a;
+    --cat-project:    #3ecf8e;
+    --cat-contact:    #c07de8;
     --cat-health:     #2ab3b3;
-    --cat-money:      #b3a04a;
+    --cat-money:      #e5546b;
     --cat-fact:       #9085e9;
-    --cat-doc:        #5d7194;
+    --cat-doc:        #7f8bad;
   }
   * { box-sizing: border-box; }
+  html { scroll-behavior: smooth; }
   body {
     margin: 0; color: var(--ink);
-    background:
-      radial-gradient(90rem 40rem at 70% -10%, rgba(57,135,229,0.08), transparent 60%),
-      radial-gradient(60rem 30rem at 0% 110%, rgba(111,195,255,0.04), transparent 55%),
-      var(--page);
-    background-attachment: fixed;
-    font-family: system-ui, -apple-system, "Segoe UI", sans-serif;
+    background: var(--page);
+    font-family: var(--font-body);
     line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
   }
-  main { max-width: 1060px; margin: 0 auto; padding: 1.2rem 1rem 4rem; }
-  header { display: flex; align-items: baseline; gap: 0.8rem; flex-wrap: wrap; margin: 0.6rem 0 1rem; }
+  /* Two fixed backdrop layers, behind everything and inert to the pointer: a cold
+     glow bleeding down from the top edge, and a survey grid that drifts one cell
+     every 20s. The mask fades the grid out below the fold so long pages don't
+     turn into graph paper. */
+  body::before, body::after { content: ""; position: fixed; inset: 0; z-index: 0; pointer-events: none; }
+  body::before {
+    background: radial-gradient(1100px 700px at 50% -15%, color-mix(in srgb, var(--seq) 16%, transparent), transparent 70%);
+  }
+  body::after {
+    opacity: 0.35;
+    background-image:
+      linear-gradient(color-mix(in srgb, var(--seq) 12%, transparent) 1px, transparent 1px),
+      linear-gradient(90deg, color-mix(in srgb, var(--seq) 12%, transparent) 1px, transparent 1px);
+    background-size: 64px 64px, 64px 64px;
+    mask-image: radial-gradient(130% 100% at 50% 0%, #000 35%, transparent 80%);
+    -webkit-mask-image: radial-gradient(130% 100% at 50% 0%, #000 35%, transparent 80%);
+  }
+  @media (prefers-reduced-motion: no-preference) {
+    body::after { animation: grid-drift 20s linear infinite; }
+    @keyframes grid-drift { to { background-position: 64px 64px, 64px 64px; } }
+  }
+  .mono { font-family: var(--font-mono); }
+  ::-webkit-scrollbar { width: 8px; height: 8px; }
+  ::-webkit-scrollbar-thumb { background: color-mix(in srgb, var(--seq) 40%, transparent); border-radius: 8px; }
+  main { position: relative; z-index: 1; max-width: 1180px; margin: 0 auto; padding: 1.2rem 1rem 5rem; }
+  header { display: flex; align-items: center; justify-content: space-between; gap: 0.8rem;
+    flex-wrap: wrap; padding: 1.4rem 0.25rem 0.9rem; }
   h1 {
-    font-family: var(--font-hud); font-size: 1.35rem; font-weight: 700; margin: 0;
-    text-transform: uppercase; letter-spacing: 0.22em;
-    text-shadow: 0 0 18px var(--glow-soft);
+    font-family: var(--font-hud); font-size: clamp(1.35rem, 4vw, 1.9rem); font-weight: 700; margin: 0;
+    text-transform: uppercase; letter-spacing: 0.28em;
+    text-shadow: 0 0 26px color-mix(in srgb, var(--seq) 55%, transparent);
   }
   h1 .h1-glyph { color: var(--glow); }
-  h2 {
-    font-family: var(--font-hud); font-size: 0.92rem; font-weight: 600; margin: 0 0 0.75rem;
-    text-transform: uppercase; letter-spacing: 0.14em; color: var(--ink);
+  header .sub { display: block; margin-top: 0.15rem; font-family: var(--font-mono);
+    font-size: 0.69rem; letter-spacing: 0.1em; }
+  /* Liveness tell: the System is a process, not a page. */
+  .online {
+    display: inline-flex; align-items: center; gap: 0.45rem; font-family: var(--font-mono);
+    font-size: 0.69rem; color: var(--muted); letter-spacing: 0.14em;
+    border: 1px solid color-mix(in srgb, var(--seq) 25%, transparent); padding: 0.44rem 0.7rem;
   }
-  h2::before { content: "◈ "; color: var(--glow); font-size: 0.8em; }
-  .sub { color: var(--muted); font-size: 0.85rem; font-weight: 400; font-family: system-ui, sans-serif;
+  .online::before {
+    content: ""; width: 7px; height: 7px; border-radius: 50%;
+    background: var(--good); box-shadow: 0 0 8px var(--good);
+  }
+  @media (prefers-reduced-motion: no-preference) {
+    .online::before { animation: blink 2s steps(1) infinite; }
+    @keyframes blink { 0%, 49% { opacity: 1; } 50%, 100% { opacity: 0.15; } }
+  }
+  h2 {
+    font-family: var(--font-hud); font-size: 1.05rem; font-weight: 700; margin: 0 0 0.75rem;
+    text-transform: uppercase; letter-spacing: 0.08em; color: var(--ink);
+  }
+  .sub { color: var(--muted); font-size: 0.8rem; font-weight: 400; font-family: var(--font-mono);
     text-transform: none; letter-spacing: normal; }
-  /* The signature: every panel is a System window — luminous edge, corner ticks. */
+  /* The signature: every panel is a System window — a squared glass plate with
+     bracketed corners. No radii anywhere; the HUD is drafted, not rounded. */
   .card, .plan, .tile {
     position: relative;
-    background: linear-gradient(180deg, rgba(111,195,255,0.045), rgba(111,195,255,0) 26%), var(--surface);
-    border: 1px solid var(--border); border-radius: 6px;
-    box-shadow: 0 0 0 1px rgba(0,0,0,0.35), 0 8px 30px rgba(0,0,0,0.35);
+    background: var(--panel);
+    border: 1px solid color-mix(in srgb, var(--seq) 30%, transparent); border-radius: 0;
+    box-shadow: 0 20px 60px -40px var(--seq);
+    backdrop-filter: blur(3px);
   }
   .card::before, .plan::before, .tile::before {
-    content: ""; position: absolute; inset: -1px; pointer-events: none; border-radius: 6px;
+    content: ""; position: absolute; inset: -1px; pointer-events: none;
     background:
-      linear-gradient(var(--glow), var(--glow)) 0 0 / 16px 2px,
-      linear-gradient(var(--glow), var(--glow)) 0 0 / 2px 16px,
-      linear-gradient(var(--glow), var(--glow)) 100% 0 / 16px 2px,
-      linear-gradient(var(--glow), var(--glow)) 100% 0 / 2px 16px,
-      linear-gradient(var(--glow), var(--glow)) 0 100% / 16px 2px,
-      linear-gradient(var(--glow), var(--glow)) 0 100% / 2px 16px,
-      linear-gradient(var(--glow), var(--glow)) 100% 100% / 16px 2px,
-      linear-gradient(var(--glow), var(--glow)) 100% 100% / 2px 16px;
+      linear-gradient(var(--seq), var(--seq)) 0 0 / 12px 2px,
+      linear-gradient(var(--seq), var(--seq)) 0 0 / 2px 12px,
+      linear-gradient(var(--seq), var(--seq)) 100% 0 / 12px 2px,
+      linear-gradient(var(--seq), var(--seq)) 100% 0 / 2px 12px,
+      linear-gradient(var(--seq), var(--seq)) 0 100% / 12px 2px,
+      linear-gradient(var(--seq), var(--seq)) 0 100% / 2px 12px,
+      linear-gradient(var(--seq), var(--seq)) 100% 100% / 12px 2px,
+      linear-gradient(var(--seq), var(--seq)) 100% 100% / 2px 12px;
     background-repeat: no-repeat;
-    opacity: 0.38;
   }
-  .card { padding: 1rem 1.1rem; margin: 0 0 1rem; }
+  .card { padding: 1.15rem 1.15rem; margin: 0 0 1rem; }
+  /* The System draws with a ruler. Everything inside a window is squared off; the
+     only curves left are status dots and graph nodes, which have to read as points.
+     Kept as one rule rather than 30 edits so the intent stays legible. */
+  .chip, .badge, .pace, .auto-chip, .conf-chip, .goal-actions button, .seg, .metric-card,
+  .mchart-none, .plan-actions button, .pm, .plan-ctx textarea, .plan-why, .plan-today,
+  .plan-qs, .award, .award-claim, .graph-search, .graph-wrap, .graph-hint, .graph-detail,
+  .legend span, input[type="datetime-local"], pre.draft, .pack, #tip, .bar,
+  .battle-day, .battle-seg, .battle-empty, .battle-legend i,
+  .prog-track, .prog-fill, .tl-track, .tl-fill, .award-prog .apt, .award-prog .apf { border-radius: 0; }
+  /* Sub-panels: the recessed slabs a window holds its rows in. */
+  .metric-card, .plan-today, .plan-qs, .plan-why {
+    background: var(--surface-2); border-color: color-mix(in srgb, var(--seq) 16%, transparent);
+  }
   .tabs {
-    display: flex; gap: 0.15rem; margin: 0 0 1rem; border-bottom: 1px solid var(--grid);
+    display: flex; gap: 0.38rem; margin: 0 -1rem 1.4rem; padding: 0.5rem 1rem;
     overflow-x: auto; scrollbar-width: none; flex-wrap: nowrap;
-    position: sticky; top: 0; z-index: 5;
-    background: color-mix(in srgb, var(--page) 88%, transparent);
-    backdrop-filter: blur(8px);
+    position: sticky; top: 0; z-index: 20;
+    background: color-mix(in srgb, var(--page) 78%, transparent);
+    backdrop-filter: blur(10px);
+    border-bottom: 1px solid color-mix(in srgb, var(--seq) 18%, transparent);
   }
   .tabs::-webkit-scrollbar { display: none; }
   .tabs button {
-    background: none; border: 0; border-bottom: 2px solid transparent; margin-bottom: -1px;
-    padding: 0.55rem 0.85rem; font-family: var(--font-hud); font-size: 0.86rem; font-weight: 600;
+    background: transparent; border: 1px solid color-mix(in srgb, var(--seq) 20%, transparent);
+    padding: 0.55rem 1rem; font-family: var(--font-hud); font-size: 0.88rem; font-weight: 600;
     text-transform: uppercase; letter-spacing: 0.1em; color: var(--muted);
-    cursor: pointer; white-space: nowrap;
+    cursor: pointer; white-space: nowrap; transition: all 0.15s;
   }
-  .tabs button:hover { color: var(--ink); }
-  .tabs button.on { color: var(--glow); border-bottom-color: var(--glow); text-shadow: 0 0 12px var(--glow-soft); }
+  .tabs button:hover { color: var(--ink); border-color: color-mix(in srgb, var(--seq) 45%, transparent); }
+  .tabs button.on {
+    color: #fff; border-color: var(--seq);
+    background: color-mix(in srgb, var(--seq) 18%, transparent);
+    text-shadow: 0 0 12px var(--glow-soft);
+  }
   section[data-panel] { display: grid; gap: 0; }
   section[data-panel][hidden] { display: none; }
-  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 0.75rem; margin-bottom: 1rem; }
-  .tile { padding: 0.75rem 0.95rem; }
-  .tile .v { font-family: var(--font-hud); font-size: 1.8rem; font-weight: 700; letter-spacing: 0.01em; font-variant-numeric: tabular-nums; }
-  .tile .k { color: var(--muted); font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.12em; font-family: var(--font-hud); font-weight: 600; }
-  /* Panels materialize once on load. */
+  .tiles { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 0.62rem; margin-bottom: 1rem; }
+  .tile { padding: 0.8rem 0.88rem; overflow: hidden; }
+  /* Tiles wear a lighter version of the window chrome — one bracket at each of the
+     two opposing corners, so a row of six doesn't turn into 24 blinking marks. */
+  .tile::before {
+    background:
+      linear-gradient(var(--seq), var(--seq)) 0 0 / 10px 2px,
+      linear-gradient(var(--seq), var(--seq)) 0 0 / 2px 10px,
+      linear-gradient(var(--seq), var(--seq)) 100% 100% / 10px 2px,
+      linear-gradient(var(--seq), var(--seq)) 100% 100% / 2px 10px;
+    background-repeat: no-repeat;
+  }
+  .tile .k { color: var(--muted); font-size: 0.62rem; text-transform: uppercase; letter-spacing: 0.16em;
+    font-family: var(--font-mono); }
+  .tile .v { font-family: var(--font-hud); font-size: 1.9rem; font-weight: 700; line-height: 1.05;
+    margin-top: 0.15rem; font-variant-numeric: tabular-nums;
+    text-shadow: 0 0 16px color-mix(in srgb, var(--seq) 45%, transparent); }
+  .tile .s { font-family: var(--font-mono); font-size: 0.66rem; color: var(--seq); letter-spacing: 0.06em; }
+  /* Panels materialize once on load — blur-in, the way a System window resolves. */
   @media (prefers-reduced-motion: no-preference) {
-    .card, .plan, .tile { animation: sys-in 0.45s ease both; }
+    .card, .plan, .tile { animation: mat 0.55s ease both; }
     .card:nth-child(2) { animation-delay: 0.05s; } .card:nth-child(3) { animation-delay: 0.1s; }
-    @keyframes sys-in { from { opacity: 0; transform: translateY(7px); } to { opacity: 1; transform: none; } }
+    @keyframes mat {
+      from { opacity: 0; transform: translateY(10px) scale(0.99); filter: blur(6px); }
+      to   { opacity: 1; transform: none; filter: none; }
+    }
   }
   .cols { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; align-items: start; }
   @media (max-width: 800px) { .cols { grid-template-columns: 1fr; } }
@@ -171,7 +253,8 @@
   .perc-head h2 { margin: 0; }
   .ghost-btn {
     background: none; border: 1px solid var(--border); color: var(--ink-2);
-    border-radius: 7px; padding: 0.35rem 0.8rem; font: inherit; font-size: 0.82rem; cursor: pointer;
+    border-radius: 0; padding: 0.4rem 0.85rem; font-family: var(--font-hud); font-weight: 600;
+    font-size: 0.85rem; letter-spacing: 0.06em; cursor: pointer;
   }
   .ghost-btn:hover:not(:disabled) { color: var(--ink); border-color: var(--baseline); }
   .ghost-btn:disabled { opacity: 0.5; cursor: default; }
@@ -184,9 +267,10 @@
   .teach-hint { color: var(--ink-2); font-size: 0.86rem; margin: 0.2rem 0 0.7rem; max-width: 62ch; }
   textarea, input[type="text"], input:not([type]), select {
     width: 100%; font: inherit; font-size: 0.9rem; color: var(--ink);
-    background: var(--page); border: 1px solid var(--border); border-radius: 7px;
-    padding: 0.5rem 0.6rem; resize: vertical;
+    background: rgba(0,0,0,0.35); border: 1px solid var(--border); border-radius: 0;
+    padding: 0.55rem 0.65rem; resize: vertical;
   }
+  input::placeholder, textarea::placeholder { color: var(--muted); }
   textarea:focus-visible, input:focus-visible, select:focus-visible,
   .ghost-btn:focus-visible, button:focus-visible {
     outline: 2px solid var(--seq); outline-offset: 1px;
@@ -345,7 +429,10 @@
   .plan-qs .pq-row input { flex: 1; min-width: 0; }
   .plan-qs .pq-save { margin-top: 0.55rem; }
   .award-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 0.6rem; }
-  .award { display: flex; gap: 0.55rem; align-items: flex-start; border: 1px solid var(--border); border-radius: 10px; padding: 0.55rem 0.65rem; }
+  /* An earned award is the one warm thing on a cold screen — gold edge, gold wash. */
+  .award { display: flex; gap: 0.55rem; align-items: flex-start; padding: 0.7rem 0.75rem;
+    border: 1px solid color-mix(in srgb, var(--gold) 30%, transparent);
+    background: linear-gradient(180deg, color-mix(in srgb, var(--gold) 8%, transparent), var(--surface-2)); }
   .award-ic { font-size: 1.3rem; line-height: 1; }
   .award-body { display: grid; gap: 0.1rem; }
   .award-t { font-size: 0.82rem; font-weight: 650; }
@@ -362,7 +449,8 @@
     color: var(--good); font-variant-numeric: tabular-nums; }
   /* Locked awards: shown dimmed with a progress bar toward the threshold, so the ladder
      is visible before the first badge is earned. */
-  .award.locked { opacity: 0.9; border-style: dashed; }
+  .award.locked { opacity: 0.75; border: 1px dashed color-mix(in srgb, var(--muted) 40%, transparent);
+    background: rgba(8,12,24,0.35); }
   .award.locked .award-ic { filter: grayscale(1); opacity: 0.5; }
   .award.locked .award-t { color: var(--ink-2); }
   .award-prog { display: flex; align-items: center; gap: 0.45rem; margin-top: 0.15rem; }
@@ -426,6 +514,7 @@
   /* ---------- Knowledge graph (explorable) ---------- */
   .graph-card { padding-bottom: 0.8rem; }
   .graph-tools { display: flex; gap: 0.4rem; align-items: center; }
+  .graph-tools button { white-space: nowrap; }
   .graph-search {
     width: 12rem; max-width: 42vw; font-size: 0.82rem; padding: 0.35rem 0.6rem;
     border-radius: 7px; border: 1px solid var(--border); background: var(--page); color: var(--ink);
@@ -454,52 +543,63 @@
   .legend span.off { opacity: 0.32; text-decoration: line-through; }
 
   /* ---------- The System status window ---------- */
-  .rank-card {
-    background:
-      radial-gradient(120% 160% at 100% 0%, rgba(57,135,229,0.14), transparent 60%),
-      linear-gradient(180deg, rgba(111,195,255,0.05), transparent 30%),
-      var(--surface);
-    border-color: color-mix(in srgb, var(--glow) 30%, var(--border));
-  }
-  .rank-card::before { opacity: 0.7; }
-  .rank-top { display: flex; align-items: center; gap: 1.2rem; flex-wrap: wrap; }
+  .rank-card { padding: 1.35rem 1.25rem; }
+  .rank-top { display: flex; align-items: center; gap: 1.25rem; flex-wrap: wrap; }
+  /* The level crest: a hexagon, because that is what the System stamps you with. */
   .rank-lv {
-    flex: none; display: grid; place-items: center; width: 4.6rem; height: 5.1rem;
+    flex: none; display: grid; place-items: center; align-content: center; width: 6.5rem; height: 7.25rem;
     clip-path: polygon(50% 0%, 100% 25%, 100% 75%, 50% 100%, 0% 75%, 0% 25%);
-    background: linear-gradient(160deg, color-mix(in srgb, var(--glow) 45%, var(--seq)), var(--seq) 70%);
-    color: #fff; line-height: 1;
-    filter: drop-shadow(0 0 14px var(--glow-soft));
+    background: linear-gradient(160deg, color-mix(in srgb, var(--seq) 30%, transparent), rgba(0,0,0,0.3));
+    line-height: 1; box-shadow: 0 0 40px -10px var(--seq);
   }
-  .rank-lv .n { font-family: var(--font-hud); font-size: 2.1rem; font-weight: 700; }
-  .rank-lv .l { font-family: var(--font-hud); font-size: 0.56rem; text-transform: uppercase; letter-spacing: 0.18em; opacity: 0.9; }
-  .rank-main { flex: 1; min-width: 12rem; }
-  .rank-xp-row { display: flex; justify-content: space-between; align-items: baseline; gap: 0.6rem; flex-wrap: wrap;
-    font-family: var(--font-hud); font-size: 0.85rem; font-weight: 600; letter-spacing: 0.05em; color: var(--ink-2); margin-bottom: 0.35rem; }
-  .rank-title { color: var(--glow); text-transform: uppercase; letter-spacing: 0.16em; font-weight: 700;
-    text-shadow: 0 0 12px var(--glow-soft); }
-  .xp-track { position: relative; height: 12px; border: 1px solid var(--baseline); background: var(--grid);
-    clip-path: polygon(6px 0, 100% 0, calc(100% - 6px) 100%, 0 100%); overflow: hidden; }
-  .xp-fill { position: relative; height: 100%; background: linear-gradient(90deg, var(--seq), var(--glow)); transition: width 0.6s ease; }
+  .rank-lv .l { font-family: var(--font-mono); font-size: 0.62rem; letter-spacing: 0.2em; color: var(--glow); }
+  .rank-lv .n { font-family: var(--font-hud); font-size: 2.9rem; font-weight: 700; line-height: 0.9;
+    text-shadow: 0 0 20px var(--seq); }
+  .rank-main { flex: 1; min-width: 15rem; }
+  .rank-name-row { display: flex; align-items: center; gap: 0.6rem; flex-wrap: wrap; }
+  .rank-title { font-family: var(--font-hud); font-size: 1.35rem; font-weight: 700; letter-spacing: 0.05em;
+    color: var(--ink); text-transform: uppercase; }
+  .trophies { font-family: var(--font-mono); font-size: 0.7rem; color: var(--gold);
+    border: 1px solid color-mix(in srgb, var(--gold) 45%, transparent); padding: 0.15rem 0.5rem; }
+  .rank-xp-row { display: flex; gap: 0.6rem 1rem; flex-wrap: wrap;
+    font-family: var(--font-mono); font-size: 0.76rem; color: var(--muted); margin: 0.55rem 0 0.4rem; }
+  .rank-xp-row b { color: var(--ink); font-weight: 600; }
+  /* The XP bar is a lit channel inside a socket — 2px of housing all round. */
+  .xp-track { position: relative; height: 16px; border: 1px solid color-mix(in srgb, var(--seq) 45%, transparent);
+    background: rgba(0,0,0,0.4); padding: 2px; overflow: hidden; }
+  .xp-fill { position: relative; height: 100%; overflow: hidden; transition: width 0.6s ease;
+    background: linear-gradient(90deg, color-mix(in srgb, var(--seq) 70%, #fff), var(--seq));
+    box-shadow: 0 0 14px var(--seq); }
   @media (prefers-reduced-motion: no-preference) {
-    .xp-fill::after { content: ""; position: absolute; inset: 0; transform: translateX(-100%);
-      background: linear-gradient(90deg, transparent, rgba(255,255,255,0.35), transparent);
-      animation: xp-sweep 3.2s ease-in-out infinite; }
-    @keyframes xp-sweep { 0%, 55% { transform: translateX(-100%); } 85%, 100% { transform: translateX(100%); } }
+    .xp-fill::after { content: ""; position: absolute; inset: 0; width: 30%;
+      background: linear-gradient(100deg, transparent, rgba(255,255,255,0.7), transparent);
+      animation: shine 2.6s ease-in-out infinite; }
+    @keyframes shine { 0% { transform: translateX(-120%); } 100% { transform: translateX(320%); } }
   }
-  .rank-streak { flex: none; text-align: center; padding-left: 0.4rem; }
-  .rank-streak .s { font-family: var(--font-hud); font-size: 1.8rem; font-weight: 700; font-variant-numeric: tabular-nums; }
-  .rank-streak .k { font-family: var(--font-hud); font-size: 0.62rem; font-weight: 600; color: var(--muted); text-transform: uppercase; letter-spacing: 0.14em; }
+  /* Streak and best sit under the XP channel — they measure the same thing the bar
+     does, so they belong to it rather than floating off to the card's edge. */
+  .rank-foot { display: flex; gap: 1.2rem; margin-top: 0.75rem; }
+  .rank-streak { display: inline-flex; align-items: baseline; gap: 0.4rem; }
+  .rank-streak .s { font-family: var(--font-hud); font-size: 1.35rem; font-weight: 700; font-variant-numeric: tabular-nums; }
+  .rank-streak .s.dim { color: var(--muted); }
+  .rank-streak .k { font-family: var(--font-mono); font-size: 0.6rem; color: var(--muted);
+    text-transform: uppercase; letter-spacing: 0.12em; }
 
   .quest { display: flex; align-items: flex-start; gap: 0.6rem; padding: 0.55rem 0; border-bottom: 1px solid var(--grid); font-size: 0.9rem; }
   .quest:last-child { border-bottom: 0; }
   .quest .qt { flex: 1; min-width: 0; }
   .quest.done .qt { color: var(--muted); text-decoration: line-through; }
-  .qpill { flex: none; font-size: 0.68rem; font-weight: 600; padding: 0.05rem 0.5rem; border-radius: 999px; text-transform: uppercase; letter-spacing: 0.04em; }
-  .qpill.issued { color: var(--ink-2); border: 1px solid var(--border); }
-  .qpill.doing  { color: var(--seq); border: 1px solid color-mix(in srgb, var(--seq) 40%, var(--border)); }
-  .qpill.done   { color: #fff; background: var(--good); }
-  .qpill.failed { color: #fff; background: var(--critical); }
-  .qpill.skipped{ color: var(--muted); border: 1px solid var(--border); }
+  /* Quest state reads by hue, not by fill: an outlined chip tinted to its status,
+     so a cleared quest doesn't shout louder than the quest text beside it. */
+  .qpill { flex: none; font-size: 0.62rem; padding: 0.15rem 0.45rem; }
+  .qpill.issued { color: var(--muted); border: 1px solid color-mix(in srgb, var(--muted) 40%, transparent); }
+  .qpill.doing  { color: var(--seq); border: 1px solid color-mix(in srgb, var(--seq) 45%, transparent);
+    background: color-mix(in srgb, var(--seq) 12%, transparent); }
+  .qpill.done   { color: var(--good); border: 1px solid color-mix(in srgb, var(--good) 45%, transparent);
+    background: color-mix(in srgb, var(--good) 12%, transparent); }
+  .qpill.failed { color: var(--critical); border: 1px solid color-mix(in srgb, var(--critical) 45%, transparent);
+    background: color-mix(in srgb, var(--critical) 12%, transparent); }
+  .qpill.skipped{ color: var(--muted); border: 1px solid color-mix(in srgb, var(--muted) 30%, transparent); }
   .quest .qx { flex: none; font-size: 0.74rem; color: var(--muted); font-variant-numeric: tabular-nums; padding-top: 0.1rem; }
 
   .goal { padding: 0.55rem 0; border-bottom: 1px solid var(--grid); }
@@ -518,18 +618,66 @@
   .act .ad { color: var(--ink-2); font-size: 0.8rem; white-space: pre-wrap; margin-top: 0.15rem; }
   #activity { max-height: 30rem; overflow-y: auto; }
 
-  #gate { max-width: 380px; margin: 4rem auto; text-align: center; padding: 0 1rem; }
-  #gate h1 { margin-bottom: 0.5rem; }
-  #gate input { width: 100%; padding: 0.55rem 0.8rem; border-radius: 6px; border: 1px solid var(--baseline);
-    background: var(--surface); color: var(--ink); font-size: 0.95rem; }
-  #gate button { margin-top: 0.7rem; padding: 0.5rem 1.4rem; border-radius: 6px; border: 1px solid var(--border);
-    background: var(--seq); color: #fff; font-size: 0.9rem; cursor: pointer; font-family: var(--font-hud);
-    font-weight: 600; letter-spacing: 0.08em; text-transform: uppercase; }
+  /* The gate is the System's own summons screen: one lit window in the dark, no
+     chrome around it. It breathes so an unattended tab still looks alive. */
+  #gate {
+    position: fixed; inset: 0; z-index: 50; display: grid; place-items: center; padding: 1.5rem;
+    background: radial-gradient(800px 500px at 50% 30%, color-mix(in srgb, var(--seq) 14%, transparent), var(--page) 70%);
+  }
+  #gate[hidden] { display: none; }
+  .gate-panel {
+    width: 100%; max-width: 400px; text-align: center; padding: 2.4rem 1.9rem;
+    background: var(--panel); border: 1px solid color-mix(in srgb, var(--seq) 45%, transparent);
+    box-shadow: 0 30px 90px -40px var(--seq); backdrop-filter: blur(6px);
+  }
+  .gate-glyph { font-size: 2.1rem; color: var(--seq); text-shadow: 0 0 24px var(--seq); margin-bottom: 0.4rem; }
+  #gate h1 { font-size: 1.35rem; letter-spacing: 0.4em; }
+  .gate-hint { font-family: var(--font-mono); font-size: 0.74rem; color: var(--muted);
+    letter-spacing: 0.14em; text-transform: uppercase; margin: 0.5rem 0 1.4rem; }
+  #gate input {
+    width: 100%; padding: 0.8rem; border-radius: 0; border: 1px solid color-mix(in srgb, var(--seq) 40%, transparent);
+    background: rgba(0,0,0,0.4); color: var(--ink); font-family: var(--font-mono); font-size: 0.95rem;
+    text-align: center; letter-spacing: 0.3em; margin-bottom: 0.85rem;
+  }
+  #gate button {
+    width: 100%; padding: 0.8rem; border-radius: 0; border: 0;
+    background: var(--seq); color: var(--page); font-size: 0.95rem; cursor: pointer;
+    font-family: var(--font-hud); font-weight: 700; letter-spacing: 0.12em; text-transform: uppercase;
+    box-shadow: 0 0 30px -6px var(--seq);
+  }
+  .gate-foot { font-family: var(--font-mono); font-size: 0.64rem; color: var(--muted);
+    letter-spacing: 0.08em; margin: 1rem 0 0; }
+  @media (prefers-reduced-motion: no-preference) {
+    .gate-panel { animation: glow-pulse 4s ease-in-out infinite; }
+    @keyframes glow-pulse {
+      0%, 100% { box-shadow: 0 0 22px -8px var(--seq); }
+      50%      { box-shadow: 0 0 40px -4px var(--seq); }
+    }
+  }
 
   /* ---------- HUD detailing ---------- */
   .ghost-btn:hover:not(:disabled) { color: var(--glow); border-color: var(--glow-soft); box-shadow: 0 0 10px rgba(111,195,255,0.12); }
-  .qpill, .pace, .auto-chip, .conf-chip, .badge, .chip { font-family: var(--font-hud); font-weight: 600; }
-  .seg button.on { background: var(--seq); color: #fff; text-shadow: 0 0 8px rgba(255,255,255,0.4); }
+  /* Every small-caps token in the HUD is monospaced and squared — chips are
+     read-outs stamped onto the window, not soft UI pills. */
+  .qpill, .pace, .auto-chip, .conf-chip, .badge, .chip, .award-claim, .award-prog .apn {
+    font-family: var(--font-mono); font-weight: 500; border-radius: 0;
+    text-transform: uppercase; letter-spacing: 0.08em;
+  }
+  .seg { border-radius: 0; }
+  .seg button.on { background: var(--seq); color: var(--page); font-weight: 700; text-shadow: none; }
+  /* Every list in a window is a stack of discrete slabs, not hairline-separated rows —
+     each quest, reminder, goal and log entry is an object the System can act on, and the
+     chrome says so. Declared after the per-list rules above so it also overrides their
+     `:last-child { border-bottom: 0 }`, which would otherwise open the last slab. */
+  #quests, #reminders, #goals, #activity, #memories, #people, .pm-list {
+    display: flex; flex-direction: column; gap: 0.5rem;
+  }
+  .quest, .rem, .goal, .act, .mem, .pm, .rem-editing,
+  .quest:last-child, .rem:last-child, .goal:last-child, .act:last-child, .mem:last-child, .pm:last-child {
+    border: 1px solid color-mix(in srgb, var(--seq) 14%, transparent);
+    background: var(--surface-2); padding: 0.62rem 0.72rem;
+  }
+  .pm-list { margin-top: 0.7rem; border-top: 0; }
   .prog-fill, .tl-fill { background: linear-gradient(90deg, var(--seq), var(--glow)); }
   .tl-dot.active { background: var(--glow); box-shadow: 0 0 8px var(--glow-soft); }
   ::selection { background: rgba(57,135,229,0.4); }
@@ -553,8 +701,10 @@
 
   /* ---------- Calorie tracker: one stacked SVG column per day; column height = the
      day's kcal, each slice a macro's CALORIES (protein 4/g, carbs 4/g, fat 9/g).
-     Triad #3987e5/#c98500/#9085e9 validated on the card surface (worst adjacent
-     CVD ΔE 17.3); a 2px geometry inset is the segment spacer. ---------- */
+     Triad azure/gold/indigo (#3987e5 / #e8b64a / #9085e9) — the original
+     #3987e5/#c98500/#9085e9 was validated on the card surface at worst-adjacent
+     CVD ΔE 17.3, and the HUD refresh only brightened the gold, which moves it
+     further from both neighbours. A 2px geometry inset is the segment spacer. ---------- */
   .cal-box { margin: 0.6rem 0 0.4rem; }
   .cal-box svg { display: block; width: 100%; height: auto; cursor: crosshair; }
   .cal-box .axis { fill: var(--muted); font-size: 10px; font-variant-numeric: tabular-nums; }
@@ -593,8 +743,11 @@
 
 <main id="app" hidden>
   <header>
-    <h1><span class="h1-glyph">⟨</span> The System <span class="h1-glyph">⟩</span></h1>
-    <span class="sub" id="asof"></span>
+    <div>
+      <h1><span class="h1-glyph">⟨</span> The System <span class="h1-glyph">⟩</span></h1>
+      <span class="sub" id="asof"></span>
+    </div>
+    <span class="online" id="online">ONLINE</span>
   </header>
 
   <div class="tiles" id="tiles"></div>
@@ -873,11 +1026,15 @@
 </main>
 
 <div id="gate" hidden>
-  <h1>⚔️ The System</h1>
-  <p class="sub">Enter the dashboard token (DASH_TOKEN)</p>
-  <input id="tok" type="password" autocomplete="off">
-  <br><button id="go">Open</button>
-  <p class="sub" id="gate-err"></p>
+  <div class="gate-panel">
+    <div class="gate-glyph">◈</div>
+    <h1>The System</h1>
+    <p class="gate-hint">Enter access token</p>
+    <input id="tok" type="password" autocomplete="off" placeholder="············">
+    <button id="go">Authenticate</button>
+    <p class="gate-foot">Token is stored only in this browser</p>
+    <p class="sub" id="gate-err"></p>
+  </div>
 </div>
 
 <div id="tip"></div>
@@ -922,17 +1079,20 @@ function tipHide() { $("tip").style.display = "none"; }
 function renderTiles(sys, t) {
   const q = sys.quests_today || [];
   const doneToday = q.filter(x => x.status === "done").length;
-  const activeGoals = (sys.goals || []).filter(g => g.status === "active").length;
+  const active = (sys.goals || []).filter(g => g.status === "active");
+  const onTrack = active.filter(g => g.pace === "ahead" || g.pace === "on-track").length;
+  // Each tile carries a second line so the number has a scale to sit against —
+  // a level means nothing without the rank it earns you.
   const tiles = [
-    [`Lv ${sys.rank.level}`, "level"],
-    [sys.rank.streak, "day streak"],
-    [activeGoals, "active goals"],
-    [q.length ? `${doneToday}/${q.length}` : "0", "quests today"],
-    [t.memories, "memories"],
-    [t.research, "deep dives"],
+    [sys.rank.level, "level", sys.rank.title],
+    [sys.rank.streak, "day streak", `best ${sys.rank.streak_best ?? 0}`],
+    [active.length, "active goals", active.length ? `${onTrack} on track` : "none set"],
+    [q.length ? `${doneToday}/${q.length}` : "0", "quests today", "cleared"],
+    [t.memories, "memories", "facts"],
+    [t.research, "deep dives", "run"],
   ];
-  $("tiles").innerHTML = tiles.map(([v, k]) =>
-    `<div class="tile"><div class="v">${v ?? 0}</div><div class="k">${k}</div></div>`).join("");
+  $("tiles").innerHTML = tiles.map(([v, k, s]) =>
+    `<div class="tile"><div class="k">${k}</div><div class="v">${v ?? 0}</div><div class="s">${esc(s || "")}</div></div>`).join("");
 }
 
 function renderMemories(mems) {
@@ -993,6 +1153,8 @@ function renderPersona(p) {
   $("persona-voice").value = p.voice || "";
   $("persona-name").placeholder = p.default_name || "Intelly";
   $("persona-state").textContent = p.custom ? "custom" : "default";
+  // The header's liveness chip speaks in the persona's own name.
+  $("online").textContent = `${agentName.toUpperCase()} ONLINE`;
   $("persona-reset").disabled = !p.custom;
   say("persona-status", "");
   $("persona-form").onsubmit = async e => {
@@ -1368,18 +1530,18 @@ function renderRank(r, awards) {
   const pct = Math.max(3, Math.round((into / Math.max(1, into + toNext)) * 100));
   $("rank-card").innerHTML = `
     <div class="rank-top">
-      <div class="rank-lv"><span class="n">${r.level}</span><span class="l">level</span></div>
+      <div class="rank-lv"><span class="l">LV</span><span class="n">${r.level}</span></div>
       <div class="rank-main">
-        <div class="rank-xp-row"><span class="rank-title">${esc(r.title || "")}</span><span><b>${r.xp}</b> XP</span><span>${toNext} to level ${r.level + 1}</span>${awards?.length ? `<span>🏆 ${awards.length}</span>` : ""}</div>
+        <div class="rank-name-row">
+          <span class="rank-title">${esc(r.title || "")}</span>
+          ${awards?.length ? `<span class="trophies">🏆 ${awards.length} ${awards.length === 1 ? "award" : "awards"}</span>` : ""}
+        </div>
+        <div class="rank-xp-row"><span><b>${r.xp}</b> XP</span><span>${toNext} to level ${r.level + 1}</span></div>
         <div class="xp-track"><div class="xp-fill" style="width:${pct}%"></div></div>
-      </div>
-      <div class="rank-streak">
-        <div class="s">${r.streak}${r.streak ? " 🔥" : ""}</div>
-        <div class="k">day streak</div>
-      </div>
-      <div class="rank-streak">
-        <div class="s">${r.streak_best}</div>
-        <div class="k">best</div>
+        <div class="rank-foot">
+          <span class="rank-streak"><b class="s">${r.streak ? "🔥 " : ""}${r.streak}</b><span class="k">day streak</span></span>
+          <span class="rank-streak"><b class="s dim">${r.streak_best}</b><span class="k">best</span></span>
+        </div>
       </div>
     </div>`;
 }
