@@ -10,22 +10,23 @@
 
 import { extractJson, llm } from "./llm.js";
 import { getPersona } from "./persona.js";
+import { uid } from "./tenant.js";
 
 async function gather(env) {
-  const q = sql => env.DB.prepare(sql).first();
-  const all = sql => env.DB.prepare(sql).all();
+  const q = (sql, ...b) => env.DB.prepare(sql).bind(...b).first();
+  const all = (sql, ...b) => env.DB.prepare(sql).bind(...b).all();
   const [mems, bio, skills, resume, summary, docs, counts, apps, money, weight, people] =
     await Promise.all([
-      all("SELECT category, fact FROM memories ORDER BY category, id LIMIT 120"),
-      q("SELECT content FROM profile WHERE key = 'bio'"),
-      q("SELECT length(content) AS n FROM profile WHERE key = 'skills'"),
-      q("SELECT length(content) AS n FROM profile WHERE key = 'resume'"),
-      q("SELECT content FROM profile WHERE key = 'conversation_summary'"),
-      all("SELECT key FROM profile WHERE key LIKE 'doc:%'"),
-      q(`SELECT (SELECT COUNT(*) FROM memories) AS memories,
+      all("SELECT category, fact FROM memories WHERE user_id = ? ORDER BY category, id LIMIT 120", uid(env)),
+      q("SELECT content FROM profile WHERE user_id = ? AND key = 'bio'", uid(env)),
+      q("SELECT length(content) AS n FROM profile WHERE user_id = ? AND key = 'skills'", uid(env)),
+      q("SELECT length(content) AS n FROM profile WHERE user_id = ? AND key = 'resume'", uid(env)),
+      q("SELECT content FROM profile WHERE user_id = ? AND key = 'conversation_summary'", uid(env)),
+      all("SELECT key FROM profile WHERE user_id = ? AND key LIKE 'doc:%'", uid(env)),
+      q(`SELECT (SELECT COUNT(*) FROM memories WHERE user_id = ?) AS memories,
                 (SELECT COUNT(*) FROM watchers WHERE active = 1) AS watchers,
-                (SELECT COUNT(*) FROM research WHERE status = 'done') AS research_done,
-                (SELECT COUNT(*) FROM chat_history) AS chat_rows`),
+                (SELECT COUNT(*) FROM research WHERE user_id = ? AND status = 'done') AS research_done,
+                (SELECT COUNT(*) FROM chat_history WHERE user_id = ?) AS chat_rows`, uid(env), uid(env), uid(env)),
       q(`SELECT (SELECT COUNT(*) FROM alerts WHERE sent_at IS NOT NULL) AS alerted,
                 (SELECT COUNT(DISTINCT alert_id) FROM outcomes WHERE action = 'applied') AS applied,
                 (SELECT COUNT(DISTINCT alert_id) FROM outcomes WHERE action = 'won') AS won,
@@ -33,16 +34,16 @@ async function gather(env) {
                 (SELECT COUNT(*) FROM alerts a WHERE a.sent_at IS NOT NULL
                    AND NOT EXISTS (SELECT 1 FROM outcomes o WHERE o.alert_id = a.id
                                    AND o.action IN ('applied','skipped'))) AS pending_unacted`),
-      q(`SELECT (SELECT COALESCE(SUM(balance),0) FROM accounts WHERE kind != 'card') AS cash,
-                (SELECT COALESCE(SUM(value),0) FROM holdings WHERE kind = 'asset') AS assets,
-                (SELECT COUNT(*) FROM transactions) AS tx,
+      q(`SELECT (SELECT COALESCE(SUM(balance),0) FROM accounts WHERE user_id = ? AND kind != 'card') AS cash,
+                (SELECT COALESCE(SUM(value),0) FROM holdings WHERE user_id = ? AND kind = 'asset') AS assets,
+                (SELECT COUNT(*) FROM transactions WHERE user_id = ?) AS tx,
                 (SELECT COALESCE(SUM(amount),0) FROM transactions
-                   WHERE direction = 'debit' AND datetime(at) >= datetime('now','-30 days')) AS spend_30d`),
-      q("SELECT value, at FROM health WHERE metric = 'weight' AND value IS NOT NULL ORDER BY at DESC LIMIT 1"),
+                   WHERE user_id = ? AND direction = 'debit' AND datetime(at) >= datetime('now','-30 days')) AS spend_30d`, uid(env), uid(env), uid(env), uid(env)),
+      q("SELECT value, at FROM health WHERE user_id = ? AND metric = 'weight' AND value IS NOT NULL ORDER BY at DESC LIMIT 1", uid(env)),
       q(`SELECT COUNT(*) AS total,
                 SUM(CASE WHEN julianday('now') - julianday(COALESCE(last_contact, created_at)) >= 14
                     THEN 1 ELSE 0 END) AS cold
-         FROM people WHERE status != 'closed'`),
+         FROM people WHERE user_id = ? AND status != 'closed'`, uid(env)),
     ]);
   return {
     memories: mems.results,
@@ -114,14 +115,14 @@ export async function generatePerception(env) {
     at: new Date().toISOString(),
   };
   await env.DB.prepare(
-    `INSERT INTO state (key, value, updated_at) VALUES ('perception', ?, ?)
-     ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`)
-    .bind(JSON.stringify(clean), clean.at).run();
+    `INSERT INTO state (key, value, updated_at, user_id) VALUES ('perception', ?, ?, ?)
+     ON CONFLICT(user_id, key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`)
+    .bind(JSON.stringify(clean), clean.at, uid(env)).run();
   return clean;
 }
 
 export async function getPerception(env) {
-  const row = await env.DB.prepare("SELECT value FROM state WHERE key = 'perception'").first();
+  const row = await env.DB.prepare("SELECT value FROM state WHERE user_id = ? AND key = 'perception'").bind(uid(env)).first();
   if (!row) return null;
   try { return JSON.parse(row.value); } catch { return null; }
 }

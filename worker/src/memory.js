@@ -11,6 +11,7 @@
 // cannot lose a race against the reply.
 
 import { extractJson, llm } from "./llm.js";
+import { uid } from "./tenant.js";
 
 const EMBED_MODEL = "@cf/baai/bge-small-en-v1.5";  // 384-dim, plenty for short facts
 const RECALL_K = 14;            // memories retrieved per turn (by meaning, not recency)
@@ -60,7 +61,7 @@ export function dot(a, b) {
 async function vecQuery(env, f32, topK) {
   if (!env.VECTORIZE) return null;
   try {
-    const r = await env.VECTORIZE.query(Array.from(f32), { topK });
+    const r = await env.VECTORIZE.query(Array.from(f32), { topK, namespace: String(uid(env)) });
     // Zero matches means an EMPTY index (query returns nearest-K regardless of
     // similarity), i.e. deployed-but-not-backfilled. Treat as unavailable so the
     // scan answers instead of "no memories" / "no duplicate".
@@ -74,7 +75,7 @@ async function vecQuery(env, f32, topK) {
 async function vecUpsert(env, id, f32, category) {
   if (!env.VECTORIZE) return false;
   try {
-    await env.VECTORIZE.upsert([{ id: String(id), values: Array.from(f32), metadata: { category: category || "fact" } }]);
+    await env.VECTORIZE.upsert([{ id: String(id), values: Array.from(f32), namespace: String(uid(env)), metadata: { category: category || "fact" } }]);
     return true;
   } catch (e) {
     console.log("vectorize upsert failed:", String(e).slice(0, 120));
@@ -104,11 +105,11 @@ export async function recallMemories(env, query) {
     // Un-embedded rows (embedding failed, or saved before v3) always ride along —
     // better a slightly bigger prompt than silently forgetting a fact.
     const { results: plain } = await env.DB.prepare(
-      "SELECT id, category, fact FROM memories WHERE embedding IS NULL ORDER BY id DESC LIMIT 12").all();
+      "SELECT id, category, fact FROM memories WHERE user_id = ? AND embedding IS NULL ORDER BY id DESC LIMIT 12").bind(uid(env)).all();
     const ids = matches.map(m => Number(m.id)).filter(Boolean);
     const { results } = await env.DB.prepare(
-      `SELECT id, category, fact FROM memories WHERE id IN (${ids.map(() => "?").join(",")})`)
-      .bind(...ids).all();
+      `SELECT id, category, fact FROM memories WHERE user_id = ? AND id IN (${ids.map(() => "?").join(",")})`)
+      .bind(uid(env), ...ids).all();
     const byId = new Map(results.map(r => [r.id, r]));
     const rows = matches.map(m => byId.has(Number(m.id))
       ? { ...byId.get(Number(m.id)), sim: m.score } : null).filter(Boolean);
@@ -118,7 +119,7 @@ export async function recallMemories(env, query) {
   // Fallback: the pre-Vectorize scan — newest 400 rows, cosine in JS. Correct but
   // capped; only reached when the index is unbound, empty, or erroring.
   const { results } = await env.DB.prepare(
-    "SELECT id, category, fact, embedding FROM memories ORDER BY id DESC LIMIT 400").all();
+    "SELECT id, category, fact, embedding FROM memories WHERE user_id = ? ORDER BY id DESC LIMIT 400").bind(uid(env)).all();
   if (!results.length) return [];
   const embedded = results.filter(r => r.embedding);
   const plain = results.filter(r => !r.embedding).slice(0, 12);
@@ -136,9 +137,9 @@ export async function recallMemories(env, query) {
 export async function embedMemory(env, id, fact) {
   try {
     const v = await embed(env, fact);
-    await env.DB.prepare("UPDATE memories SET embedding = ? WHERE id = ?")
-      .bind(packVec(v), id).run();
-    const row = await env.DB.prepare("SELECT category FROM memories WHERE id = ?").bind(id).first();
+    await env.DB.prepare("UPDATE memories SET embedding = ? WHERE id = ? AND user_id = ?")
+      .bind(packVec(v), id, uid(env)).run();
+    const row = await env.DB.prepare("SELECT category FROM memories WHERE id = ? AND user_id = ?").bind(id, uid(env)).first();
     await vecUpsert(env, id, v, row?.category);   // mirror into the index (fail-soft)
     return true;
   } catch (e) {
@@ -174,14 +175,14 @@ export async function saveMemory(env, fact, category, { source = "chat", context
       for (const m of matches) {
         const id = Number(m.id);
         if (skip.has(id) || m.score < NEAR_DUPLICATE) continue;
-        const row = await env.DB.prepare("SELECT id, fact FROM memories WHERE id = ?").bind(id).first();
+        const row = await env.DB.prepare("SELECT id, fact FROM memories WHERE id = ? AND user_id = ?").bind(id, uid(env)).first();
         if (row) return { id: row.id, status: "duplicate", of: row.fact };
         await vecDelete(env, [id]);   // stale: in the index but gone from D1 — clean it up
       }
     } else {
       // Fallback scan — capped at the newest 400; only when the index can't answer.
       const { results } = await env.DB.prepare(
-        "SELECT id, fact, embedding FROM memories WHERE embedding IS NOT NULL ORDER BY id DESC LIMIT 400").all();
+        "SELECT id, fact, embedding FROM memories WHERE user_id = ? AND embedding IS NOT NULL ORDER BY id DESC LIMIT 400").bind(uid(env)).all();
       for (const r of results) {
         if (skip.has(r.id)) continue;
         let sim = -1;
@@ -193,19 +194,19 @@ export async function saveMemory(env, fact, category, { source = "chat", context
 
   const now = new Date().toISOString();
   const row = await env.DB.prepare(
-    `INSERT INTO memories (fact, category, created_at, updated_at, source, context)
-     VALUES (?, ?, ?, ?, ?, ?) RETURNING id`)
-    .bind(fact, category, now, now, source, context ? String(context).slice(0, 600) : null).first();
+    `INSERT INTO memories (fact, category, created_at, updated_at, source, context, user_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING id`)
+    .bind(fact, category, now, now, source, context ? String(context).slice(0, 600) : null, uid(env)).first();
   if (vec) {
-    await env.DB.prepare("UPDATE memories SET embedding = ? WHERE id = ?")
-      .bind(packVec(vec), row.id).run();
+    await env.DB.prepare("UPDATE memories SET embedding = ? WHERE id = ? AND user_id = ?")
+      .bind(packVec(vec), row.id, uid(env)).run();
     await vecUpsert(env, row.id, vec, category);   // mirror into the index (fail-soft)
   }
   return { id: row.id, status: "saved" };
 }
 
 export async function forgetMemory(env, id) {
-  const r = await env.DB.prepare("DELETE FROM memories WHERE id = ?").bind(Number(id)).run();
+  const r = await env.DB.prepare("DELETE FROM memories WHERE id = ? AND user_id = ?").bind(Number(id), uid(env)).run();
   // Keep the index in step — reconcile()'s merge/forget flows both route through
   // here and saveMemory, so the two stores can't drift apart in normal operation.
   if (r.meta.changes > 0) await vecDelete(env, [Number(id)]);
@@ -335,7 +336,7 @@ Output ONLY the JSON:`;
 
 export async function reconcile(env, { dry = false } = {}) {
   const { results } = await env.DB.prepare(
-    "SELECT id, category, fact FROM memories ORDER BY id ASC LIMIT 200").all();
+    "SELECT id, category, fact FROM memories WHERE user_id = ? ORDER BY id ASC LIMIT 200").bind(uid(env)).all();
   if (results.length < 2) return { fixes: [], dry };
   const { text } = await llm(env, RECONCILE_PROMPT.replace("{memories}",
     results.map(r => `- [#${r.id}|${r.category}] ${r.fact}`).join("\n")));
@@ -375,7 +376,7 @@ export async function reconcile(env, { dry = false } = {}) {
 
 export async function backfill(env, { limit = 60, dry = false } = {}) {
   const { results } = await env.DB.prepare(
-    "SELECT id, role, content, at FROM chat_history ORDER BY id ASC LIMIT ?").bind(limit * 2).all();
+    "SELECT id, role, content, at FROM chat_history WHERE user_id = ? ORDER BY id ASC LIMIT ?").bind(uid(env), limit * 2).all();
   // Walk user->assistant pairs, the same unit extract() sees live.
   const pairs = [];
   for (let i = 0; i < results.length; i++) {

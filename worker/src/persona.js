@@ -16,6 +16,8 @@
 // ignores the voice, because "what do you actually think of me" is worthless if
 // the person asking picked the tone of the answer.
 
+import { uid } from "./tenant.js";
+
 const KEY = "persona";
 
 export const DEFAULT_PERSONA = {
@@ -32,7 +34,7 @@ export const VOICE_MAX = 1500;
 
 export async function getPersona(env) {
   try {
-    const row = await env.DB.prepare("SELECT value FROM state WHERE key = ?").bind(KEY).first();
+    const row = await env.DB.prepare("SELECT value FROM state WHERE user_id = ? AND key = ?").bind(uid(env), KEY).first();
     if (!row?.value) return { ...DEFAULT_PERSONA, custom: false };
     const p = JSON.parse(row.value);
     return {
@@ -53,14 +55,14 @@ export async function setPersona(env, { name, voice }) {
     voice: clean(voice, VOICE_MAX) || DEFAULT_PERSONA.voice,
   };
   await env.DB.prepare(`
-    INSERT INTO state (key, value, updated_at) VALUES (?, ?, ?)
-    ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`)
-    .bind(KEY, JSON.stringify(p), new Date().toISOString()).run();
+    INSERT INTO state (key, value, updated_at, user_id) VALUES (?, ?, ?, ?)
+    ON CONFLICT(user_id, key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`)
+    .bind(KEY, JSON.stringify(p), new Date().toISOString(), uid(env)).run();
   return p;
 }
 
 export async function resetPersona(env) {
-  await env.DB.prepare("DELETE FROM state WHERE key = ?").bind(KEY).run();
+  await env.DB.prepare("DELETE FROM state WHERE user_id = ? AND key = ?").bind(uid(env), KEY).run();
   return { ...DEFAULT_PERSONA, custom: false };
 }
 

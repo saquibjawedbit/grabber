@@ -5,6 +5,7 @@ import { CATEGORIES as MEMORY_CATEGORIES, embedMemory, extract, forgetMemory, re
 import { getPersona, voiceBlock } from "./persona.js";
 import { searchWeb } from "./search.js";
 import { SYSTEM_TOOLS, logActivity } from "./system.js";
+import { uid } from "./tenant.js";
 
 export { llm, embedMemory };
 
@@ -101,11 +102,11 @@ export const TOOLS = {
     run: async (env, args) => {
       if (args.key) {
         const row = await env.DB.prepare(
-          "SELECT content FROM profile WHERE key = ?").bind(String(args.key)).first();
+          "SELECT content FROM profile WHERE user_id = ? AND key = ?").bind(uid(env), String(args.key)).first();
         return row ? { content: row.content.slice(0, 3500) } : { error: "no document with that key" };
       }
       const { results } = await env.DB.prepare(
-        "SELECT key, length(content) AS chars, updated_at FROM profile ORDER BY key").all();
+        "SELECT key, length(content) AS chars, updated_at FROM profile WHERE user_id = ? ORDER BY key").bind(uid(env)).all();
       return { documents: results };
     },
   },
@@ -136,8 +137,8 @@ export const TOOLS = {
     run: async (env, args) => {
       const due = Date.parse(args.due_at || "");
       if (!args.text || isNaN(due)) return { error: 'need text and due_at as UTC ISO like "2026-07-17T04:30:00Z"' };
-      await env.DB.prepare("INSERT INTO reminders (text, due_at, created_at) VALUES (?, ?, ?)")
-        .bind(String(args.text).slice(0, 300), new Date(due).toISOString(), new Date().toISOString()).run();
+      await env.DB.prepare("INSERT INTO reminders (text, due_at, created_at, user_id) VALUES (?, ?, ?, ?)")
+        .bind(String(args.text).slice(0, 300), new Date(due).toISOString(), new Date().toISOString(), uid(env)).run();
       return { ok: true, fires_at_utc: new Date(due).toISOString() };
     },
   },
@@ -146,7 +147,7 @@ export const TOOLS = {
     desc: "open reminders with ids and due times. args: {}",
     run: async (env) => {
       const { results } = await env.DB.prepare(
-        "SELECT id, text, due_at, notified FROM reminders WHERE done = 0 ORDER BY due_at LIMIT 20").all();
+        "SELECT id, text, due_at, notified FROM reminders WHERE user_id = ? AND done = 0 ORDER BY due_at LIMIT 20").bind(uid(env)).all();
       return { count: results.length, reminders: results };
     },
   },
@@ -156,7 +157,7 @@ export const TOOLS = {
     args: { id: { type: "number", required: true } },
     run: async (env, args) => {
       if (!args.id) return { error: "need the reminder id" };
-      const r = await env.DB.prepare("UPDATE reminders SET done = 1 WHERE id = ?").bind(Number(args.id)).run();
+      const r = await env.DB.prepare("UPDATE reminders SET done = 1 WHERE id = ? AND user_id = ?").bind(Number(args.id), uid(env)).run();
       return r.meta.changes ? { ok: true } : { error: "no reminder with that id" };
     },
   },
@@ -174,12 +175,12 @@ export const TOOLS = {
       }
       const depth = ["quick", "normal", "deep"].includes(args.depth) ? args.depth : "normal";
       const running = await env.DB.prepare(
-        "SELECT COUNT(*) AS n FROM research WHERE status IN ('queued','running')").first();
+        "SELECT COUNT(*) AS n FROM research WHERE user_id = ? AND status IN ('queued','running')").bind(uid(env)).first();
       if (running.n >= 3) return { error: "3 research jobs already in flight — wait for one to land" };
 
       const row = await env.DB.prepare(
-        "INSERT INTO research (question, depth, created_at) VALUES (?,?,?) RETURNING id")
-        .bind(question.slice(0, 500), depth, new Date().toISOString()).first();
+        "INSERT INTO research (question, depth, created_at, user_id) VALUES (?,?,?,?) RETURNING id")
+        .bind(question.slice(0, 500), depth, new Date().toISOString(), uid(env)).first();
 
       // Only the job id travels — the question itself is read from D1 by the runner,
       // so nothing personal lands in a public build log.
@@ -195,8 +196,8 @@ export const TOOLS = {
       });
       if (!r.ok) {
         const body = await r.text();
-        await env.DB.prepare("UPDATE research SET status = 'failed', error = ? WHERE id = ?")
-          .bind(`dispatch ${r.status}: ${body.slice(0, 150)}`, row.id).run();
+        await env.DB.prepare("UPDATE research SET status = 'failed', error = ? WHERE id = ? AND user_id = ?")
+          .bind(`dispatch ${r.status}: ${body.slice(0, 150)}`, row.id, uid(env)).run();
         return { error: `could not launch the agent (${r.status})` };
       }
       await logActivity(env, {
@@ -219,9 +220,9 @@ export const TOOLS = {
       const days = Math.min(Math.max(Number(args.days) || 7, 1), 30);
       const { results } = await env.DB.prepare(`
         SELECT title, starts_at, location, attendees FROM events
-        WHERE datetime(starts_at) >= datetime('now')
+        WHERE user_id = ? AND datetime(starts_at) >= datetime('now')
           AND datetime(starts_at) <= datetime('now', '+' || ? || ' days')
-        ORDER BY starts_at LIMIT 20`).bind(days).all();
+        ORDER BY starts_at LIMIT 20`).bind(uid(env), days).all();
       return { count: results.length, events: results,
                note: results.length ? "times are UTC — convert to IST for the owner" : "nothing scheduled" };
     },
@@ -233,13 +234,13 @@ export const TOOLS = {
       const q = String(args.query || "").trim();
       if (!q) {
         const { results } = await env.DB.prepare(
-          "SELECT sender, subject, snippet, kind, received_at FROM emails ORDER BY received_at DESC LIMIT 10").all();
+          "SELECT sender, subject, snippet, kind, received_at FROM emails WHERE user_id = ? ORDER BY received_at DESC LIMIT 10").bind(uid(env)).all();
         return { count: results.length, emails: results };
       }
       const { results } = await env.DB.prepare(
         `SELECT sender, subject, snippet, kind, received_at FROM emails
-         WHERE sender LIKE ? OR subject LIKE ? OR snippet LIKE ?
-         ORDER BY received_at DESC LIMIT 10`).bind(`%${q}%`, `%${q}%`, `%${q}%`).all();
+         WHERE user_id = ? AND (sender LIKE ? OR subject LIKE ? OR snippet LIKE ?)
+         ORDER BY received_at DESC LIMIT 10`).bind(uid(env), `%${q}%`, `%${q}%`, `%${q}%`).all();
       return { count: results.length, emails: results };
     },
   },
@@ -253,8 +254,8 @@ export const TOOLS = {
       const binds = kind ? [kind, days] : [days];
       const { results } = await env.DB.prepare(
         `SELECT app, title, body, kind, amount, direction, counterparty, received_at
-         FROM notifications WHERE ${where} datetime(received_at) >= datetime('now', '-' || ? || ' days')
-         ORDER BY received_at DESC LIMIT 25`).bind(...binds).all();
+         FROM notifications WHERE user_id = ? AND ${where} datetime(received_at) >= datetime('now', '-' || ? || ' days')
+         ORDER BY received_at DESC LIMIT 25`).bind(uid(env), ...binds).all();
       const spend = results.filter(r => r.direction === "debit")
         .reduce((s, r) => s + (r.amount || 0), 0);
       return {
@@ -273,8 +274,8 @@ export const TOOLS = {
       const kind = ["bank", "recruiter", "calendar", "delivery", "other"].includes(args.kind)
         ? args.kind : "other";
       await env.DB.prepare(
-        "INSERT OR REPLACE INTO notify_allow (pattern, kind, created_at) VALUES (?,?,?)")
-        .bind(pattern.slice(0, 60), kind, new Date().toISOString()).run();
+        "INSERT OR REPLACE INTO notify_allow (pattern, kind, created_at, user_id) VALUES (?,?,?,?)")
+        .bind(pattern.slice(0, 60), kind, new Date().toISOString(), uid(env)).run();
       return { ok: true, note: "notifications matching this will now be stored" };
     },
   },
@@ -284,8 +285,8 @@ export const TOOLS = {
     run: async (env, args) => {
       if (args.id) {
         const row = await env.DB.prepare(
-          "SELECT id, question, status, report_md, sources, error, finished_at FROM research WHERE id = ?")
-          .bind(Number(args.id)).first();
+          "SELECT id, question, status, report_md, sources, error, finished_at FROM research WHERE user_id = ? AND id = ?")
+          .bind(uid(env), Number(args.id)).first();
         if (!row) return { error: "no research job with that id" };
         return {
           ...row,
@@ -294,7 +295,7 @@ export const TOOLS = {
         };
       }
       const { results } = await env.DB.prepare(
-        "SELECT id, question, status, created_at, finished_at FROM research ORDER BY id DESC LIMIT 10").all();
+        "SELECT id, question, status, created_at, finished_at FROM research WHERE user_id = ? ORDER BY id DESC LIMIT 10").bind(uid(env)).all();
       return { jobs: results };
     },
   },
@@ -340,21 +341,21 @@ function toolList() {
 async function context(env, userText) {
   const [mem, hist, bio, summary, docs, counts, persona, planQs] = await Promise.all([
     recallMemories(env, userText),   // v3: relevant to THIS message, not simply the newest
-    env.DB.prepare("SELECT role, content FROM chat_history ORDER BY id DESC LIMIT ?")
-      .bind(HISTORY_ACTIVE).all(),
-    env.DB.prepare("SELECT content FROM profile WHERE key = 'bio'").first(),
-    env.DB.prepare("SELECT content FROM profile WHERE key = 'conversation_summary'").first(),
-    env.DB.prepare("SELECT key FROM profile WHERE key NOT IN ('bio','conversation_summary') ORDER BY key LIMIT 30").all(),
+    env.DB.prepare("SELECT role, content FROM chat_history WHERE user_id = ? ORDER BY id DESC LIMIT ?")
+      .bind(uid(env), HISTORY_ACTIVE).all(),
+    env.DB.prepare("SELECT content FROM profile WHERE user_id = ? AND key = 'bio'").bind(uid(env)).first(),
+    env.DB.prepare("SELECT content FROM profile WHERE user_id = ? AND key = 'conversation_summary'").bind(uid(env)).first(),
+    env.DB.prepare("SELECT key FROM profile WHERE user_id = ? AND key NOT IN ('bio','conversation_summary') ORDER BY key LIMIT 30").bind(uid(env)).all(),
     env.DB.prepare(`SELECT
-        (SELECT COUNT(*) FROM memories) AS memories,
-        (SELECT COUNT(*) FROM goals WHERE status = 'active') AS active_goals,
-        (SELECT COUNT(*) FROM quests WHERE status IN ('issued','doing')) AS open_quests,
-        (SELECT COUNT(*) FROM research WHERE status IN ('queued','running')) AS research_running`).first(),
+        (SELECT COUNT(*) FROM memories WHERE user_id = ?) AS memories,
+        (SELECT COUNT(*) FROM goals WHERE user_id = ? AND status = 'active') AS active_goals,
+        (SELECT COUNT(*) FROM quests WHERE user_id = ? AND status IN ('issued','doing')) AS open_quests,
+        (SELECT COUNT(*) FROM research WHERE user_id = ? AND status IN ('queued','running')) AS research_running`).bind(uid(env), uid(env), uid(env), uid(env)).first(),
     getPersona(env),
     // The planner's open questions ride in every chat turn, so a stray "my waist is 71cm"
     // lands as an answer (answer_plan_question) instead of evaporating into small talk.
     env.DB.prepare(`SELECT q.id, q.question, g.title FROM plan_questions q
-      JOIN goals g ON g.id = q.goal_id WHERE q.status = 'open' ORDER BY q.id LIMIT 6`).all()
+      JOIN goals g ON g.id = q.goal_id WHERE q.user_id = ? AND g.user_id = ? AND q.status = 'open' ORDER BY q.id LIMIT 6`).bind(uid(env), uid(env)).all()
       .catch(() => ({ results: [] })),
   ]);
   return {
@@ -502,14 +503,14 @@ export async function runAgent(env, userText, { deadline = Date.now() + 70_000 }
 // ---------- Rolling memory: nothing is forgotten, old chat becomes summary ----------
 
 async function compactHistory(env) {
-  const n = (await env.DB.prepare("SELECT COUNT(*) AS n FROM chat_history").first()).n;
+  const n = (await env.DB.prepare("SELECT COUNT(*) AS n FROM chat_history WHERE user_id = ?").bind(uid(env)).first()).n;
   if (n <= HISTORY_COMPACT_AT) return;
   const { results: old } = await env.DB.prepare(
-    "SELECT id, role, content FROM chat_history ORDER BY id ASC LIMIT ?")
-    .bind(n - HISTORY_ACTIVE).all();
+    "SELECT id, role, content FROM chat_history WHERE user_id = ? ORDER BY id ASC LIMIT ?")
+    .bind(uid(env), n - HISTORY_ACTIVE).all();
   if (!old.length) return;
   const prev = await env.DB.prepare(
-    "SELECT content FROM profile WHERE key = 'conversation_summary'").first();
+    "SELECT content FROM profile WHERE user_id = ? AND key = 'conversation_summary'").bind(uid(env)).first();
   const { text: merged, salvaged } = await llm(env,
     `You maintain the long-term conversation memory of a personal agent. Merge the older messages below into the running summary. Keep every durable fact, decision, owner preference, and open thread; drop pleasantries and resolved back-and-forth. Dense bullet points, under 300 words total.\n\n` +
     `Current summary:\n${prev?.content || "(none)"}\n\n` +
@@ -518,20 +519,20 @@ async function compactHistory(env) {
   const cutoff = old[old.length - 1].id;
   if (merged.trim() && !salvaged) {
     await env.DB.prepare(`
-      INSERT INTO profile (key, content, updated_at) VALUES ('conversation_summary', ?, ?)
-      ON CONFLICT(key) DO UPDATE SET content = excluded.content, updated_at = excluded.updated_at`)
-      .bind(merged.slice(0, 5000), new Date().toISOString()).run();
-    await env.DB.prepare("DELETE FROM chat_history WHERE id <= ?").bind(cutoff).run();
+      INSERT INTO profile (key, content, updated_at, user_id) VALUES ('conversation_summary', ?, ?, ?)
+      ON CONFLICT(user_id, key) DO UPDATE SET content = excluded.content, updated_at = excluded.updated_at`)
+      .bind(merged.slice(0, 5000), new Date().toISOString(), uid(env)).run();
+    await env.DB.prepare("DELETE FROM chat_history WHERE user_id = ? AND id <= ?").bind(uid(env), cutoff).run();
   } else if (n > HISTORY_HARD_CAP) {
     // Summarizer keeps failing — cap raw history rather than grow unbounded.
-    await env.DB.prepare("DELETE FROM chat_history WHERE id <= ?").bind(cutoff).run();
+    await env.DB.prepare("DELETE FROM chat_history WHERE user_id = ? AND id <= ?").bind(uid(env), cutoff).run();
   }
 }
 
 export async function rememberExchange(env, userText, reply) {
   const now = new Date().toISOString();
-  await env.DB.prepare("INSERT INTO chat_history (role, content, at) VALUES ('user', ?, ?), ('assistant', ?, ?)")
-    .bind(userText.slice(0, 1000), now, reply.slice(0, 1000), now).run();
+  await env.DB.prepare("INSERT INTO chat_history (role, content, at, user_id) VALUES ('user', ?, ?, ?), ('assistant', ?, ?, ?)")
+    .bind(userText.slice(0, 1000), now, uid(env), reply.slice(0, 1000), now, uid(env)).run();
   // The reply is already with the owner, so this costs them nothing — and unlike
   // save_memory inside the loop, it never loses a race against answering.
   await extract(env, userText, reply);

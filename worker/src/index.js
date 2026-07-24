@@ -8,8 +8,9 @@ import { adaptPlan, addGoalContext, announceOpenQuestions, answerPlanQuestion, a
 import { classifyInbox, googleConnected, ingestNotification, pollCalendar, remindEvents } from "./senses.js";
 import { processBankNotifications } from "./life.js";
 import { generatePerception, getPerception } from "./perception.js";
+import { scopeEnv, syntheticOwner, resolveTenant, uid, ownerChat, botToken, webhookSecret, encryptSecret, hexToken } from "./tenant.js";
 
-const TG = (env, method) => `https://api.telegram.org/bot${env.TELEGRAM_BOT_TOKEN}/${method}`;
+const TG = (env, method) => `https://api.telegram.org/bot${botToken(env)}/${method}`;
 
 async function tg(env, method, body) {
   const r = await fetch(TG(env, method), {
@@ -75,9 +76,9 @@ async function cmdRank(env) {
 
 async function cmdMemories(env) {
   const { results } = await env.DB.prepare(
-    "SELECT id, category, fact FROM memories ORDER BY category, id DESC LIMIT 60").all();
+    "SELECT id, category, fact FROM memories WHERE user_id = ? ORDER BY category, id DESC LIMIT 60").bind(uid(env)).all();
   const docs = await env.DB.prepare(
-    "SELECT key FROM profile WHERE key != 'conversation_summary' ORDER BY key LIMIT 20").all();
+    "SELECT key FROM profile WHERE user_id = ? AND key != 'conversation_summary' ORDER BY key LIMIT 20").bind(uid(env)).all();
   if (!results.length && !docs.results.length) {
     return "Nothing saved yet. Tell me things worth remembering — preferences, skills, constraints — or send me a file.";
   }
@@ -89,7 +90,7 @@ async function cmdMemories(env) {
 
 async function cmdResearch(env) {
   const { results } = await env.DB.prepare(
-    "SELECT id, question, status, created_at, finished_at FROM research ORDER BY id DESC LIMIT 8").all();
+    "SELECT id, question, status, created_at, finished_at FROM research WHERE user_id = ? ORDER BY id DESC LIMIT 8").bind(uid(env)).all();
   if (!results.length) {
     return "🔍 No deep dives yet.\n\nAsk me something that deserves real digging — <i>\"what does Zepto ask in SDE interviews? go deep\"</i> — and I'll put an agent on it for ten minutes.";
   }
@@ -100,13 +101,25 @@ async function cmdResearch(env) {
 }
 
 function isOwner(chatId, env) {
-  return String(chatId) === String(env.TELEGRAM_CHAT_ID);
+  return String(chatId) === String(ownerChat(env));
 }
 
 async function handleCommand(text, chatId, env) {
   const cmd = text.split(/[\s@]/)[0].toLowerCase();
   let reply;
-  if (cmd === "/start") reply = `Your chat_id is <code>${chatId}</code> — set it as TELEGRAM_CHAT_ID.\n\n${esc(HELP)}`;
+  if (cmd === "/start") {
+    // First /start on a freshly-registered bot binds this chat as the tenant's owner.
+    // Tenant #1 already has owner_chat_id from env, so it falls through to the help text.
+    if (!ownerChat(env)) {
+      await env.DB.prepare("UPDATE users SET owner_chat_id = ? WHERE id = ? AND owner_chat_id IS NULL")
+        .bind(String(chatId), uid(env)).run();
+      reply = `✅ You're connected — I'm your System now.\n\n${esc(HELP)}`;
+    } else if (!isOwner(chatId, env)) {
+      reply = "This bot is already bound to its owner. 🙂";
+    } else {
+      reply = esc(HELP);
+    }
+  }
   else if (!isOwner(chatId, env)) reply = "I'm a personal agent working for one person, and it isn't you. 🙂";
   else if (cmd === "/help") reply = esc(HELP);
   else if (cmd === "/goals") reply = await cmdGoals(env);
@@ -129,7 +142,7 @@ async function download(env, fileId, maxBytes, what) {
   const fi = await tg(env, "getFile", { file_id: fileId });
   const path = fi.result?.file_path;
   if (!path) throw new Error(`Telegram wouldn't hand over the ${what}`);
-  const r = await fetch(`https://api.telegram.org/file/bot${env.TELEGRAM_BOT_TOKEN}/${path}`);
+  const r = await fetch(`https://api.telegram.org/file/bot${botToken(env)}/${path}`);
   if (!r.ok) throw new Error(`${what} download failed (${r.status})`);
   const buf = await r.arrayBuffer();
   if (buf.byteLength > maxBytes) throw new Error(`that ${what} is too big for me`);
@@ -310,16 +323,16 @@ async function ingestDocument(env, chatId, doc) {
     if (!path) {
       reply = "Telegram wouldn't hand me that file — try sending it again.";
     } else {
-      const r = await fetch(`https://api.telegram.org/file/bot${env.TELEGRAM_BOT_TOKEN}/${path}`);
+      const r = await fetch(`https://api.telegram.org/file/bot${botToken(env)}/${path}`);
       const content = (await r.text()).slice(0, 200_000);
       const base = name.toLowerCase().replace(/\.[^.]+$/, "");
       // resume.md / bio.md land on the canonical keys the ranker + agent already read.
       const key = ["resume", "bio", "skills"].includes(base)
         ? base : `doc:${base.replace(/[^a-z0-9._-]+/g, "-")}`;
       await env.DB.prepare(`
-        INSERT INTO profile (key, content, updated_at) VALUES (?, ?, ?)
-        ON CONFLICT(key) DO UPDATE SET content = excluded.content, updated_at = excluded.updated_at`)
-        .bind(key, content, new Date().toISOString()).run();
+        INSERT INTO profile (key, content, updated_at, user_id) VALUES (?, ?, ?, ?)
+        ON CONFLICT(user_id, key) DO UPDATE SET content = excluded.content, updated_at = excluded.updated_at`)
+        .bind(key, content, new Date().toISOString(), uid(env)).run();
       reply = `📄 Saved as <b>${esc(key)}</b> (${content.length} chars). I'll use it in everything — rankings, drafts, and our chats.`;
     }
   }
@@ -338,7 +351,7 @@ async function replyContext(env, msg) {
   if (!r) return "";
   try {
     const q = await env.DB.prepare(
-      "SELECT id, text, status FROM quests WHERE tg_message_id = ?").bind(r.message_id).first();
+      "SELECT id, text, status FROM quests WHERE user_id = ? AND tg_message_id = ?").bind(uid(env), r.message_id).first();
     if (q) return `[replying to quest #${q.id} — "${q.text}" (status: ${q.status})] `;
   } catch { /* fall through to the plain quote */ }
   const quoted = (r.text || r.caption || "").slice(0, 300);
@@ -347,7 +360,9 @@ async function replyContext(env, msg) {
 }
 
 async function handleTelegram(request, env, ctx) {
-  if (request.headers.get("X-Telegram-Bot-Api-Secret-Token") !== env.TG_WEBHOOK_SECRET) {
+  // Per-bot secret now — each tenant's webhook carries its own secret_token, so one bot's
+  // leaked secret can't spoof another. (Tenant #1 = env.TG_WEBHOOK_SECRET via syntheticOwner.)
+  if (request.headers.get("X-Telegram-Bot-Api-Secret-Token") !== webhookSecret(env)) {
     return new Response("forbidden", { status: 403 });
   }
   const update = await request.json();
@@ -358,11 +373,11 @@ async function handleTelegram(request, env, ctx) {
   // writer wins the INSERT, the redelivery finds the key and exits immediately.
   if (update.update_id != null) {
     const seen = await env.DB.prepare(
-      "INSERT OR IGNORE INTO state (key, value, updated_at) VALUES (?, '1', ?)")
-      .bind(`tg_update_${update.update_id}`, new Date().toISOString()).run();
+      "INSERT OR IGNORE INTO state (key, value, updated_at, user_id) VALUES (?, '1', ?, ?)")
+      .bind(`tg_update_${update.update_id}`, new Date().toISOString(), uid(env)).run();
     if (!seen.meta.changes) return new Response("ok");
-    ctx.waitUntil(env.DB.prepare("DELETE FROM state WHERE key LIKE 'tg_update_%' AND updated_at < ?")
-      .bind(new Date(Date.now() - 2 * 86400000).toISOString()).run());
+    ctx.waitUntil(env.DB.prepare("DELETE FROM state WHERE user_id = ? AND key LIKE 'tg_update_%' AND updated_at < ?")
+      .bind(uid(env), new Date(Date.now() - 2 * 86400000).toISOString()).run());
   }
 
   const msg = update.message;
@@ -424,7 +439,7 @@ async function handleTelegram(request, env, ctx) {
 
   const [tag, id, action] = (cb.data || "").split(":");
   if (tag === "r" && id) {
-    await env.DB.prepare("UPDATE reminders SET done = 1 WHERE id = ?").bind(Number(id)).run();
+    await env.DB.prepare("UPDATE reminders SET done = 1 WHERE user_id = ? AND id = ?").bind(uid(env), Number(id)).run();
     await tg(env, "editMessageReplyMarkup", {
       chat_id: cb.message.chat.id, message_id: cb.message.message_id,
       reply_markup: { inline_keyboard: [] },
@@ -468,10 +483,10 @@ async function handleTelegram(request, env, ctx) {
 async function sensesProfile(env) {
   const parts = [];
   for (const key of ["bio", "skills"]) {
-    const row = await env.DB.prepare("SELECT content FROM profile WHERE key = ?").bind(key).first();
+    const row = await env.DB.prepare("SELECT content FROM profile WHERE user_id = ? AND key = ?").bind(uid(env), key).first();
     if (row) parts.push(row.content.slice(0, 1200));
   }
-  const { results: mems } = await env.DB.prepare("SELECT fact FROM memories ORDER BY id LIMIT 30").all();
+  const { results: mems } = await env.DB.prepare("SELECT fact FROM memories WHERE user_id = ? ORDER BY id LIMIT 30").bind(uid(env)).all();
   return [...parts, ...mems.map(m => `- ${m.fact}`)].join("\n") || "(nothing known yet)";
 }
 
@@ -481,7 +496,7 @@ async function runSenses(env) {
   // surface only what's worth interrupting for. No OAuth needed.
   try {
     const pending = await env.DB.prepare(
-      "SELECT COUNT(*) AS n FROM emails WHERE surfaced = 0").first();
+      "SELECT COUNT(*) AS n FROM emails WHERE user_id = ? AND surfaced = 0").bind(uid(env)).first();
     if (pending.n) {
       out.mail = await classifyInbox(env, tg, await sensesProfile(env));
     }
@@ -505,15 +520,15 @@ async function runSenses(env) {
 async function runReminders(env) {
   const { results } = await env.DB.prepare(`
     SELECT id, text FROM reminders
-    WHERE done = 0 AND notified = 0 AND datetime(due_at) <= datetime('now')
-    ORDER BY due_at LIMIT 20`).all();
+    WHERE user_id = ? AND done = 0 AND notified = 0 AND datetime(due_at) <= datetime('now')
+    ORDER BY due_at LIMIT 20`).bind(uid(env)).all();
   for (const r of results) {
     await tg(env, "sendMessage", {
-      chat_id: env.TELEGRAM_CHAT_ID,
+      chat_id: ownerChat(env),
       text: `⏰ Reminder: ${r.text}`,
       reply_markup: { inline_keyboard: [[{ text: "✅ Done", callback_data: `r:${r.id}:done` }]] },
     });
-    await env.DB.prepare("UPDATE reminders SET notified = 1 WHERE id = ?").bind(r.id).run();
+    await env.DB.prepare("UPDATE reminders SET notified = 1 WHERE user_id = ? AND id = ?").bind(uid(env), r.id).run();
   }
 }
 
@@ -540,26 +555,27 @@ async function handleApi(url, env, request, ctx) {
     // Everything the dashboard shows: memory, reminders, profile, corpus shape.
     const [mem, rem, docs, summary, bySource, totals, recent] = await Promise.all([
       env.DB.prepare(`SELECT id, category, fact, created_at, updated_at, source, context
-                      FROM memories ORDER BY id DESC LIMIT 200`).all(),
-      env.DB.prepare("SELECT id, text, due_at, notified FROM reminders WHERE done = 0 ORDER BY due_at LIMIT 50").all(),
-      env.DB.prepare("SELECT key, length(content) AS chars, updated_at FROM profile WHERE key != 'conversation_summary' ORDER BY key").all(),
-      env.DB.prepare("SELECT content, updated_at FROM profile WHERE key = 'conversation_summary'").first(),
+                      FROM memories WHERE user_id = ? ORDER BY id DESC LIMIT 200`).bind(uid(env)).all(),
+      env.DB.prepare("SELECT id, text, due_at, notified FROM reminders WHERE user_id = ? AND done = 0 ORDER BY due_at LIMIT 50").bind(uid(env)).all(),
+      env.DB.prepare("SELECT key, length(content) AS chars, updated_at FROM profile WHERE user_id = ? AND key != 'conversation_summary' ORDER BY key").bind(uid(env)).all(),
+      env.DB.prepare("SELECT content, updated_at FROM profile WHERE user_id = ? AND key = 'conversation_summary'").bind(uid(env)).first(),
       env.DB.prepare("SELECT source, COUNT(*) AS n FROM postings GROUP BY source ORDER BY n DESC").all(),
       env.DB.prepare(`
         SELECT
           (SELECT COUNT(*) FROM postings) AS corpus,
-          (SELECT COUNT(*) FROM memories) AS memories,
+          (SELECT COUNT(*) FROM memories WHERE user_id = ?) AS memories,
           (SELECT COUNT(*) FROM watchers WHERE active = 1) AS watchers,
-          (SELECT COUNT(*) FROM research WHERE status = 'done') AS research,
-          (SELECT COUNT(*) FROM reminders WHERE done = 0) AS reminders,
-          (SELECT COUNT(*) FROM notifications) +
-            (SELECT COUNT(*) FROM events) + (SELECT COUNT(*) FROM emails) AS sensed,
-          (SELECT COUNT(*) FROM applications) AS packs,
-          (SELECT COUNT(*) FROM applications WHERE status NOT IN ('ready','dropped')) AS sent,
+          (SELECT COUNT(*) FROM research WHERE user_id = ? AND status = 'done') AS research,
+          (SELECT COUNT(*) FROM reminders WHERE user_id = ? AND done = 0) AS reminders,
+          (SELECT COUNT(*) FROM notifications WHERE user_id = ?) +
+            (SELECT COUNT(*) FROM events WHERE user_id = ?) + (SELECT COUNT(*) FROM emails WHERE user_id = ?) AS sensed,
+          (SELECT COUNT(*) FROM applications WHERE user_id = ?) AS packs,
+          (SELECT COUNT(*) FROM applications WHERE user_id = ? AND status NOT IN ('ready','dropped')) AS sent,
           (SELECT COUNT(*) FROM alerts WHERE sent_at IS NOT NULL) AS alerted,
           (SELECT COUNT(DISTINCT alert_id) FROM outcomes WHERE action = 'applied') AS applied,
           (SELECT COUNT(DISTINCT alert_id) FROM outcomes WHERE action = 'won') AS won,
-          (SELECT COUNT(*) FROM chat_history) AS chat_rows`).first(),
+          (SELECT COUNT(*) FROM chat_history WHERE user_id = ?) AS chat_rows`)
+        .bind(uid(env), uid(env), uid(env), uid(env), uid(env), uid(env), uid(env), uid(env), uid(env)).first(),
       env.DB.prepare(`
         SELECT title, source, url, deadline, ingested_at FROM postings
         ORDER BY ingested_at DESC LIMIT 12`).all(),
@@ -567,7 +583,7 @@ async function handleApi(url, env, request, ctx) {
     // The conversation itself: the dashboard showed what was distilled from it but
     // never the thing being distilled, so a quiet memory layer looked like an empty one.
     const chat = await env.DB.prepare(
-      "SELECT id, role, content, at FROM chat_history ORDER BY id DESC LIMIT 60").all();
+      "SELECT id, role, content, at FROM chat_history WHERE user_id = ? ORDER BY id DESC LIMIT 60").bind(uid(env)).all();
     const persona = await getPersona(env);
     // Measured rarity (point 3) and the learned pieces are the most interesting
     // things this system holds — they belong on screen, not only in the ranker.
@@ -579,50 +595,50 @@ async function handleApi(url, env, request, ctx) {
       env.DB.prepare(`SELECT p.name, p.relation, p.how_met, p.status, p.next_step, p.notes,
                              p.last_contact, p.created_at,
                              CAST(julianday('now') - julianday(COALESCE(p.last_contact, p.created_at)) AS INTEGER) AS days_quiet,
-                             (SELECT COUNT(*) FROM interactions i WHERE i.person_id = p.id) AS touches
-                      FROM people p ORDER BY days_quiet ASC LIMIT 40`).all(),
+                             (SELECT COUNT(*) FROM interactions i WHERE i.person_id = p.id AND i.user_id = ?) AS touches
+                      FROM people p WHERE p.user_id = ? ORDER BY days_quiet ASC LIMIT 40`).bind(uid(env), uid(env)).all(),
       env.DB.prepare(`SELECT amount, direction, counterparty, category, at, source
-                      FROM transactions ORDER BY at DESC LIMIT 25`).all(),
+                      FROM transactions WHERE user_id = ? ORDER BY at DESC LIMIT 25`).bind(uid(env)).all(),
       env.DB.prepare(`SELECT metric, value, unit, at FROM health
-                      WHERE datetime(at) >= datetime('now', '-180 days') ORDER BY at`).all(),
+                      WHERE user_id = ? AND datetime(at) >= datetime('now', '-180 days') ORDER BY at`).bind(uid(env)).all(),
       env.DB.prepare(`SELECT name, kcal, protein_g, carbs_g, fat_g, at FROM meals
-                      WHERE datetime(at) >= datetime('now', '-30 days') ORDER BY at`).all(),
-      env.DB.prepare("SELECT pattern, category FROM merchant_category ORDER BY category, pattern").all(),
-      env.DB.prepare("SELECT value, updated_at FROM state WHERE key = 'briefing_text'").first(),
+                      WHERE user_id = ? AND datetime(at) >= datetime('now', '-30 days') ORDER BY at`).bind(uid(env)).all(),
+      env.DB.prepare("SELECT pattern, category FROM merchant_category WHERE user_id = ? ORDER BY category, pattern").bind(uid(env)).all(),
+      env.DB.prepare("SELECT value, updated_at FROM state WHERE user_id = ? AND key = 'briefing_text'").bind(uid(env)).first(),
     ]);
     const perception = await getPerception(env);
     const applications = (await env.DB.prepare(
       `SELECT id, title, company, url, fit, status, created_at, applied_at, cover_note, package_md
-       FROM applications ORDER BY id DESC LIMIT 40`).all()).results;
+       FROM applications WHERE user_id = ? ORDER BY id DESC LIMIT 40`).bind(uid(env)).all()).results;
     const [accounts, holdings, spend, weight, cold, txCount] = await Promise.all([
-      env.DB.prepare("SELECT name, kind, balance FROM accounts ORDER BY balance DESC").all(),
-      env.DB.prepare("SELECT name, kind, category, value FROM holdings ORDER BY value DESC").all(),
+      env.DB.prepare("SELECT name, kind, balance FROM accounts WHERE user_id = ? ORDER BY balance DESC").bind(uid(env)).all(),
+      env.DB.prepare("SELECT name, kind, category, value FROM holdings WHERE user_id = ? ORDER BY value DESC").bind(uid(env)).all(),
       env.DB.prepare(`SELECT category, ROUND(SUM(amount)) AS total FROM transactions
-                      WHERE direction = 'debit' AND datetime(at) >= datetime('now', '-30 days')
-                      GROUP BY category ORDER BY total DESC`).all(),
-      env.DB.prepare(`SELECT value, at FROM health WHERE metric = 'weight' AND value IS NOT NULL
-                      AND datetime(at) >= datetime('now', '-120 days') ORDER BY at`).all(),
+                      WHERE user_id = ? AND direction = 'debit' AND datetime(at) >= datetime('now', '-30 days')
+                      GROUP BY category ORDER BY total DESC`).bind(uid(env)).all(),
+      env.DB.prepare(`SELECT value, at FROM health WHERE user_id = ? AND metric = 'weight' AND value IS NOT NULL
+                      AND datetime(at) >= datetime('now', '-120 days') ORDER BY at`).bind(uid(env)).all(),
       env.DB.prepare(`SELECT name, relation, next_step, last_contact,
                              CAST(julianday('now') - julianday(COALESCE(last_contact, created_at)) AS INTEGER) AS days_quiet
-                      FROM people WHERE status != 'closed'
+                      FROM people WHERE user_id = ? AND status != 'closed'
                         AND julianday('now') - julianday(COALESCE(last_contact, created_at)) >= 10
-                      ORDER BY days_quiet DESC LIMIT 8`).all(),
-      env.DB.prepare("SELECT COUNT(*) AS n FROM transactions").first(),
+                      ORDER BY days_quiet DESC LIMIT 8`).bind(uid(env)).all(),
+      env.DB.prepare("SELECT COUNT(*) AS n FROM transactions WHERE user_id = ?").bind(uid(env)).first(),
     ]);
     const [notifications, events, mails, allow] = await Promise.all([
       env.DB.prepare(`SELECT app, title, body, kind, amount, direction, counterparty, received_at
-                      FROM notifications ORDER BY id DESC LIMIT 20`).all(),
+                      FROM notifications WHERE user_id = ? ORDER BY id DESC LIMIT 20`).bind(uid(env)).all(),
       env.DB.prepare(`SELECT title, starts_at, location FROM events
-                      WHERE datetime(starts_at) >= datetime('now') ORDER BY starts_at LIMIT 10`).all(),
+                      WHERE user_id = ? AND datetime(starts_at) >= datetime('now') ORDER BY starts_at LIMIT 10`).bind(uid(env)).all(),
       env.DB.prepare(`SELECT sender, subject, kind, received_at FROM emails
-                      ORDER BY received_at DESC LIMIT 10`).all(),
-      env.DB.prepare("SELECT pattern, kind FROM notify_allow ORDER BY kind, pattern").all(),
+                      WHERE user_id = ? ORDER BY received_at DESC LIMIT 10`).bind(uid(env)).all(),
+      env.DB.prepare("SELECT pattern, kind FROM notify_allow WHERE user_id = ? ORDER BY kind, pattern").bind(uid(env)).all(),
     ]);
     const [watchers, research] = await Promise.all([
       env.DB.prepare("SELECT id, kind, target, note, last_checked, last_error, hits, active FROM watchers ORDER BY id").all(),
       env.DB.prepare(`SELECT id, question, depth, status, sources, steps, created_at, finished_at,
                              error, substr(report_md, 1, 4000) AS report_md
-                      FROM research ORDER BY id DESC LIMIT 20`).all(),
+                      FROM research WHERE user_id = ? ORDER BY id DESC LIMIT 20`).bind(uid(env)).all(),
     ]);
     return Response.json({
       memories: mem.results,
@@ -667,7 +683,7 @@ async function handleApi(url, env, request, ctx) {
   if (url.pathname === "/api/embed-backfill") {
     // One-shot: give memories saved before v3 their vectors.
     const { results } = await env.DB.prepare(
-      "SELECT id, fact FROM memories WHERE embedding IS NULL LIMIT 50").all();
+      "SELECT id, fact FROM memories WHERE user_id = ? AND embedding IS NULL LIMIT 50").bind(uid(env)).all();
     let ok = 0;
     for (const m of results) if (await embedMemory(env, m.id, m.fact)) ok++;
     return Response.json({ pending: results.length, embedded: ok });
@@ -680,12 +696,13 @@ async function handleApi(url, env, request, ctx) {
       return Response.json({ error: "no VECTORIZE binding — create the index (see wrangler.toml) and redeploy" }, { status: 400 });
     }
     const { results } = await env.DB.prepare(
-      "SELECT id, category, embedding FROM memories WHERE embedding IS NOT NULL").all();
+      "SELECT id, category, embedding FROM memories WHERE user_id = ? AND embedding IS NOT NULL").bind(uid(env)).all();
     let pushed = 0, failed = 0;
     for (let i = 0; i < results.length; i += 100) {
       const batch = results.slice(i, i + 100).map(r => ({
         id: String(r.id),
         values: Array.from(unpackVec(r.embedding)),
+        namespace: String(uid(env)),
         metadata: { category: r.category || "fact" },
       }));
       try {
@@ -736,10 +753,10 @@ async function handleApi(url, env, request, ctx) {
     // from the browser's local time before sending).
     const b = await request.json().catch(() => ({}));
     if (b.id) {
-      const row = await env.DB.prepare("SELECT * FROM reminders WHERE id = ?").bind(Number(b.id)).first();
+      const row = await env.DB.prepare("SELECT * FROM reminders WHERE user_id = ? AND id = ?").bind(uid(env), Number(b.id)).first();
       if (!row) return Response.json({ error: "no reminder with that id" }, { status: 404 });
       if (b.done) {
-        await env.DB.prepare("UPDATE reminders SET done = 1 WHERE id = ?").bind(row.id).run();
+        await env.DB.prepare("UPDATE reminders SET done = 1 WHERE user_id = ? AND id = ?").bind(uid(env), row.id).run();
         return Response.json({ ok: true, id: row.id, done: true });
       }
       const due = b.due_at ? Date.parse(b.due_at) : NaN;
@@ -747,11 +764,11 @@ async function handleApi(url, env, request, ctx) {
       // A re-timed reminder must fire again even if it already pinged once — reset
       // notified only when the time actually changes.
       await env.DB.prepare(
-        "UPDATE reminders SET text = ?, due_at = ?, notified = CASE WHEN ? THEN 0 ELSE notified END WHERE id = ?")
+        "UPDATE reminders SET text = ?, due_at = ?, notified = CASE WHEN ? THEN 0 ELSE notified END WHERE user_id = ? AND id = ?")
         .bind(String(b.text ?? row.text).slice(0, 300),
               b.due_at ? new Date(due).toISOString() : row.due_at,
-              b.due_at ? 1 : 0, row.id).run();
-      const updated = await env.DB.prepare("SELECT id, text, due_at, notified FROM reminders WHERE id = ?").bind(row.id).first();
+              b.due_at ? 1 : 0, uid(env), row.id).run();
+      const updated = await env.DB.prepare("SELECT id, text, due_at, notified FROM reminders WHERE user_id = ? AND id = ?").bind(uid(env), row.id).first();
       return Response.json({ ok: true, ...updated });
     }
     const due = Date.parse(b.due_at || "");
@@ -759,8 +776,8 @@ async function handleApi(url, env, request, ctx) {
       return Response.json({ error: "need text and due_at (ISO datetime)" }, { status: 400 });
     }
     const row = await env.DB.prepare(
-      "INSERT INTO reminders (text, due_at, created_at) VALUES (?, ?, ?) RETURNING id")
-      .bind(String(b.text).trim().slice(0, 300), new Date(due).toISOString(), new Date().toISOString()).first();
+      "INSERT INTO reminders (text, due_at, created_at, user_id) VALUES (?, ?, ?, ?) RETURNING id")
+      .bind(String(b.text).trim().slice(0, 300), new Date(due).toISOString(), new Date().toISOString(), uid(env)).first();
     return Response.json({ ok: true, id: row.id, fires_at_utc: new Date(due).toISOString() });
   }
 
@@ -814,19 +831,19 @@ async function handleApi(url, env, request, ctx) {
       return Response.json({ error: "pick a name (resume, bio, skills, or notes:anything)" }, { status: 400 });
     }
     if (!String(content).trim()) {
-      await env.DB.prepare("DELETE FROM profile WHERE key = ?").bind(clean).run();
+      await env.DB.prepare("DELETE FROM profile WHERE user_id = ? AND key = ?").bind(uid(env), clean).run();
       return Response.json({ ok: true, deleted: clean });
     }
     await env.DB.prepare(`
-      INSERT INTO profile (key, content, updated_at) VALUES (?, ?, ?)
-      ON CONFLICT(key) DO UPDATE SET content = excluded.content, updated_at = excluded.updated_at`)
-      .bind(clean, String(content).slice(0, 200_000), new Date().toISOString()).run();
+      INSERT INTO profile (key, content, updated_at, user_id) VALUES (?, ?, ?, ?)
+      ON CONFLICT(user_id, key) DO UPDATE SET content = excluded.content, updated_at = excluded.updated_at`)
+      .bind(clean, String(content).slice(0, 200_000), new Date().toISOString(), uid(env)).run();
     return Response.json({ ok: true, key: clean, chars: String(content).length });
   }
 
   if (url.pathname === "/api/profile-read") {
     const key = url.searchParams.get("key") || "";
-    const row = await env.DB.prepare("SELECT key, content FROM profile WHERE key = ?").bind(key).first();
+    const row = await env.DB.prepare("SELECT key, content FROM profile WHERE user_id = ? AND key = ?").bind(uid(env), key).first();
     return row ? Response.json(row) : Response.json({ error: "no such document" }, { status: 404 });
   }
 
@@ -837,10 +854,10 @@ async function handleApi(url, env, request, ctx) {
   }
   if (url.pathname === "/api/mail-status") {
     // What the IMAP job has delivered to D1, and what's waiting to be classified.
-    const total = await env.DB.prepare("SELECT COUNT(*) AS n FROM emails").first();
-    const pending = await env.DB.prepare("SELECT COUNT(*) AS n FROM emails WHERE surfaced = 0").first();
+    const total = await env.DB.prepare("SELECT COUNT(*) AS n FROM emails WHERE user_id = ?").bind(uid(env)).first();
+    const pending = await env.DB.prepare("SELECT COUNT(*) AS n FROM emails WHERE user_id = ? AND surfaced = 0").bind(uid(env)).first();
     const { results } = await env.DB.prepare(
-      "SELECT sender, subject, kind, received_at FROM emails ORDER BY received_at DESC LIMIT 10").all();
+      "SELECT sender, subject, kind, received_at FROM emails WHERE user_id = ? ORDER BY received_at DESC LIMIT 10").bind(uid(env)).all();
     return Response.json({ total: total.n, awaiting_classification: pending.n, latest: results });
   }
   if (url.pathname === "/api/perception") {
@@ -928,7 +945,7 @@ async function handleApi(url, env, request, ctx) {
     // re-plans only when it closes the goal's last open question (same auto rule as chat).
     const body = await request.json().catch(() => ({}));
     if (body.id && body.dismiss) {
-      await env.DB.prepare("UPDATE plan_questions SET status = 'dismissed' WHERE id = ?").bind(Number(body.id)).run();
+      await env.DB.prepare("UPDATE plan_questions SET status = 'dismissed' WHERE user_id = ? AND id = ?").bind(uid(env), Number(body.id)).run();
       return Response.json({ ok: true, dismissed: Number(body.id) });
     }
     const r = Array.isArray(body.answers)
@@ -944,11 +961,11 @@ async function handleApi(url, env, request, ctx) {
       listGoals(env, { status: "all" }),   // already carries progress + pace
       env.DB.prepare(`
         SELECT id, goal_id, milestone_id, text, kind, status, xp, due_at, issued_at, resolved_at
-        FROM quests WHERE date(issued_at, '+330 minutes') = date('now', '+330 minutes')
-        ORDER BY CASE status WHEN 'issued' THEN 0 WHEN 'doing' THEN 1 ELSE 2 END, id`).all(),
+        FROM quests WHERE user_id = ? AND date(issued_at, '+330 minutes') = date('now', '+330 minutes')
+        ORDER BY CASE status WHEN 'issued' THEN 0 WHEN 'doing' THEN 1 ELSE 2 END, id`).bind(uid(env)).all(),
       env.DB.prepare(`
         SELECT id, at, kind, actor, summary, detail, reasoning, goal_id, quest_id
-        FROM activity ORDER BY id DESC LIMIT 60`).all(),
+        FROM activity WHERE user_id = ? ORDER BY id DESC LIMIT 60`).bind(uid(env)).all(),
       getSettings(env),
       listMetrics(env, {}),
     ]);
@@ -959,8 +976,8 @@ async function handleApi(url, env, request, ctx) {
         listMilestones(env, g.id),
         env.DB.prepare(
           `SELECT reasoning, at, kind FROM activity
-           WHERE goal_id = ? AND kind IN ('plan','plan_adapt') AND reasoning IS NOT NULL
-           ORDER BY id DESC LIMIT 1`).bind(g.id).first(),
+           WHERE user_id = ? AND goal_id = ? AND kind IN ('plan','plan_adapt') AND reasoning IS NOT NULL
+           ORDER BY id DESC LIMIT 1`).bind(uid(env), g.id).first(),
       ]);
       return { ...g, milestones, plan_reasoning: plan?.reasoning || null, plan_at: plan?.at || null };
     }));
@@ -978,16 +995,89 @@ async function handleApi(url, env, request, ctx) {
       quest_history: (await env.DB.prepare(`
         SELECT date(issued_at, '+330 minutes') AS d,
                SUM(status = 'done') AS done, SUM(status = 'failed') AS failed, COUNT(*) AS n
-        FROM quests WHERE datetime(issued_at) >= datetime('now', '-14 days')
-        GROUP BY d ORDER BY d`).all()).results,
+        FROM quests WHERE user_id = ? AND datetime(issued_at) >= datetime('now', '-14 days')
+        GROUP BY d ORDER BY d`).bind(uid(env)).all()).results,
     });
   }
   return Response.json({ error: "not found" }, { status: 404 });
 }
 
+// ---------- Onboarding: turn a BYO BotFather token into a live tenant ----------
+// Invite-gated. Validates the token via getMe, provisions a `users` row (secrets encrypted
+// at rest), points the bot's webhook at /tg/<webhook_id>, then hands back the dashboard
+// link + phone-bridge secret. The owner sends /start to bind their chat (handleCommand).
+async function handleRegister(request, env) {
+  let body;
+  try { body = await request.json(); }
+  catch { return Response.json({ error: "expected json" }, { status: 400 }); }
+  const token = String(body.token || "").trim();
+  const invite = String(body.invite || "").trim();
+  if (!/^\d{5,}:[\w-]{20,}$/.test(token)) {
+    return Response.json({ error: "that doesn't look like a BotFather token" }, { status: 400 });
+  }
+
+  // Invite gate (beta): one code, one signup.
+  const inv = await env.DB.prepare("SELECT code, used_by FROM invites WHERE code = ?").bind(invite).first();
+  if (!inv) return Response.json({ error: "invalid invite code" }, { status: 403 });
+  if (inv.used_by) return Response.json({ error: "that invite has already been used" }, { status: 403 });
+
+  // Prove the token is real and capture the bot's identity.
+  let me;
+  try { me = await (await fetch(`https://api.telegram.org/bot${token}/getMe`)).json(); }
+  catch { return Response.json({ error: "couldn't reach Telegram" }, { status: 502 }); }
+  if (!me.ok || !me.result?.id) return Response.json({ error: "Telegram rejected that token" }, { status: 400 });
+  const botId = me.result.id, botUsername = me.result.username || null;
+
+  const dup = await env.DB.prepare("SELECT id FROM users WHERE bot_id = ?").bind(botId).first();
+  if (dup) return Response.json({ error: "that bot is already connected" }, { status: 409 });
+
+  // Provision the tenant — bot_token and webhook_secret encrypted at rest.
+  const webhook_id = hexToken(16), webhook_secret = hexToken(24);
+  const dashboard_token = hexToken(24), notify_secret = hexToken(18);
+  const host = new URL(request.url).host;
+  const ins = await env.DB.prepare(
+    `INSERT INTO users (bot_token, bot_username, bot_id, webhook_id, webhook_secret, timezone,
+                        dashboard_token, notify_secret, status, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?) RETURNING id`)
+    .bind(await encryptSecret(env, token), botUsername, botId, webhook_id,
+          await encryptSecret(env, webhook_secret),
+          String(body.timezone || "Asia/Kolkata"), dashboard_token, notify_secret,
+          new Date().toISOString()).first();
+
+  // Point the bot's webhook at this Worker's per-bot path.
+  let sw;
+  try {
+    sw = await (await fetch(`https://api.telegram.org/bot${token}/setWebhook`, {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        url: `https://${host}/tg/${webhook_id}`,
+        secret_token: webhook_secret,
+        allowed_updates: ["message", "callback_query"],
+      }),
+    })).json();
+  } catch { sw = { ok: false, description: "network error" }; }
+  if (!sw.ok) {
+    // Roll back so a failed webhook never strands a half-provisioned tenant.
+    await env.DB.prepare("DELETE FROM users WHERE id = ?").bind(ins.id).run();
+    return Response.json({ error: "couldn't set the webhook: " + (sw.description || "") }, { status: 502 });
+  }
+
+  await env.DB.prepare("UPDATE invites SET used_by = ? WHERE code = ?").bind(ins.id, invite).run();
+  return Response.json({
+    ok: true,
+    bot_username: botUsername,
+    dashboard_url: `https://${host}/?t=${dashboard_token}`,
+    notify_secret,
+    next: botUsername ? `Open https://t.me/${botUsername} and send /start to finish.` : "Send /start to your bot to finish.",
+  });
+}
+
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
+    // Each entry point resolves its OWN tenant (worker/src/tenant.js): the legacy env
+    // secrets map to tenant #1 (the owner), while self-registered bots resolve by
+    // webhook_id / dashboard_token / notify_secret. Every handler gets a scoped env.
     if (url.pathname === "/ai-debug" && url.searchParams.get("t") === env.DASH_TOKEN) {
       try {
         const res = await env.AI.run("@cf/openai/gpt-oss-120b",
@@ -997,12 +1087,15 @@ export default {
         return Response.json({ error: String(e) });
       }
     }
+    // Onboarding: invite-gated, no tenant yet — provisions a tenant from a BYO bot token.
+    if (url.pathname === "/api/register" && request.method === "POST") return handleRegister(request, env);
+    if (url.pathname === "/signup") {
+      return env.ASSETS.fetch(new Request(new URL("/signup.html", url), request));
+    }
+    // Phone bridge: resolve the tenant by its own NOTIFY secret (tenant #1 = env.NOTIFY_SECRET).
     if (url.pathname === "/ingest/notification" && request.method === "POST") {
-      // The phone bridge posts here. Its own secret, so a leaked dashboard token
-      // can't write into the agent's senses.
-      if (request.headers.get("X-Intelly-Secret") !== env.NOTIFY_SECRET || !env.NOTIFY_SECRET) {
-        return new Response("forbidden", { status: 403 });
-      }
+      const senv = await resolveTenant(env, { notifySecret: request.headers.get("X-Intelly-Secret") });
+      if (!senv) return new Response("forbidden", { status: 403 });
       let payload;
       try {
         payload = await request.json();
@@ -1010,13 +1103,28 @@ export default {
         return Response.json({ error: "expected json" }, { status: 400 });
       }
       try {
-        return Response.json(await ingestNotification(env, payload));
+        return Response.json(await ingestNotification(senv, payload));
       } catch (e) {
         return Response.json({ error: String(e).slice(0, 150) }, { status: 500 });
       }
     }
-    if (url.pathname === "/telegram" && request.method === "POST") return handleTelegram(request, env, ctx);
-    if (url.pathname.startsWith("/api/")) return handleApi(url, env, request, ctx);
+    // Multiplexed BYO webhook: /tg/<webhook_id> routes each bot's updates to its tenant.
+    const tgm = url.pathname.match(/^\/tg\/([a-zA-Z0-9_-]{8,})$/);
+    if (tgm && request.method === "POST") {
+      const senv = await resolveTenant(env, { webhookId: tgm[1] });
+      if (!senv) return new Response("forbidden", { status: 403 });
+      return handleTelegram(request, senv, ctx);
+    }
+    // Legacy single-owner webhook → tenant #1 (the owner's original bot keeps working).
+    if (url.pathname === "/telegram" && request.method === "POST") {
+      return handleTelegram(request, scopeEnv(env, syntheticOwner(env)), ctx);
+    }
+    // Dashboard + API: resolve by ?t=<dashboard_token> (the admin DASH_TOKEN → tenant #1).
+    if (url.pathname.startsWith("/api/")) {
+      const senv = await resolveTenant(env, { dashToken: url.searchParams.get("t") });
+      if (!senv) return Response.json({ error: "unauthorized" }, { status: 401 });
+      return handleApi(url, senv, request, ctx);
+    }
     // The dashboard is one HTML file that changes every deploy — never let a browser
     // or edge cache serve a stale copy, or a UI fix looks broken until a hard reload.
     const res = await env.ASSETS.fetch(request);
@@ -1025,20 +1133,34 @@ export default {
     return new Response(res.body, { status: res.status, headers });
   },
   async scheduled(_event, env) {
-    await runReminders(env);
-    // One job failing must never stop the others.
-    for (const [name, fn] of [
-      ["senses", runSenses],
-      ["money", processBankNotifications],   // bank alerts Phase 4 filed -> transactions
-      // The System last: it issues the day's quests and holds the nightly reckoning,
-      // self-gating on the IST hour (issue 07:00, debrief 21:00).
-      ["system", e => runSystem(e, tg, { spawn: (en, args) => TOOLS.spawn_research.run(en, args) })],
-    ]) {
-      try {
-        const out = await fn(env);
-        if (out && !out.skipped) console.log(`${name}:`, JSON.stringify(out).slice(0, 200));
-      } catch (e) {
-        console.log(`${name} failed:`, String(e).slice(0, 200));
+    // Every active tenant runs its own hourly pass, scoped and fault-isolated: tenant #1
+    // (the owner) is fabricated from env secrets, the rest come from `users` with secrets
+    // decrypted. NOTE (beta): the issue/debrief/autonomy hours still gate on the IST clock
+    // for ALL tenants — per-tenant-timezone gating is a follow-up (each row carries a
+    // `timezone`). At scale, fan this loop out to per-tenant sub-invocations (self-fetch)
+    // to stay under the free-tier subrequest/CPU ceiling.
+    const { results: tenants } = await env.DB.prepare(
+      "SELECT id FROM users WHERE status = 'active' ORDER BY id").all();
+    for (const t of tenants) {
+      const senv = t.id === 1
+        ? scopeEnv(env, syntheticOwner(env))
+        : await resolveTenant(env, { id: t.id }).catch(() => null);
+      if (!senv) continue;
+      try { await runReminders(senv); }
+      catch (e) { console.log(`t${t.id} reminders failed:`, String(e).slice(0, 160)); }
+      // One job failing must never stop the others.
+      for (const [name, fn] of [
+        ["senses", runSenses],
+        ["money", processBankNotifications],   // bank alerts filed -> transactions
+        // The System last: issues the day's quests and holds the nightly reckoning.
+        ["system", e => runSystem(e, tg, { spawn: (en, args) => TOOLS.spawn_research.run(en, args) })],
+      ]) {
+        try {
+          const out = await fn(senv);
+          if (out && !out.skipped) console.log(`t${t.id} ${name}:`, JSON.stringify(out).slice(0, 200));
+        } catch (e) {
+          console.log(`t${t.id} ${name} failed:`, String(e).slice(0, 200));
+        }
       }
     }
   },

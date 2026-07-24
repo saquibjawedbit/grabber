@@ -5,6 +5,7 @@
 // never reaches the database — your chats are not the agent's business.
 
 import { llm } from "./llm.js";
+import { uid, ownerChat } from "./tenant.js";
 
 // ---------- Phone notifications ----------
 
@@ -28,7 +29,7 @@ export function parseMoney(text) {
 
 async function allowFor(env, app, title) {
   const hay = `${app} ${title}`.toLowerCase();
-  const { results } = await env.DB.prepare("SELECT pattern, kind FROM notify_allow").all();
+  const { results } = await env.DB.prepare("SELECT pattern, kind FROM notify_allow WHERE user_id = ?").bind(uid(env)).all();
   return results.find(r => hay.includes(r.pattern)) || null;
 }
 
@@ -46,10 +47,10 @@ export async function ingestNotification(env, payload) {
 
   const row = await env.DB.prepare(
     `INSERT INTO notifications (app, title, body, kind, amount, direction, counterparty,
-                                posted_at, received_at)
-     VALUES (?,?,?,?,?,?,?,?,?) RETURNING id`)
+                                posted_at, received_at, user_id)
+     VALUES (?,?,?,?,?,?,?,?,?,?) RETURNING id`)
     .bind(app, title, body, allow.kind, money?.amount ?? null, money?.direction ?? null,
-          money?.counterparty ?? null, payload.posted_at || null, new Date().toISOString())
+          money?.counterparty ?? null, payload.posted_at || null, new Date().toISOString(), uid(env))
     .first();
 
   return { ok: true, stored: true, id: row.id, kind: allow.kind, parsed: money };
@@ -80,15 +81,15 @@ export function googleConnected(env) {
 }
 
 async function getState(env, key) {
-  const row = await env.DB.prepare("SELECT value FROM state WHERE key = ?").bind(key).first();
+  const row = await env.DB.prepare("SELECT value FROM state WHERE user_id = ? AND key = ?").bind(uid(env), key).first();
   return row?.value || null;
 }
 
 async function setState(env, key, value) {
   await env.DB.prepare(
-    `INSERT INTO state (key, value, updated_at) VALUES (?,?,?)
-     ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`)
-    .bind(key, String(value), new Date().toISOString()).run();
+    `INSERT INTO state (key, value, updated_at, user_id) VALUES (?,?,?,?)
+     ON CONFLICT(user_id, key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`)
+    .bind(key, String(value), new Date().toISOString(), uid(env)).run();
 }
 
 // ---------- Calendar: meetings become reminders ----------
@@ -112,8 +113,8 @@ export async function pollCalendar(env) {
     const starts = e.start?.dateTime || e.start?.date;
     if (!starts) continue;
     const res = await env.DB.prepare(
-      `INSERT INTO events (id, title, starts_at, ends_at, location, link, attendees, updated_at)
-       VALUES (?,?,?,?,?,?,?,?)
+      `INSERT INTO events (id, title, starts_at, ends_at, location, link, attendees, updated_at, user_id)
+       VALUES (?,?,?,?,?,?,?,?,?)
        ON CONFLICT(id) DO UPDATE SET title = excluded.title, starts_at = excluded.starts_at,
          ends_at = excluded.ends_at, location = excluded.location, updated_at = excluded.updated_at
        RETURNING id`)
@@ -121,7 +122,7 @@ export async function pollCalendar(env) {
             e.end?.dateTime || e.end?.date || null, (e.location || "").slice(0, 200),
             e.htmlLink || null,
             (e.attendees || []).map(a => a.email).join(", ").slice(0, 300),
-            new Date().toISOString()).all();
+            new Date().toISOString(), uid(env)).all();
     if (res.results.length) added++;
   }
   return { seen: items.length, upserted: added };
@@ -131,20 +132,21 @@ export async function pollCalendar(env) {
 export async function remindEvents(env, tg) {
   const { results } = await env.DB.prepare(`
     SELECT id, title, starts_at, location, link FROM events
-    WHERE reminded = 0
+    WHERE user_id = ?
+      AND reminded = 0
       AND datetime(starts_at) > datetime('now')
       AND datetime(starts_at) <= datetime('now', '+45 minutes')
-    LIMIT 5`).all();
+    LIMIT 5`).bind(uid(env)).all();
   for (const e of results) {
     const when = new Date(e.starts_at).toLocaleString("en-IN",
       { timeZone: "Asia/Kolkata", hour: "numeric", minute: "2-digit", hour12: true });
     await tg(env, "sendMessage", {
-      chat_id: env.TELEGRAM_CHAT_ID,
+      chat_id: ownerChat(env),
       parse_mode: "HTML",
       disable_web_page_preview: true,
       text: `📅 <b>${esc(e.title)}</b> at ${esc(when)}\n${e.location ? esc(e.location) + "\n" : ""}${e.link || ""}`,
     });
-    await env.DB.prepare("UPDATE events SET reminded = 1 WHERE id = ?").bind(e.id).run();
+    await env.DB.prepare("UPDATE events SET reminded = 1 WHERE id = ? AND user_id = ?").bind(e.id, uid(env)).run();
   }
   return results.length;
 }
@@ -162,7 +164,7 @@ const esc = s => String(s ?? "").replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&
 export async function classifyInbox(env, tg, profile) {
   const { results } = await env.DB.prepare(
     `SELECT id, thread_id, sender, subject, snippet FROM emails
-     WHERE surfaced = 0 ORDER BY received_at DESC LIMIT 8`).all();
+     WHERE user_id = ? AND surfaced = 0 ORDER BY received_at DESC LIMIT 8`).bind(uid(env)).all();
   let surfaced = 0;
   for (const m of results) {
     if (await surfaceEmail(env, tg, profile, m)) surfaced++;
@@ -197,11 +199,11 @@ export async function surfaceEmail(env, tg, profile, m) {
   let v = null;
   try { v = jm ? JSON.parse(jm[0]) : null; } catch { /* fall through */ }
   const kind = v?.kind || "other";
-  await env.DB.prepare("UPDATE emails SET kind = ?, surfaced = 1 WHERE id = ?")
-    .bind(kind, m.id).run();
+  await env.DB.prepare("UPDATE emails SET kind = ?, surfaced = 1 WHERE id = ? AND user_id = ?")
+    .bind(kind, m.id, uid(env)).run();
   if (!v?.worth_interrupting) return false;
   await tg(env, "sendMessage", {
-    chat_id: env.TELEGRAM_CHAT_ID,
+    chat_id: ownerChat(env),
     parse_mode: "HTML",
     disable_web_page_preview: true,
     text: `📬 <b>${esc(m.subject)}</b>\n<i>${esc(m.sender)}</i>\n\n${esc(v.summary || m.snippet)}` +

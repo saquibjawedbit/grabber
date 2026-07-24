@@ -5,6 +5,7 @@
 
 import { llm } from "./llm.js";
 import { logActivity } from "./system.js";
+import { uid } from "./tenant.js";
 
 const STATUSES = ["ready", "applied", "responded", "interview", "offer", "rejected", "dropped"];
 
@@ -17,11 +18,11 @@ const strip = html => html
 async function ownerProfile(env) {
   const parts = [];
   for (const key of ["resume", "bio", "skills"]) {
-    const row = await env.DB.prepare("SELECT content FROM profile WHERE key = ?").bind(key).first();
+    const row = await env.DB.prepare("SELECT content FROM profile WHERE user_id = ? AND key = ?").bind(uid(env), key).first();
     if (row) parts.push(`### ${key}\n${row.content.slice(0, 3500)}`);
   }
   const { results: mems } = await env.DB.prepare(
-    "SELECT category, fact FROM memories ORDER BY category, id LIMIT 50").all();
+    "SELECT category, fact FROM memories WHERE user_id = ? ORDER BY category, id LIMIT 50").bind(uid(env)).all();
   if (mems.length) parts.push("### stated\n" + mems.map(m => `- (${m.category}) ${m.fact}`).join("\n"));
   return parts.join("\n\n");
 }
@@ -98,12 +99,12 @@ export const APPLY_TOOLS = {
 
       const pack = packToMarkdown(v);
       const row = await env.DB.prepare(
-        `INSERT INTO applications (title, company, url, source, fit, cover_note, package_md, created_at, updated_at)
-         VALUES (?,?,?,?,?,?,?,?,?) RETURNING id`)
+        `INSERT INTO applications (title, company, url, source, fit, cover_note, package_md, created_at, updated_at, user_id)
+         VALUES (?,?,?,?,?,?,?,?,?,?) RETURNING id`)
         .bind(String(v.title || "Untitled role").slice(0, 200), v.company || null, url,
               url ? "manual-url" : "manual", Number(v.fit) || 0,
               String(v.cover_note).slice(0, 4000), pack.slice(0, 12000),
-              new Date().toISOString(), new Date().toISOString()).first();
+              new Date().toISOString(), new Date().toISOString(), uid(env)).first();
       await logActivity(env, {
         kind: "application",
         summary: `Drafted application: ${String(v.title || "role").slice(0, 140)}`,
@@ -123,12 +124,12 @@ export const APPLY_TOOLS = {
     run: async (env, args) => {
       if (args.id) {
         const row = await env.DB.prepare(
-          "SELECT id, title, company, url, fit, status, package_md FROM applications WHERE id = ?")
-          .bind(Number(args.id)).first();
+          "SELECT id, title, company, url, fit, status, package_md FROM applications WHERE user_id = ? AND id = ?")
+          .bind(uid(env), Number(args.id)).first();
         return row ? { ...row, package_md: row.package_md.slice(0, 3500) } : { error: "no application with that id" };
       }
       const { results } = await env.DB.prepare(
-        "SELECT id, title, company, fit, status, created_at, applied_at FROM applications ORDER BY id DESC LIMIT 20").all();
+        "SELECT id, title, company, fit, status, created_at, applied_at FROM applications WHERE user_id = ? ORDER BY id DESC LIMIT 20").bind(uid(env)).all();
       return { count: results.length, applications: results };
     },
   },
@@ -144,8 +145,8 @@ export const APPLY_TOOLS = {
       const appliedAt = status === "applied" ? new Date().toISOString() : null;
       const r = await env.DB.prepare(
         `UPDATE applications SET status = ?, updated_at = ?,
-           applied_at = COALESCE(applied_at, ?) WHERE id = ?`)
-        .bind(status, new Date().toISOString(), appliedAt, Number(args.id)).run();
+           applied_at = COALESCE(applied_at, ?) WHERE id = ? AND user_id = ?`)
+        .bind(status, new Date().toISOString(), appliedAt, Number(args.id), uid(env)).run();
       return r.meta.changes ? { ok: true, status } : { error: "no application with that id" };
     },
   },

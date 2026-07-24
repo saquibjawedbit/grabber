@@ -12,6 +12,9 @@ binding = "ASSETS"
 GOOGLE_CSE_ID = "271772a3accdf45e5"
 # Where spawn_research dispatches its jobs.
 GH_REPO = "saquibjawedbit/grabber"
+# Tenant DB guard (worker/src/tenant.js): "off" | "warn" (log unscoped queries) |
+# "strict" (throw). Flip to "strict" once the retrofit is verified clean.
+TENANT_GUARD = "warn"
 
 # Workers AI: powers the conversational agent (gpt-oss-120b, free neurons).
 [ai]
@@ -49,7 +52,12 @@ enabled = true
 #   SERPER_API_KEY       — optional; primary web_search provider + the planner's one
 #                          search per plan (serper.dev, free 2,500 credits)
 #   GOOGLE_CSE_KEY       — optional; web_search fallback (free 100/day)
-#   NOTIFY_SECRET        — shared with the phone's notification forwarder
+#   NOTIFY_SECRET        — the OWNER's phone-bridge secret (tenant #1). Other tenants get
+#                          their own notify_secret in the `users` table at onboarding.
+#   MASTER_KEY           — base64 of 32 random bytes; AES-GCM key that encrypts each
+#                          tenant's bot_token / webhook_secret / google_refresh_token at
+#                          rest (worker/src/tenant.js). Generate:
+#                            python3 -c "import os,base64;print(base64.b64encode(os.urandom(32)).decode())"
 #   GOOGLE_CLIENT_ID     — } read-only Gmail + Calendar. Get all three by running
 #   GOOGLE_CLIENT_SECRET — } pipeline/scripts/google_auth.py
-#   GOOGLE_REFRESH_TOKEN — }
+#   GOOGLE_REFRESH_TOKEN — }   (tenant #1's Google account; per-tenant OAuth is Phase 7)

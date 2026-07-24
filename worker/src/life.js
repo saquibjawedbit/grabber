@@ -6,6 +6,7 @@
 // public, and this is where the owner's bank balance lives.
 
 import { llm } from "./llm.js";
+import { uid } from "./tenant.js";
 
 const CATEGORIES = ["food", "transport", "rent", "shopping", "subscription",
                     "bills", "health", "education", "income", "transfer", "other"];
@@ -17,7 +18,7 @@ const nowIso = () => new Date().toISOString();
 
 async function categorise(env, counterparty, note) {
   const hay = `${counterparty || ""} ${note || ""}`.toLowerCase();
-  const { results } = await env.DB.prepare("SELECT pattern, category FROM merchant_category").all();
+  const { results } = await env.DB.prepare("SELECT pattern, category FROM merchant_category WHERE user_id = ?").bind(uid(env)).all();
   const hit = results.find(r => hay.includes(r.pattern));
   if (hit) return hit.category;
   if (!counterparty) return "other";
@@ -31,8 +32,8 @@ async function categorise(env, counterparty, note) {
   const key = counterparty.toLowerCase().split(/\s+/)[0].slice(0, 40);
   if (key.length >= 3 && guess !== "other") {
     await env.DB.prepare(
-      "INSERT OR IGNORE INTO merchant_category (pattern, category, created_at) VALUES (?,?,?)")
-      .bind(key, guess, nowIso()).run();
+      "INSERT OR IGNORE INTO merchant_category (pattern, category, created_at, user_id) VALUES (?,?,?,?)")
+      .bind(key, guess, nowIso(), uid(env)).run();
   }
   return guess;
 }
@@ -42,18 +43,18 @@ export async function processBankNotifications(env) {
   const { results } = await env.DB.prepare(`
     SELECT id, title, body, amount, direction, counterparty, received_at, app
     FROM notifications
-    WHERE kind = 'bank' AND amount IS NOT NULL AND surfaced = 0
-    ORDER BY id LIMIT 25`).all();
+    WHERE user_id = ? AND kind = 'bank' AND amount IS NOT NULL AND surfaced = 0
+    ORDER BY id LIMIT 25`).bind(uid(env)).all();
   let made = 0;
   for (const n of results) {
     const category = await categorise(env, n.counterparty, `${n.title} ${n.body}`);
     await env.DB.prepare(
       `INSERT INTO transactions (amount, direction, counterparty, category, account, note, at,
-                                 source, notification_id)
-       VALUES (?,?,?,?,?,?,?,'notification',?)`)
+                                 source, notification_id, user_id)
+       VALUES (?,?,?,?,?,?,?,'notification',?,?)`)
       .bind(n.amount, n.direction, n.counterparty, category, n.app,
-            (n.body || "").slice(0, 200), n.received_at, n.id).run();
-    await env.DB.prepare("UPDATE notifications SET surfaced = 1 WHERE id = ?").bind(n.id).run();
+            (n.body || "").slice(0, 200), n.received_at, n.id, uid(env)).run();
+    await env.DB.prepare("UPDATE notifications SET surfaced = 1 WHERE id = ? AND user_id = ?").bind(n.id, uid(env)).run();
     made++;
   }
   return { transactions_created: made };
@@ -61,13 +62,13 @@ export async function processBankNotifications(env) {
 
 async function netWorth(env) {
   const acc = await env.DB.prepare(
-    "SELECT COALESCE(SUM(balance), 0) AS v FROM accounts WHERE kind != 'card'").first();
+    "SELECT COALESCE(SUM(balance), 0) AS v FROM accounts WHERE user_id = ? AND kind != 'card'").bind(uid(env)).first();
   const cards = await env.DB.prepare(
-    "SELECT COALESCE(SUM(balance), 0) AS v FROM accounts WHERE kind = 'card'").first();
+    "SELECT COALESCE(SUM(balance), 0) AS v FROM accounts WHERE user_id = ? AND kind = 'card'").bind(uid(env)).first();
   const assets = await env.DB.prepare(
-    "SELECT COALESCE(SUM(value), 0) AS v FROM holdings WHERE kind = 'asset'").first();
+    "SELECT COALESCE(SUM(value), 0) AS v FROM holdings WHERE user_id = ? AND kind = 'asset'").bind(uid(env)).first();
   const liab = await env.DB.prepare(
-    "SELECT COALESCE(SUM(value), 0) AS v FROM holdings WHERE kind = 'liability'").first();
+    "SELECT COALESCE(SUM(value), 0) AS v FROM holdings WHERE user_id = ? AND kind = 'liability'").bind(uid(env)).first();
   // Card balances are money owed, however they're entered.
   const owed = Math.abs(cards.v) + liab.v;
   return { cash: acc.v, assets: assets.v, owed, net: acc.v + assets.v - owed };
@@ -82,9 +83,9 @@ export const LIFE_TOOLS = {
     run: async (env) => {
       const n = await netWorth(env);
       const { results: accounts } = await env.DB.prepare(
-        "SELECT name, kind, balance, updated_at FROM accounts ORDER BY balance DESC").all();
+        "SELECT name, kind, balance, updated_at FROM accounts WHERE user_id = ? ORDER BY balance DESC").bind(uid(env)).all();
       const { results: holdings } = await env.DB.prepare(
-        "SELECT name, kind, category, value FROM holdings ORDER BY value DESC").all();
+        "SELECT name, kind, category, value FROM holdings WHERE user_id = ? ORDER BY value DESC").bind(uid(env)).all();
       if (!accounts.length && !holdings.length) {
         return { error: "nothing on file — ask the owner what accounts and investments they have, then set_account / set_holding" };
       }
@@ -102,10 +103,10 @@ export const LIFE_TOOLS = {
       const balance = Number(args.balance);
       if (!name || !isFinite(balance)) return { error: "need a name and a numeric balance" };
       await env.DB.prepare(
-        `INSERT INTO accounts (name, kind, balance, updated_at) VALUES (?,?,?,?)
-         ON CONFLICT(name) DO UPDATE SET kind = excluded.kind, balance = excluded.balance,
+        `INSERT INTO accounts (name, kind, balance, updated_at, user_id) VALUES (?,?,?,?,?)
+         ON CONFLICT(user_id, name) DO UPDATE SET kind = excluded.kind, balance = excluded.balance,
                                          updated_at = excluded.updated_at`)
-        .bind(name.slice(0, 60), kind, balance, nowIso()).run();
+        .bind(name.slice(0, 60), kind, balance, nowIso(), uid(env)).run();
       return { ok: true, ...(await netWorth(env)) };
     },
   },
@@ -120,11 +121,11 @@ export const LIFE_TOOLS = {
       const value = Number(args.value);
       if (!name || !isFinite(value)) return { error: "need a name and a numeric value" };
       await env.DB.prepare(
-        `INSERT INTO holdings (name, kind, category, value, note, updated_at) VALUES (?,?,?,?,?,?)
-         ON CONFLICT(name) DO UPDATE SET kind = excluded.kind, category = excluded.category,
+        `INSERT INTO holdings (name, kind, category, value, note, updated_at, user_id) VALUES (?,?,?,?,?,?,?)
+         ON CONFLICT(user_id, name) DO UPDATE SET kind = excluded.kind, category = excluded.category,
            value = excluded.value, updated_at = excluded.updated_at`)
         .bind(name.slice(0, 60), kind, String(args.category || "other"), Math.abs(value),
-              String(args.note || "").slice(0, 200), nowIso()).run();
+              String(args.note || "").slice(0, 200), nowIso(), uid(env)).run();
       return { ok: true, ...(await netWorth(env)) };
     },
   },
@@ -142,10 +143,10 @@ export const LIFE_TOOLS = {
       const category = CATEGORIES.includes(args.category)
         ? args.category : await categorise(env, counterparty, args.note);
       await env.DB.prepare(
-        `INSERT INTO transactions (amount, direction, counterparty, category, note, at, source)
-         VALUES (?,?,?,?,?,?,'manual')`)
+        `INSERT INTO transactions (amount, direction, counterparty, category, note, at, source, user_id)
+         VALUES (?,?,?,?,?,?,'manual',?)`)
         .bind(amount, direction, counterparty, category,
-              String(args.note || "").slice(0, 200), args.at || nowIso()).run();
+              String(args.note || "").slice(0, 200), args.at || nowIso(), uid(env)).run();
       return { ok: true, logged: { amount, direction, counterparty, category } };
     },
   },
@@ -157,22 +158,22 @@ export const LIFE_TOOLS = {
       const days = Math.min(Math.max(Number(args.days) || 30, 1), 365);
       const { results: byCat } = await env.DB.prepare(`
         SELECT category, COUNT(*) AS n, ROUND(SUM(amount)) AS total FROM transactions
-        WHERE direction = 'debit' AND datetime(at) >= datetime('now', '-' || ? || ' days')
-        GROUP BY category ORDER BY total DESC`).bind(days).all();
+        WHERE user_id = ? AND direction = 'debit' AND datetime(at) >= datetime('now', '-' || ? || ' days')
+        GROUP BY category ORDER BY total DESC`).bind(uid(env), days).all();
       const cur = await env.DB.prepare(`
         SELECT COALESCE(SUM(amount), 0) AS v FROM transactions
-        WHERE direction = 'debit' AND datetime(at) >= datetime('now', '-' || ? || ' days')`)
-        .bind(days).first();
+        WHERE user_id = ? AND direction = 'debit' AND datetime(at) >= datetime('now', '-' || ? || ' days')`)
+        .bind(uid(env), days).first();
       const prev = await env.DB.prepare(`
         SELECT COALESCE(SUM(amount), 0) AS v FROM transactions
-        WHERE direction = 'debit'
+        WHERE user_id = ? AND direction = 'debit'
           AND datetime(at) >= datetime('now', '-' || ? || ' days')
           AND datetime(at) <  datetime('now', '-' || ? || ' days')`)
-        .bind(days * 2, days).first();
+        .bind(uid(env), days * 2, days).first();
       const income = await env.DB.prepare(`
         SELECT COALESCE(SUM(amount), 0) AS v FROM transactions
-        WHERE direction = 'credit' AND datetime(at) >= datetime('now', '-' || ? || ' days')`)
-        .bind(days).first();
+        WHERE user_id = ? AND direction = 'credit' AND datetime(at) >= datetime('now', '-' || ? || ' days')`)
+        .bind(uid(env), days).first();
       if (!byCat.length) return { error: `no transactions in the last ${days} days` };
       const change = prev.v ? Math.round(((cur.v - prev.v) / prev.v) * 100) : null;
       return {
@@ -194,16 +195,16 @@ export const LIFE_TOOLS = {
       if (!metric) return { error: "need a metric name" };
       const value = args.value == null ? null : Number(args.value);
       await env.DB.prepare(
-        "INSERT INTO health (metric, value, unit, note, at) VALUES (?,?,?,?,?)")
+        "INSERT INTO health (metric, value, unit, note, at, user_id) VALUES (?,?,?,?,?,?)")
         .bind(metric.slice(0, 30), value, String(args.unit || "").slice(0, 12),
-              String(args.note || "").slice(0, 200), args.at || nowIso()).run();
+              String(args.note || "").slice(0, 200), args.at || nowIso(), uid(env)).run();
       // A number alone is trivia; the trend is the point.
       const prev = await env.DB.prepare(
-        `SELECT value, at FROM health WHERE metric = ? AND value IS NOT NULL
-         ORDER BY at DESC LIMIT 1 OFFSET 1`).bind(metric).first();
+        `SELECT value, at FROM health WHERE user_id = ? AND metric = ? AND value IS NOT NULL
+         ORDER BY at DESC LIMIT 1 OFFSET 1`).bind(uid(env), metric).first();
       const first = await env.DB.prepare(
-        `SELECT value, at FROM health WHERE metric = ? AND value IS NOT NULL
-           AND datetime(at) >= datetime('now', '-60 days') ORDER BY at ASC LIMIT 1`).bind(metric).first();
+        `SELECT value, at FROM health WHERE user_id = ? AND metric = ? AND value IS NOT NULL
+           AND datetime(at) >= datetime('now', '-60 days') ORDER BY at ASC LIMIT 1`).bind(uid(env), metric).first();
       return {
         ok: true,
         change_since_last: prev && value != null ? Math.round((value - prev.value) * 100) / 100 : null,
@@ -225,15 +226,15 @@ export const LIFE_TOOLS = {
       if (!name || !isFinite(kcal) || kcal <= 0) return { error: "need the food and a positive kcal" };
       const g = v => (v == null || !isFinite(Number(v)) ? null : Math.max(0, Number(v)));
       await env.DB.prepare(
-        "INSERT INTO meals (name, kcal, protein_g, carbs_g, fat_g, note, at) VALUES (?,?,?,?,?,?,?)")
+        "INSERT INTO meals (name, kcal, protein_g, carbs_g, fat_g, note, at, user_id) VALUES (?,?,?,?,?,?,?,?)")
         .bind(name.slice(0, 120), kcal, g(args.protein_g), g(args.carbs_g), g(args.fat_g),
-              String(args.note || "").slice(0, 200), args.at || nowIso()).run();
+              String(args.note || "").slice(0, 200), args.at || nowIso(), uid(env)).run();
       // One meal is trivia; the day is the point — reply with the running total.
       const today = await env.DB.prepare(`
         SELECT COUNT(*) AS meals, ROUND(SUM(kcal)) AS kcal,
                ROUND(SUM(protein_g)) AS protein_g, ROUND(SUM(carbs_g)) AS carbs_g,
                ROUND(SUM(fat_g)) AS fat_g
-        FROM meals WHERE date(at, '+330 minutes') = date('now', '+330 minutes')`).first();
+        FROM meals WHERE user_id = ? AND date(at, '+330 minutes') = date('now', '+330 minutes')`).bind(uid(env)).first();
       return { ok: true, logged: { name, kcal }, today };
     },
   },
@@ -247,8 +248,8 @@ export const LIFE_TOOLS = {
         SELECT date(at, '+330 minutes') AS day, COUNT(*) AS meals, ROUND(SUM(kcal)) AS kcal,
                ROUND(SUM(protein_g)) AS protein_g, ROUND(SUM(carbs_g)) AS carbs_g,
                ROUND(SUM(fat_g)) AS fat_g
-        FROM meals WHERE datetime(at) >= datetime('now', '-' || ? || ' days')
-        GROUP BY day ORDER BY day`).bind(days).all();
+        FROM meals WHERE user_id = ? AND datetime(at) >= datetime('now', '-' || ? || ' days')
+        GROUP BY day ORDER BY day`).bind(uid(env), days).all();
       if (!results.length) return { error: `no meals logged in the last ${days} days — the owner tells you what they ate, you log_meal it` };
       const avg = k => Math.round(results.reduce((s, r) => s + (r[k] || 0), 0) / results.length);
       return {
@@ -266,8 +267,8 @@ export const LIFE_TOOLS = {
       const days = Math.min(Math.max(Number(args.days) || 90, 1), 730);
       const { results } = await env.DB.prepare(
         `SELECT value, unit, note, at FROM health
-         WHERE metric = ? AND datetime(at) >= datetime('now', '-' || ? || ' days')
-         ORDER BY at`).bind(metric, days).all();
+         WHERE user_id = ? AND metric = ? AND datetime(at) >= datetime('now', '-' || ? || ' days')
+         ORDER BY at`).bind(uid(env), metric, days).all();
       if (!results.length) return { error: `nothing logged for '${metric}' in that window` };
       const vals = results.filter(r => r.value != null).map(r => r.value);
       return {
@@ -287,8 +288,8 @@ export const LIFE_TOOLS = {
     run: async (env, args) => {
       const name = String(args.name || "").trim();
       if (!name) return { error: "need a name" };
-      const existing = await env.DB.prepare("SELECT * FROM people WHERE name = ?")
-        .bind(name).first();
+      const existing = await env.DB.prepare("SELECT * FROM people WHERE user_id = ? AND name = ?")
+        .bind(uid(env), name).first();
       const merged = {
         relation: args.relation || existing?.relation || null,
         how_met: args.how_met || existing?.how_met || null,
@@ -298,15 +299,15 @@ export const LIFE_TOOLS = {
           ? args.status : existing?.status || "active",
       };
       await env.DB.prepare(
-        `INSERT INTO people (name, relation, how_met, status, notes, next_step, created_at)
-         VALUES (?,?,?,?,?,?,?)
-         ON CONFLICT(name) DO UPDATE SET relation = excluded.relation, how_met = excluded.how_met,
+        `INSERT INTO people (name, relation, how_met, status, notes, next_step, created_at, user_id)
+         VALUES (?,?,?,?,?,?,?,?)
+         ON CONFLICT(user_id, name) DO UPDATE SET relation = excluded.relation, how_met = excluded.how_met,
            status = excluded.status, notes = excluded.notes, next_step = excluded.next_step`)
         .bind(name.slice(0, 80), merged.relation, merged.how_met, merged.status,
-              String(merged.notes || "").slice(0, 600), merged.next_step, nowIso()).run();
+              String(merged.notes || "").slice(0, 600), merged.next_step, nowIso(), uid(env)).run();
       if (args.spoke_today) {
-        await env.DB.prepare("UPDATE people SET last_contact = ? WHERE name = ?")
-          .bind(nowIso(), name.slice(0, 80)).run();
+        await env.DB.prepare("UPDATE people SET last_contact = ? WHERE user_id = ? AND name = ?")
+          .bind(nowIso(), uid(env), name.slice(0, 80)).run();
       }
       return { ok: true, person: name, ...merged };
     },
@@ -320,17 +321,17 @@ export const LIFE_TOOLS = {
       const name = String(args.name || "").trim();
       const what = String(args.what || "").trim();
       if (!name || !what) return { error: "need a name and what happened" };
-      let p = await env.DB.prepare("SELECT id FROM people WHERE name = ?").bind(name).first();
+      let p = await env.DB.prepare("SELECT id FROM people WHERE user_id = ? AND name = ?").bind(uid(env), name).first();
       if (!p) {
         p = await env.DB.prepare(
-          "INSERT INTO people (name, status, created_at) VALUES (?, 'active', ?) RETURNING id")
-          .bind(name.slice(0, 80), nowIso()).first();
+          "INSERT INTO people (name, status, created_at, user_id) VALUES (?, 'active', ?, ?) RETURNING id")
+          .bind(name.slice(0, 80), nowIso(), uid(env)).first();
       }
       const at = args.at || nowIso();
-      await env.DB.prepare("INSERT INTO interactions (person_id, what, at) VALUES (?,?,?)")
-        .bind(p.id, what.slice(0, 400), at).run();
+      await env.DB.prepare("INSERT INTO interactions (person_id, what, at, user_id) VALUES (?,?,?,?)")
+        .bind(p.id, what.slice(0, 400), at, uid(env)).run();
       await env.DB.prepare(
-        "UPDATE people SET last_contact = ?, status = 'active' WHERE id = ?").bind(at, p.id).run();
+        "UPDATE people SET last_contact = ?, status = 'active' WHERE user_id = ? AND id = ?").bind(at, uid(env), p.id).run();
       return { ok: true };
     },
   },
@@ -347,13 +348,13 @@ export const LIFE_TOOLS = {
           SELECT name, relation, next_step, last_contact, notes,
                  CAST(julianday('now') - julianday(COALESCE(last_contact, created_at)) AS INTEGER) AS days_quiet
           FROM people
-          WHERE status != 'closed'
+          WHERE user_id = ? AND status != 'closed'
             AND julianday('now') - julianday(COALESCE(last_contact, created_at)) >= 10
-          ORDER BY days_quiet DESC LIMIT 15`).all();
+          ORDER BY days_quiet DESC LIMIT 15`).bind(uid(env)).all();
         return { cold_threads: results.length, people: results };
       }
-      const where = args.relation ? "WHERE relation = ?" : "";
-      const binds = args.relation ? [String(args.relation)] : [];
+      const where = args.relation ? "WHERE user_id = ? AND relation = ?" : "WHERE user_id = ?";
+      const binds = args.relation ? [uid(env), String(args.relation)] : [uid(env)];
       const { results } = await env.DB.prepare(
         `SELECT name, relation, how_met, status, next_step, last_contact, notes
          FROM people ${where} ORDER BY COALESCE(last_contact, created_at) DESC LIMIT 30`)
@@ -367,11 +368,11 @@ export const LIFE_TOOLS = {
     desc: 'everything the owner has told you about one person. args: {"name": "Ankit"}',
     run: async (env, args) => {
       const name = String(args.name || "").trim();
-      const p = await env.DB.prepare("SELECT * FROM people WHERE name = ?").bind(name).first();
+      const p = await env.DB.prepare("SELECT * FROM people WHERE user_id = ? AND name = ?").bind(uid(env), name).first();
       if (!p) return { error: `nobody called '${name}' on file` };
       const { results } = await env.DB.prepare(
-        "SELECT what, at FROM interactions WHERE person_id = ? ORDER BY at DESC LIMIT 20")
-        .bind(p.id).all();
+        "SELECT what, at FROM interactions WHERE user_id = ? AND person_id = ? ORDER BY at DESC LIMIT 20")
+        .bind(uid(env), p.id).all();
       return { person: p, interactions: results };
     },
   },

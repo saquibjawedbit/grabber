@@ -13,6 +13,7 @@ import { llm } from "./llm.js";
 import { recallMemories, saveMemory } from "./memory.js";
 import { getPersona, voiceBlock } from "./persona.js";
 import { searchWeb } from "./search.js";
+import { uid, ownerChat } from "./tenant.js";
 
 const ISSUE_HOUR = 7;       // IST — morning quest issuance
 const DEBRIEF_HOUR = 21;    // IST — evening reckoning
@@ -48,14 +49,14 @@ function endOfTodayUtc() {
 // ---------- state helpers (key-value in the `state` table) ----------
 
 async function getState(env, key) {
-  const r = await env.DB.prepare("SELECT value FROM state WHERE key = ?").bind(key).first();
+  const r = await env.DB.prepare("SELECT value FROM state WHERE user_id = ? AND key = ?").bind(uid(env), key).first();
   return r?.value ?? null;
 }
 async function setState(env, key, value) {
   await env.DB.prepare(
-    `INSERT INTO state (key, value, updated_at) VALUES (?,?,?)
-     ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`)
-    .bind(key, String(value), new Date().toISOString()).run();
+    `INSERT INTO state (key, value, updated_at, user_id) VALUES (?,?,?,?)
+     ON CONFLICT(user_id, key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at`)
+    .bind(key, String(value), new Date().toISOString(), uid(env)).run();
 }
 
 // ---------- Activity log: what the agent did to move the owner's goals ----------
@@ -63,11 +64,11 @@ async function setState(env, key, value) {
 export async function logActivity(env, { kind, summary, detail = null, reasoning = null, actor = "system", goal_id = null, quest_id = null }) {
   try {
     await env.DB.prepare(
-      "INSERT INTO activity (at, kind, actor, summary, detail, reasoning, goal_id, quest_id) VALUES (?,?,?,?,?,?,?,?)")
+      "INSERT INTO activity (at, kind, actor, summary, detail, reasoning, goal_id, quest_id, user_id) VALUES (?,?,?,?,?,?,?,?,?)")
       .bind(new Date().toISOString(), kind, actor, String(summary).slice(0, 300),
             detail ? String(detail).slice(0, 1000) : null,
             reasoning ? String(reasoning).slice(0, 400) : null,
-            goal_id ? Number(goal_id) : null, quest_id ? Number(quest_id) : null).run();
+            goal_id ? Number(goal_id) : null, quest_id ? Number(quest_id) : null, uid(env)).run();
   } catch (e) {
     console.log("logActivity failed:", String(e).slice(0, 120));
   }
@@ -81,27 +82,27 @@ export async function logMetric(env, { name, value, unit = null, note = null, go
   if (!name) return { error: "a metric needs a name" };
   if (!isFinite(v)) return { error: "value must be a number" };
   await env.DB.prepare(
-    "INSERT INTO metrics (name, value, unit, note, goal_id, at) VALUES (?,?,?,?,?,?)")
+    "INSERT INTO metrics (name, value, unit, note, goal_id, at, user_id) VALUES (?,?,?,?,?,?,?)")
     .bind(name, v, unit ? String(unit).slice(0, 12) : null, note ? String(note).slice(0, 200) : null,
-          goal_id ? Number(goal_id) : null, at || new Date().toISOString()).run();
+          goal_id ? Number(goal_id) : null, at || new Date().toISOString(), uid(env)).run();
   await logActivity(env, {
     kind: "metric", actor: "owner", goal_id: goal_id ? Number(goal_id) : null,
     summary: `Logged ${name}: ${v}${unit ? " " + unit : ""}`,
   });
   const prev = await env.DB.prepare(
-    "SELECT value FROM metrics WHERE name = ? ORDER BY at DESC LIMIT 1 OFFSET 1").bind(name).first();
+    "SELECT value FROM metrics WHERE user_id = ? AND name = ? ORDER BY at DESC LIMIT 1 OFFSET 1").bind(uid(env), name).first();
   return { ok: true, name, value: v, change_since_last: prev ? Math.round((v - prev.value) * 100) / 100 : null };
 }
 
 export async function listMetrics(env, { name = null, limit = 300 } = {}) {
   if (name) {
     const { results } = await env.DB.prepare(
-      "SELECT name, value, unit, note, at FROM metrics WHERE name = ? ORDER BY at DESC LIMIT ?")
-      .bind(String(name).toLowerCase(), Math.min(limit, 500)).all();
+      "SELECT name, value, unit, note, at FROM metrics WHERE user_id = ? AND name = ? ORDER BY at DESC LIMIT ?")
+      .bind(uid(env), String(name).toLowerCase(), Math.min(limit, 500)).all();
     return { name, points: results.reverse() };
   }
   const { results } = await env.DB.prepare(
-    "SELECT name, value, unit, at FROM metrics ORDER BY at DESC LIMIT ?").bind(Math.min(limit, 500)).all();
+    "SELECT name, value, unit, at FROM metrics WHERE user_id = ? ORDER BY at DESC LIMIT ?").bind(uid(env), Math.min(limit, 500)).all();
   return { count: results.length, metrics: results.reverse() };   // oldest-first, ready to chart
 }
 
@@ -147,7 +148,7 @@ async function addXp(env, delta) {
 
 export async function listAwards(env) {
   const { results } = await env.DB.prepare(
-    "SELECT id, key, title, icon, detail, goal_id, xp, awarded_at, reward, reward_claimed_at FROM awards ORDER BY id DESC").all();
+    "SELECT id, key, title, icon, detail, goal_id, xp, awarded_at, reward, reward_claimed_at FROM awards WHERE user_id = ? ORDER BY id DESC").bind(uid(env)).all();
   return { count: results.length, awards: results };
 }
 
@@ -155,15 +156,15 @@ export async function listAwards(env) {
 // the first timestamp. {unclaim:true} clears it (mis-tap). Returns the updated row.
 export async function claimReward(env, { id, key, unclaim = false } = {}) {
   const row = id
-    ? await env.DB.prepare("SELECT * FROM awards WHERE id = ?").bind(Number(id)).first()
-    : key ? await env.DB.prepare("SELECT * FROM awards WHERE key = ?").bind(String(key)).first() : null;
+    ? await env.DB.prepare("SELECT * FROM awards WHERE user_id = ? AND id = ?").bind(uid(env), Number(id)).first()
+    : key ? await env.DB.prepare("SELECT * FROM awards WHERE user_id = ? AND key = ?").bind(uid(env), String(key)).first() : null;
   if (!row) return { error: "no award with that id/key" };
   if (unclaim) {
-    await env.DB.prepare("UPDATE awards SET reward_claimed_at = NULL WHERE id = ?").bind(row.id).run();
+    await env.DB.prepare("UPDATE awards SET reward_claimed_at = NULL WHERE user_id = ? AND id = ?").bind(uid(env), row.id).run();
     return { ok: true, id: row.id, reward_claimed_at: null };
   }
   const at = row.reward_claimed_at || new Date().toISOString();
-  await env.DB.prepare("UPDATE awards SET reward_claimed_at = ? WHERE id = ?").bind(at, row.id).run();
+  await env.DB.prepare("UPDATE awards SET reward_claimed_at = ? WHERE user_id = ? AND id = ?").bind(at, uid(env), row.id).run();
   return { ok: true, id: row.id, title: row.title, reward: row.reward, reward_claimed_at: at };
 }
 
@@ -226,8 +227,8 @@ Rules:
 // earned — pulled from the awards table and merged in.
 export async function awardCatalog(env) {
   const st = await getSystemState(env);
-  const cleared = (await env.DB.prepare("SELECT COUNT(*) AS n FROM quests WHERE status = 'done'").first()).n;
-  const msDone = (await env.DB.prepare("SELECT COUNT(*) AS n FROM milestones WHERE status = 'done'").first()).n;
+  const cleared = (await env.DB.prepare("SELECT COUNT(*) AS n FROM quests WHERE user_id = ? AND status = 'done'").bind(uid(env)).first()).n;
+  const msDone = (await env.DB.prepare("SELECT COUNT(*) AS n FROM milestones WHERE user_id = ? AND status = 'done'").bind(uid(env)).first()).n;
   const bestStreak = Math.max(st.streak, st.streak_best);
   const earned = new Map((await listAwards(env)).awards.map(a => [a.key, a]));
 
@@ -268,14 +269,14 @@ export async function awardCatalog(env) {
 
 async function grantAward(env, tg, { key, title, icon = "🏆", detail = null, goal_id = null, xp = 25 }) {
   const r = await env.DB.prepare(
-    "INSERT OR IGNORE INTO awards (key, title, icon, detail, goal_id, xp, awarded_at) VALUES (?,?,?,?,?,?,?)")
-    .bind(key, title, icon, detail, goal_id, xp, new Date().toISOString()).run();
+    "INSERT OR IGNORE INTO awards (key, title, icon, detail, goal_id, xp, awarded_at, user_id) VALUES (?,?,?,?,?,?,?,?)")
+    .bind(key, title, icon, detail, goal_id, xp, new Date().toISOString(), uid(env)).run();
   if (!r.meta.changes) return null;   // already earned
   const st = await addXp(env, xp);
   // The tangible reward — generated only now, on a genuinely NEW award (the INSERT changed),
   // so the LLM never fires on the nightly re-checks of already-earned badges.
   const reward = await generateReward(env, { title, detail, xp, goal_id });
-  if (reward) await env.DB.prepare("UPDATE awards SET reward = ? WHERE key = ?").bind(reward, key).run();
+  if (reward) await env.DB.prepare("UPDATE awards SET reward = ? WHERE user_id = ? AND key = ?").bind(reward, uid(env), key).run();
   await logActivity(env, {
     kind: "award", goal_id,
     summary: `Award earned: ${icon} ${title}`,
@@ -285,7 +286,7 @@ async function grantAward(env, tg, { key, title, icon = "🏆", detail = null, g
   const quiet = t.hour >= QUIET_START || t.hour < QUIET_END;
   if (tg && !quiet) {
     await tg(env, "sendMessage", {
-      chat_id: env.TELEGRAM_CHAT_ID, parse_mode: "HTML",
+      chat_id: ownerChat(env), parse_mode: "HTML",
       text: `${icon} <b>AWARD — ${esc(title)}</b>\n${detail ? esc(detail) + "\n" : ""}<i>+${xp} bonus XP</i>` +
             (reward ? `\n\n🎁 <b>Your reward:</b> ${esc(reward)}` : ""),
     });
@@ -310,7 +311,7 @@ export async function checkAwards(env, tg) {
         if (g) granted.push(g);
       }
     }
-    const cleared = (await env.DB.prepare("SELECT COUNT(*) AS n FROM quests WHERE status = 'done'").first()).n;
+    const cleared = (await env.DB.prepare("SELECT COUNT(*) AS n FROM quests WHERE user_id = ? AND status = 'done'").bind(uid(env)).first()).n;
     for (const [n, title] of CLEARED_AWARDS) {
       if (cleared >= n) {
         const g = await grantAward(env, tg, { key: `cleared_${n}`, title, icon: "⚔️", detail: `${cleared} quests cleared` });
@@ -327,13 +328,13 @@ export async function checkAwards(env, tg) {
         break;   // only the highest earned rank; lower ones were granted on the way up
       }
     }
-    const firstMs = await env.DB.prepare("SELECT COUNT(*) AS n FROM milestones WHERE status = 'done'").first();
+    const firstMs = await env.DB.prepare("SELECT COUNT(*) AS n FROM milestones WHERE user_id = ? AND status = 'done'").bind(uid(env)).first();
     if (firstMs.n >= 1) {
       const g = await grantAward(env, tg, { key: "first_milestone", title: "First Gate Cleared", icon: "🏁", detail: "First milestone completed" });
       if (g) granted.push(g);
     }
     // Goal achieved → its own trophy.
-    const { results: achieved } = await env.DB.prepare("SELECT id, title FROM goals WHERE status = 'achieved'").all();
+    const { results: achieved } = await env.DB.prepare("SELECT id, title FROM goals WHERE user_id = ? AND status = 'achieved'").bind(uid(env)).all();
     for (const goal of achieved) {
       const g = await grantAward(env, tg, {
         key: `goal_${goal.id}`, title: `Goal Achieved: ${goal.title.slice(0, 80)}`, icon: "🏅",
@@ -344,18 +345,18 @@ export async function checkAwards(env, tg) {
     // The 30-day transformation: a plan followed for a month with visible change —
     // sustained quest work AND measured movement (goal progress, or a metric that moved).
     const { results: goals } = await env.DB.prepare(
-      "SELECT * FROM goals WHERE status = 'active'").all();
+      "SELECT * FROM goals WHERE user_id = ? AND status = 'active'").bind(uid(env)).all();
     for (const goal of goals) {
       const age = daysBetween(goal.created_at, new Date().toISOString());
       if (age < 30) continue;
       const q = await env.DB.prepare(
         `SELECT SUM(status='done') AS d, COUNT(*) AS n FROM quests
-         WHERE goal_id = ? AND datetime(issued_at) >= datetime('now', '-30 days')`).bind(goal.id).first();
+         WHERE user_id = ? AND goal_id = ? AND datetime(issued_at) >= datetime('now', '-30 days')`).bind(uid(env), goal.id).first();
       const done30 = q.d || 0;
       const metric = await env.DB.prepare(
-        `SELECT (SELECT value FROM metrics WHERE goal_id = ?1 ORDER BY at DESC LIMIT 1) AS last,
-                (SELECT value FROM metrics WHERE goal_id = ?1 AND datetime(at) >= datetime('now','-30 days') ORDER BY at LIMIT 1) AS first`)
-        .bind(goal.id).first();
+        `SELECT (SELECT value FROM metrics WHERE user_id = ?2 AND goal_id = ?1 ORDER BY at DESC LIMIT 1) AS last,
+                (SELECT value FROM metrics WHERE user_id = ?2 AND goal_id = ?1 AND datetime(at) >= datetime('now','-30 days') ORDER BY at LIMIT 1) AS first`)
+        .bind(goal.id, uid(env)).first();
       const moved = metric?.last != null && metric?.first != null && metric.last !== metric.first;
       if (done30 >= 12 && ((goal.progress || 0) >= 0.2 || moved)) {
         const g = await grantAward(env, tg, {
@@ -371,10 +372,10 @@ export async function checkAwards(env, tg) {
     // feature shipped, or a generation that failed) gets one now — bounded to 3 per pass
     // so a fresh DB with a backlog never fires a burst of LLM calls in one run.
     const { results: missing } = await env.DB.prepare(
-      "SELECT key, title, detail, xp, goal_id FROM awards WHERE reward IS NULL ORDER BY id LIMIT 3").all();
+      "SELECT key, title, detail, xp, goal_id FROM awards WHERE user_id = ? AND reward IS NULL ORDER BY id LIMIT 3").bind(uid(env)).all();
     for (const a of missing) {
       const reward = await generateReward(env, a);
-      if (reward) await env.DB.prepare("UPDATE awards SET reward = ? WHERE key = ?").bind(reward, a.key).run();
+      if (reward) await env.DB.prepare("UPDATE awards SET reward = ? WHERE user_id = ? AND key = ?").bind(reward, uid(env), a.key).run();
     }
   } catch (e) { console.log("checkAwards failed:", String(e).slice(0, 150)); }
   return granted;
@@ -404,7 +405,7 @@ export async function clockContext(env, goal = null) {
       c.runway_used_pct = Math.round((c.goal_age_days / total) * 100);
     }
   }
-  const last = await env.DB.prepare("SELECT MAX(resolved_at) AS at FROM quests WHERE status = 'done'").first();
+  const last = await env.DB.prepare("SELECT MAX(resolved_at) AS at FROM quests WHERE user_id = ? AND status = 'done'").bind(uid(env)).first();
   if (last?.at) c.days_since_last_cleared = daysBetween(last.at, nowIso);
   c.streak = Number(await getState(env, "streak") || 0);
   return c;
@@ -415,7 +416,7 @@ export async function clockContext(env, goal = null) {
 export async function computeProgress(env, goalId) {
   if (!goalId) return { progress: 0 };
   const ms = (await env.DB.prepare(
-    "SELECT id, status FROM milestones WHERE goal_id = ? ORDER BY seq").bind(goalId).all()).results;
+    "SELECT id, status FROM milestones WHERE user_id = ? AND goal_id = ? ORDER BY seq").bind(uid(env), goalId).all()).results;
   let progress;
   if (ms.length) {
     const done = ms.filter(m => m.status === "done").length;
@@ -423,19 +424,19 @@ export async function computeProgress(env, goalId) {
     let activeRatio = 0;
     if (active) {
       const q = await env.DB.prepare(
-        "SELECT COUNT(*) AS n, SUM(status = 'done') AS d FROM quests WHERE milestone_id = ?").bind(active.id).first();
+        "SELECT COUNT(*) AS n, SUM(status = 'done') AS d FROM quests WHERE user_id = ? AND milestone_id = ?").bind(uid(env), active.id).first();
       activeRatio = q.n ? (q.d || 0) / q.n : 0;
     }
     progress = (done + activeRatio) / ms.length;
   } else {
     // No roadmap yet — fall back to quest completion for the goal.
     const q = await env.DB.prepare(
-      "SELECT COUNT(*) AS n, SUM(status = 'done') AS d FROM quests WHERE goal_id = ?").bind(goalId).first();
+      "SELECT COUNT(*) AS n, SUM(status = 'done') AS d FROM quests WHERE user_id = ? AND goal_id = ?").bind(uid(env), goalId).first();
     progress = q.n ? (q.d || 0) / q.n : 0;
   }
   progress = Math.max(0, Math.min(1, progress));
-  await env.DB.prepare("UPDATE goals SET progress = ?, updated_at = ? WHERE id = ?")
-    .bind(progress, new Date().toISOString(), goalId).run();
+  await env.DB.prepare("UPDATE goals SET progress = ?, updated_at = ? WHERE user_id = ? AND id = ?")
+    .bind(progress, new Date().toISOString(), uid(env), goalId).run();
   return { progress };
 }
 
@@ -470,13 +471,13 @@ function unpackSteps(raw) {
 
 export async function listMilestones(env, goalId) {
   const { results } = await env.DB.prepare(
-    "SELECT id, goal_id, seq, title, done_when, steps, target_date, status, done_at FROM milestones WHERE goal_id = ? ORDER BY seq")
-    .bind(goalId).all();
+    "SELECT id, goal_id, seq, title, done_when, steps, target_date, status, done_at FROM milestones WHERE user_id = ? AND goal_id = ? ORDER BY seq")
+    .bind(uid(env), goalId).all();
   return results.map(m => ({ ...m, steps: unpackSteps(m.steps) }));
 }
 async function activeMilestone(env, goalId) {
   return env.DB.prepare(
-    "SELECT * FROM milestones WHERE goal_id = ? AND status = 'active' ORDER BY seq LIMIT 1").bind(goalId).first();
+    "SELECT * FROM milestones WHERE user_id = ? AND goal_id = ? AND status = 'active' ORDER BY seq LIMIT 1").bind(uid(env), goalId).first();
 }
 
 // Advance the active milestone when its quests are substantially cleared.
@@ -485,14 +486,14 @@ async function advanceMilestones(env, goalId) {
   if (!active) return;
   const q = await env.DB.prepare(
     `SELECT COUNT(*) AS n, SUM(status='done') AS d, SUM(status IN ('issued','doing')) AS open
-     FROM quests WHERE milestone_id = ?`).bind(active.id).first();
+     FROM quests WHERE user_id = ? AND milestone_id = ?`).bind(uid(env), active.id).first();
   if (q.n >= 2 && (q.open || 0) === 0 && (q.d || 0) >= Math.ceil(q.n * 0.6)) {
-    await env.DB.prepare("UPDATE milestones SET status = 'done', done_at = ? WHERE id = ?")
-      .bind(new Date().toISOString(), active.id).run();
+    await env.DB.prepare("UPDATE milestones SET status = 'done', done_at = ? WHERE user_id = ? AND id = ?")
+      .bind(new Date().toISOString(), uid(env), active.id).run();
     const next = await env.DB.prepare(
-      "SELECT id, title FROM milestones WHERE goal_id = ? AND status = 'pending' ORDER BY seq LIMIT 1")
-      .bind(goalId).first();
-    if (next) await env.DB.prepare("UPDATE milestones SET status = 'active' WHERE id = ?").bind(next.id).run();
+      "SELECT id, title FROM milestones WHERE user_id = ? AND goal_id = ? AND status = 'pending' ORDER BY seq LIMIT 1")
+      .bind(uid(env), goalId).first();
+    if (next) await env.DB.prepare("UPDATE milestones SET status = 'active' WHERE user_id = ? AND id = ?").bind(uid(env), next.id).run();
     await logActivity(env, {
       kind: "milestone_done", goal_id: goalId,
       summary: `Milestone cleared: ${active.title}`,
@@ -518,8 +519,8 @@ const MAX_QUESTIONS_PER_DAY = 5;   // per goal — answered questions trigger re
 async function recordPlanQuestions(env, goalId, questions) {
   if (!Array.isArray(questions) || !questions.length) return 0;
   const asked24h = (await env.DB.prepare(
-    "SELECT COUNT(*) AS n FROM plan_questions WHERE goal_id = ? AND datetime(asked_at) >= datetime('now','-1 day')")
-    .bind(goalId).first()).n;
+    "SELECT COUNT(*) AS n FROM plan_questions WHERE user_id = ? AND goal_id = ? AND datetime(asked_at) >= datetime('now','-1 day')")
+    .bind(uid(env), goalId).first()).n;
   if (asked24h >= MAX_QUESTIONS_PER_DAY) return 0;
   const now = new Date().toISOString();
   let added = 0;
@@ -527,27 +528,28 @@ async function recordPlanQuestions(env, goalId, questions) {
     const text = String(q).trim().slice(0, 300);
     if (!text) continue;
     const open = await env.DB.prepare(
-      "SELECT COUNT(*) AS n FROM plan_questions WHERE goal_id = ? AND status = 'open'").bind(goalId).first();
+      "SELECT COUNT(*) AS n FROM plan_questions WHERE user_id = ? AND goal_id = ? AND status = 'open'").bind(uid(env), goalId).first();
     if (open.n >= MAX_OPEN_QUESTIONS) break;
     // Don't re-ask what's open or was ever answered for this goal (case-insensitive).
     const dup = await env.DB.prepare(
-      "SELECT id FROM plan_questions WHERE goal_id = ? AND lower(question) = lower(?)").bind(goalId, text).first();
+      "SELECT id FROM plan_questions WHERE user_id = ? AND goal_id = ? AND lower(question) = lower(?)").bind(uid(env), goalId, text).first();
     if (dup) continue;
     await env.DB.prepare(
-      "INSERT INTO plan_questions (goal_id, question, status, asked_at) VALUES (?,?, 'open', ?)")
-      .bind(goalId, text, now).run();
+      "INSERT INTO plan_questions (goal_id, question, status, asked_at, user_id) VALUES (?,?, 'open', ?, ?)")
+      .bind(goalId, text, now, uid(env)).run();
     added++;
   }
   return added;
 }
 
 export async function listPlanQuestions(env, { status = "open" } = {}) {
-  const where = status === "all" ? "" : "WHERE q.status = ?";
+  const where = status === "all" ? "" : "AND q.status = ?";
   const binds = status === "all" ? [] : [status];
   const { results } = await env.DB.prepare(
     `SELECT q.id, q.goal_id, g.title AS goal_title, q.question, q.status, q.answer, q.asked_at
-     FROM plan_questions q JOIN goals g ON g.id = q.goal_id ${where} ORDER BY q.id DESC LIMIT 30`)
-    .bind(...binds).all();
+     FROM plan_questions q JOIN goals g ON g.id = q.goal_id
+     WHERE q.user_id = ? AND g.user_id = ? ${where} ORDER BY q.id DESC LIMIT 30`)
+    .bind(uid(env), uid(env), ...binds).all();
   return { count: results.length, questions: results };
 }
 
@@ -560,12 +562,12 @@ export async function answerPlanQuestion(env, { id, answer, replan = "auto" }) {
   id = Number(id);
   answer = String(answer || "").trim().slice(0, 500);
   if (!id || !answer) return { error: "need the question id and an answer" };
-  const q = await env.DB.prepare("SELECT * FROM plan_questions WHERE id = ?").bind(id).first();
+  const q = await env.DB.prepare("SELECT * FROM plan_questions WHERE user_id = ? AND id = ?").bind(uid(env), id).first();
   if (!q) return { error: "no plan question with that id" };
   if (q.status === "answered") return { ok: true, already: "answered" };
   await env.DB.prepare(
-    "UPDATE plan_questions SET status = 'answered', answer = ?, answered_at = ? WHERE id = ?")
-    .bind(answer, new Date().toISOString(), id).run();
+    "UPDATE plan_questions SET status = 'answered', answer = ?, answered_at = ? WHERE user_id = ? AND id = ?")
+    .bind(answer, new Date().toISOString(), uid(env), id).run();
   // Durable memory too, so every future recall — not just this goal's planner — knows it.
   try { await saveMemory(env, `${answer} (answering: ${q.question})`, "identity", { source: "plan_question" }); }
   catch (e) { console.log("plan answer memory failed:", String(e).slice(0, 120)); }
@@ -575,7 +577,7 @@ export async function answerPlanQuestion(env, { id, answer, replan = "auto" }) {
     detail: answer.slice(0, 300),
   });
   const open = (await env.DB.prepare(
-    "SELECT COUNT(*) AS n FROM plan_questions WHERE goal_id = ? AND status = 'open'").bind(q.goal_id).first()).n;
+    "SELECT COUNT(*) AS n FROM plan_questions WHERE user_id = ? AND goal_id = ? AND status = 'open'").bind(uid(env), q.goal_id).first()).n;
   let replanned = false;
   if (replan === true || (replan === "auto" && open === 0)) {
     replanned = (await adaptPlan(env, q.goal_id)).ok === true;
@@ -615,7 +617,7 @@ export async function announceOpenQuestions(env, tg, { includeStale = false } = 
     ? " OR (q.announced BETWEEN 1 AND 2 AND datetime(q.asked_at) <= datetime('now','-2 days'))" : "";
   const { results } = await env.DB.prepare(
     `SELECT q.id, q.question, q.announced, g.title FROM plan_questions q JOIN goals g ON g.id = q.goal_id
-     WHERE q.status = 'open' AND (q.announced = 0${stale}) ORDER BY q.id LIMIT 9`).all();
+     WHERE q.user_id = ? AND g.user_id = ? AND q.status = 'open' AND (q.announced = 0${stale}) ORDER BY q.id LIMIT 9`).bind(uid(env), uid(env)).all();
   if (!results.length) return { none: true };
   const fresh = results.filter(q => !q.announced), nag = results.filter(q => q.announced);
   const line = q => `▫️ <b>${esc(q.title.slice(0, 60))}</b>: ${esc(q.question)}`;
@@ -623,12 +625,12 @@ export async function announceOpenQuestions(env, tg, { includeStale = false } = 
   if (fresh.length) parts.push(`🗺️ <b>The System needs facts to plan you better.</b>\n\n${fresh.map(line).join("\n")}`);
   if (nag.length) parts.push(`⏳ <b>Still waiting on these — your plan is running on guesses:</b>\n\n${nag.map(line).join("\n")}`);
   const r = await tg(env, "sendMessage", {
-    chat_id: env.TELEGRAM_CHAT_ID, parse_mode: "HTML",
+    chat_id: ownerChat(env), parse_mode: "HTML",
     text: `${parts.join("\n\n")}\n\n<i>Just answer here — the plan updates itself.</i>`,
   });
   if (r.ok) {
     for (const q of results) {
-      await env.DB.prepare("UPDATE plan_questions SET announced = announced + 1 WHERE id = ?").bind(q.id).run();
+      await env.DB.prepare("UPDATE plan_questions SET announced = announced + 1 WHERE user_id = ? AND id = ?").bind(uid(env), q.id).run();
     }
   }
   return { announced: results.length };
@@ -682,9 +684,9 @@ Return ONLY JSON:
 // at issuance, so a goal is always planned before its first quests.
 export async function planGoal(env, goalId) {
  try {
-  const goal = await env.DB.prepare("SELECT * FROM goals WHERE id = ?").bind(goalId).first();
+  const goal = await env.DB.prepare("SELECT * FROM goals WHERE user_id = ? AND id = ?").bind(uid(env), goalId).first();
   if (!goal || goal.status !== "active") return { skipped: "no active goal" };
-  const have = await env.DB.prepare("SELECT COUNT(*) AS n FROM milestones WHERE goal_id = ?").bind(goalId).first();
+  const have = await env.DB.prepare("SELECT COUNT(*) AS n FROM milestones WHERE user_id = ? AND goal_id = ?").bind(uid(env), goalId).first();
   if (have.n) return { skipped: "already planned" };
   const { text, salvaged } = await llm(env,
     PLAN_PROMPT(await getPersona(env), await clockContext(env, goal), goal, await goalContext(env, goal)));
@@ -708,10 +710,10 @@ export async function planGoal(env, goalId) {
     if (deadlineMs && targetMs > deadlineMs) targetMs = deadlineMs;
     const target = new Date(targetMs).toISOString().slice(0, 10);
     await env.DB.prepare(
-      `INSERT INTO milestones (goal_id, seq, title, done_when, steps, target_date, status, created_at)
-       VALUES (?,?,?,?,?,?,?,?)`)
+      `INSERT INTO milestones (goal_id, seq, title, done_when, steps, target_date, status, created_at, user_id)
+       VALUES (?,?,?,?,?,?,?,?,?)`)
       .bind(goalId, seq, String(m.title).slice(0, 200), String(m.done_when || "").slice(0, 300) || null,
-            packSteps(m.steps), target, seq === 1 ? "active" : "pending", now).run();
+            packSteps(m.steps), target, seq === 1 ? "active" : "pending", now, uid(env)).run();
     seq++;
   }
   await computeProgress(env, goalId);
@@ -734,9 +736,9 @@ export async function planGoal(env, goalId) {
 export async function replanGoal(env, goalId) {
   goalId = Number(goalId);
   await env.DB.prepare(
-    "UPDATE quests SET milestone_id = NULL WHERE milestone_id IN (SELECT id FROM milestones WHERE goal_id = ?)")
-    .bind(goalId).run();
-  await env.DB.prepare("DELETE FROM milestones WHERE goal_id = ?").bind(goalId).run();
+    "UPDATE quests SET milestone_id = NULL WHERE user_id = ? AND milestone_id IN (SELECT id FROM milestones WHERE user_id = ? AND goal_id = ?)")
+    .bind(uid(env), uid(env), goalId).run();
+  await env.DB.prepare("DELETE FROM milestones WHERE user_id = ? AND goal_id = ?").bind(uid(env), goalId).run();
   return planGoal(env, goalId);
 }
 
@@ -795,7 +797,7 @@ Return ONLY JSON:
 export async function adaptPlan(env, goalId) {
  try {
   goalId = Number(goalId);
-  const goal = await env.DB.prepare("SELECT * FROM goals WHERE id = ?").bind(goalId).first();
+  const goal = await env.DB.prepare("SELECT * FROM goals WHERE user_id = ? AND id = ?").bind(uid(env), goalId).first();
   if (!goal || goal.status !== "active") return { skipped: "no active goal" };
   const ms = await listMilestones(env, goalId);
   if (!ms.length) return planGoal(env, goalId);   // never planned → make one
@@ -804,7 +806,7 @@ export async function adaptPlan(env, goalId) {
   if (!remaining.length) return { skipped: "every milestone is done" };
 
   const quests = (await env.DB.prepare(
-    "SELECT text, status FROM quests WHERE goal_id = ? ORDER BY id DESC LIMIT 20").bind(goalId).all()).results;
+    "SELECT text, status FROM quests WHERE user_id = ? AND goal_id = ? ORDER BY id DESC LIMIT 20").bind(uid(env), goalId).all()).results;
   const { text, salvaged } = await llm(env, ADAPT_PROMPT(
     await getPersona(env), await clockContext(env, goal), goal, done, remaining, quests, paceOf(goal),
     await goalContext(env, goal)));
@@ -815,9 +817,9 @@ export async function adaptPlan(env, goalId) {
 
   // Swap out the non-done milestones for the re-tuned ones (detach quests first — FK).
   await env.DB.prepare(
-    "UPDATE quests SET milestone_id = NULL WHERE milestone_id IN (SELECT id FROM milestones WHERE goal_id = ? AND status != 'done')")
-    .bind(goalId).run();
-  await env.DB.prepare("DELETE FROM milestones WHERE goal_id = ? AND status != 'done'").bind(goalId).run();
+    "UPDATE quests SET milestone_id = NULL WHERE user_id = ? AND milestone_id IN (SELECT id FROM milestones WHERE user_id = ? AND goal_id = ? AND status != 'done')")
+    .bind(uid(env), uid(env), goalId).run();
+  await env.DB.prepare("DELETE FROM milestones WHERE user_id = ? AND goal_id = ? AND status != 'done'").bind(uid(env), goalId).run();
 
   const now = new Date().toISOString();
   const deadlineMs = goal.deadline ? new Date(goal.deadline).getTime() : null;
@@ -832,10 +834,10 @@ export async function adaptPlan(env, goalId) {
     let targetMs = Date.now() + weeks * 7 * MS_DAY;
     if (deadlineMs && targetMs > deadlineMs) targetMs = deadlineMs;
     await env.DB.prepare(
-      `INSERT INTO milestones (goal_id, seq, title, done_when, steps, target_date, status, created_at)
-       VALUES (?,?,?,?,?,?,?,?)`)
+      `INSERT INTO milestones (goal_id, seq, title, done_when, steps, target_date, status, created_at, user_id)
+       VALUES (?,?,?,?,?,?,?,?,?)`)
       .bind(goalId, seq, String(m.title).slice(0, 200), String(m.done_when || "").slice(0, 300) || null,
-            packSteps(m.steps), new Date(targetMs).toISOString().slice(0, 10), first ? "active" : "pending", now).run();
+            packSteps(m.steps), new Date(targetMs).toISOString().slice(0, 10), first ? "active" : "pending", now, uid(env)).run();
     first = false;
   }
   await computeProgress(env, goalId);
@@ -885,14 +887,14 @@ export async function createGoal(env, { title, why, target, deadline }) {
   // Dedup: the agent has re-declared a goal it heard again in chat, leaving multiple
   // active copies competing for quests. Same title (case-insensitive) → same goal.
   const dup = await env.DB.prepare(
-    "SELECT id, title FROM goals WHERE status = 'active' AND lower(title) = lower(?)").bind(title.slice(0, 200)).first();
+    "SELECT id, title FROM goals WHERE user_id = ? AND status = 'active' AND lower(title) = lower(?)").bind(uid(env), title.slice(0, 200)).first();
   if (dup) return { ok: true, id: dup.id, title: dup.title, already_exists: true, note: "That goal is already active — driving at it." };
   const now = new Date().toISOString();
   const row = await env.DB.prepare(
-    `INSERT INTO goals (title, why, target, deadline, status, created_at, updated_at)
-     VALUES (?,?,?,?, 'active', ?, ?) RETURNING id`)
+    `INSERT INTO goals (title, why, target, deadline, status, created_at, updated_at, user_id)
+     VALUES (?,?,?,?, 'active', ?, ?, ?) RETURNING id`)
     .bind(title.slice(0, 200), String(why || "").slice(0, 500) || null,
-          String(target || "").slice(0, 200) || null, deadline || null, now, now).first();
+          String(target || "").slice(0, 200) || null, deadline || null, now, now, uid(env)).first();
   await logActivity(env, {
     kind: "goal", actor: "owner", goal_id: row.id,
     summary: `New goal set: ${title}`,
@@ -907,19 +909,19 @@ export async function createGoal(env, { title, why, target, deadline }) {
 }
 
 export async function listGoals(env, { status = "active" } = {}) {
-  const where = status === "all" ? "" : "WHERE status = ?";
+  const where = status === "all" ? "" : "AND g.status = ?";
   const binds = status === "all" ? [] : [status];
   const { results } = await env.DB.prepare(
     `SELECT g.id, g.title, g.why, g.target, g.deadline, g.status, g.created_at, g.progress,
-            (SELECT COUNT(*) FROM quests q WHERE q.goal_id = g.id AND q.status = 'done') AS quests_done,
-            (SELECT COUNT(*) FROM quests q WHERE q.goal_id = g.id AND q.status = 'failed') AS quests_failed
-     FROM goals g ${where} ORDER BY CASE g.status WHEN 'active' THEN 0 ELSE 1 END, g.id`)
-    .bind(...binds).all();
+            (SELECT COUNT(*) FROM quests q WHERE q.user_id = ? AND q.goal_id = g.id AND q.status = 'done') AS quests_done,
+            (SELECT COUNT(*) FROM quests q WHERE q.user_id = ? AND q.goal_id = g.id AND q.status = 'failed') AS quests_failed
+     FROM goals g WHERE g.user_id = ? ${where} ORDER BY CASE g.status WHEN 'active' THEN 0 ELSE 1 END, g.id`)
+    .bind(uid(env), uid(env), uid(env), ...binds).all();
   return { count: results.length, goals: results.map(g => ({ ...g, ...paceOf(g) })) };
 }
 
 export async function updateGoal(env, id, fields) {
-  const g = await env.DB.prepare("SELECT * FROM goals WHERE id = ?").bind(Number(id)).first();
+  const g = await env.DB.prepare("SELECT * FROM goals WHERE user_id = ? AND id = ?").bind(uid(env), Number(id)).first();
   if (!g) return { error: "no goal with that id" };
   const m = {
     title: fields.title ?? g.title,
@@ -929,8 +931,8 @@ export async function updateGoal(env, id, fields) {
     status: ["active", "achieved", "dropped"].includes(fields.status) ? fields.status : g.status,
   };
   await env.DB.prepare(
-    "UPDATE goals SET title = ?, why = ?, target = ?, deadline = ?, status = ?, updated_at = ? WHERE id = ?")
-    .bind(m.title, m.why, m.target, m.deadline, m.status, new Date().toISOString(), Number(id)).run();
+    "UPDATE goals SET title = ?, why = ?, target = ?, deadline = ?, status = ?, updated_at = ? WHERE user_id = ? AND id = ?")
+    .bind(m.title, m.why, m.target, m.deadline, m.status, new Date().toISOString(), uid(env), Number(id)).run();
   return { ok: true, id: Number(id), ...m };
 }
 
@@ -940,17 +942,17 @@ export async function updateGoal(env, id, fields) {
 // NOT-NULL children (plan_questions, milestones), then the goal row itself.
 export async function deleteGoal(env, id) {
   id = Number(id);
-  const g = await env.DB.prepare("SELECT id, title FROM goals WHERE id = ?").bind(id).first();
+  const g = await env.DB.prepare("SELECT id, title FROM goals WHERE user_id = ? AND id = ?").bind(uid(env), id).first();
   if (!g) return { error: "no goal with that id" };
   await env.DB.prepare(
-    "UPDATE quests SET milestone_id = NULL WHERE milestone_id IN (SELECT id FROM milestones WHERE goal_id = ?)")
-    .bind(id).run();
-  await env.DB.prepare("UPDATE quests SET goal_id = NULL WHERE goal_id = ?").bind(id).run();
-  await env.DB.prepare("UPDATE awards SET goal_id = NULL WHERE goal_id = ?").bind(id).run();
-  await env.DB.prepare("DELETE FROM plan_questions WHERE goal_id = ?").bind(id).run();
-  await env.DB.prepare("DELETE FROM milestones WHERE goal_id = ?").bind(id).run();
-  await env.DB.prepare("DELETE FROM goals WHERE id = ?").bind(id).run();
-  await env.DB.prepare("DELETE FROM state WHERE key = ?").bind(`adapt_last_${id}`).run();
+    "UPDATE quests SET milestone_id = NULL WHERE user_id = ? AND milestone_id IN (SELECT id FROM milestones WHERE user_id = ? AND goal_id = ?)")
+    .bind(uid(env), uid(env), id).run();
+  await env.DB.prepare("UPDATE quests SET goal_id = NULL WHERE user_id = ? AND goal_id = ?").bind(uid(env), id).run();
+  await env.DB.prepare("UPDATE awards SET goal_id = NULL WHERE user_id = ? AND goal_id = ?").bind(uid(env), id).run();
+  await env.DB.prepare("DELETE FROM plan_questions WHERE user_id = ? AND goal_id = ?").bind(uid(env), id).run();
+  await env.DB.prepare("DELETE FROM milestones WHERE user_id = ? AND goal_id = ?").bind(uid(env), id).run();
+  await env.DB.prepare("DELETE FROM goals WHERE user_id = ? AND id = ?").bind(uid(env), id).run();
+  await env.DB.prepare("DELETE FROM state WHERE user_id = ? AND key = ?").bind(uid(env), `adapt_last_${id}`).run();
   await logActivity(env, {
     kind: "goal", actor: "owner",
     summary: `Deleted goal (and its plan): ${g.title}`,
@@ -965,7 +967,7 @@ export async function addGoalContext(env, id, text) {
   id = Number(id);
   text = String(text || "").trim().slice(0, 600);
   if (!text) return { error: "context text is empty" };
-  const g = await env.DB.prepare("SELECT * FROM goals WHERE id = ?").bind(id).first();
+  const g = await env.DB.prepare("SELECT * FROM goals WHERE user_id = ? AND id = ?").bind(uid(env), id).first();
   if (!g) return { error: "no goal with that id" };
   try { await saveMemory(env, `${text} (context for goal: ${g.title})`, "project", { source: "plan_context" }); }
   catch (e) { console.log("plan context memory failed:", String(e).slice(0, 120)); }
@@ -985,24 +987,24 @@ export async function createQuest(env, { goal_id = null, milestone_id = null, te
   if (!text) return { error: "a quest needs text" };
   const k = QUEST_KINDS.includes(kind) ? kind : "daily";
   const row = await env.DB.prepare(
-    `INSERT INTO quests (goal_id, milestone_id, text, kind, status, xp, due_at, issued_at)
-     VALUES (?,?,?,?, 'issued', ?, ?, ?) RETURNING id`)
+    `INSERT INTO quests (goal_id, milestone_id, text, kind, status, xp, due_at, issued_at, user_id)
+     VALUES (?,?,?,?, 'issued', ?, ?, ?, ?) RETURNING id`)
     .bind(goal_id ? Number(goal_id) : null, milestone_id ? Number(milestone_id) : null,
           text.slice(0, 300), k, XP_BY_KIND[k],
-          due_at || endOfTodayUtc(), new Date().toISOString()).first();
+          due_at || endOfTodayUtc(), new Date().toISOString(), uid(env)).first();
   return { ok: true, id: row.id, text, kind: k, xp: XP_BY_KIND[k] };
 }
 
 export async function listQuests(env, { status = "today" } = {}) {
-  let sql, binds = [];
+  let sql, binds = [uid(env)];
   if (status === "today") {
-    sql = "SELECT * FROM quests WHERE date(issued_at, '+330 minutes') = date('now', '+330 minutes') ORDER BY id";
+    sql = "SELECT * FROM quests WHERE user_id = ? AND date(issued_at, '+330 minutes') = date('now', '+330 minutes') ORDER BY id";
   } else if (status === "open") {
-    sql = "SELECT * FROM quests WHERE status IN ('issued','doing') ORDER BY due_at";
+    sql = "SELECT * FROM quests WHERE user_id = ? AND status IN ('issued','doing') ORDER BY due_at";
   } else if (status === "all") {
-    sql = "SELECT * FROM quests ORDER BY id DESC LIMIT 30";
+    sql = "SELECT * FROM quests WHERE user_id = ? ORDER BY id DESC LIMIT 30";
   } else {
-    sql = "SELECT * FROM quests WHERE status = ? ORDER BY id DESC LIMIT 30"; binds = [status];
+    sql = "SELECT * FROM quests WHERE user_id = ? AND status = ? ORDER BY id DESC LIMIT 30"; binds = [uid(env), status];
   }
   const { results } = await env.DB.prepare(sql).bind(...binds).all();
   return { count: results.length, quests: results };
@@ -1010,7 +1012,7 @@ export async function listQuests(env, { status = "today" } = {}) {
 
 // done | doing | failed | skipped. Only 'done' earns XP; 'failed' costs it.
 export async function resolveQuest(env, id, action) {
-  const q = await env.DB.prepare("SELECT * FROM quests WHERE id = ?").bind(Number(id)).first();
+  const q = await env.DB.prepare("SELECT * FROM quests WHERE user_id = ? AND id = ?").bind(uid(env), Number(id)).first();
   if (!q) return { error: "no quest with that id" };
   const status = ["done", "doing", "failed", "skipped"].includes(action) ? action : "doing";
   if (["done", "failed", "skipped"].includes(q.status)) {
@@ -1022,8 +1024,8 @@ export async function resolveQuest(env, id, action) {
     if (!(status === "done" && q.status !== "done" && sameDay)) return { ok: true, already: q.status };
     return overturnQuest(env, q);
   }
-  await env.DB.prepare("UPDATE quests SET status = ?, resolved_at = ? WHERE id = ?")
-    .bind(status, status === "doing" ? null : new Date().toISOString(), Number(id)).run();
+  await env.DB.prepare("UPDATE quests SET status = ?, resolved_at = ? WHERE user_id = ? AND id = ?")
+    .bind(status, status === "doing" ? null : new Date().toISOString(), uid(env), Number(id)).run();
   let delta = 0;
   if (status === "done") delta = q.xp || DAILY_XP;
   else if (status === "failed") delta = -FAIL_PENALTY;
@@ -1050,8 +1052,8 @@ export async function resolveQuest(env, id, action) {
 // If the flip leaves today clean, the streak the reckoning broke is restored from the
 // value debrief() stashed before resetting it.
 async function overturnQuest(env, q) {
-  await env.DB.prepare("UPDATE quests SET status = 'done', resolved_at = ? WHERE id = ?")
-    .bind(new Date().toISOString(), q.id).run();
+  await env.DB.prepare("UPDATE quests SET status = 'done', resolved_at = ? WHERE user_id = ? AND id = ?")
+    .bind(new Date().toISOString(), uid(env), q.id).run();
   const delta = (q.xp || DAILY_XP) + (q.status === "failed" ? FAIL_PENALTY : 0);
   const st = await addXp(env, delta);
   await logActivity(env, {
@@ -1061,7 +1063,7 @@ async function overturnQuest(env, q) {
   });
   const t = ist();
   const today = (await env.DB.prepare(
-    "SELECT status FROM quests WHERE date(issued_at, '+330 minutes') = date('now', '+330 minutes')").all()).results;
+    "SELECT status FROM quests WHERE user_id = ? AND date(issued_at, '+330 minutes') = date('now', '+330 minutes')").bind(uid(env)).all()).results;
   if (today.length && !today.some(x => x.status === "failed") && today.some(x => x.status === "done")
       && await getState(env, "streak_prev_date") === t.date) {
     const streak = Number(await getState(env, "streak_prev") || 0) + 1;
@@ -1082,7 +1084,7 @@ async function overturnQuest(env, q) {
 async function ownerProfile(env) {
   const parts = [];
   for (const key of ["bio", "skills"]) {
-    const r = await env.DB.prepare("SELECT content FROM profile WHERE key = ?").bind(key).first();
+    const r = await env.DB.prepare("SELECT content FROM profile WHERE user_id = ? AND key = ?").bind(uid(env), key).first();
     if (r) parts.push(r.content.slice(0, 1200));
   }
   // Newest first: past the 40-cap the OLDEST memories should fall off, not the newest —
@@ -1090,7 +1092,7 @@ async function ownerProfile(env) {
   // still reads chronologically.)
   const { results: mems } = await env.DB.prepare(
     `SELECT category, fact FROM memories
-     WHERE category IN ('goal','skill','project','identity','preference') ORDER BY id DESC LIMIT 40`).all();
+     WHERE user_id = ? AND category IN ('goal','skill','project','identity','preference') ORDER BY id DESC LIMIT 40`).bind(uid(env)).all();
   if (mems.length) parts.push(mems.reverse().map(m => `- (${m.category}) ${m.fact}`).join("\n"));
   return parts.join("\n\n") || "(the System knows little about them yet)";
 }
@@ -1111,15 +1113,15 @@ async function measuredNumbers(env) {
     };
     const { results: h } = await env.DB.prepare(
       `SELECT metric, value, unit, MAX(at) AS at,
-              (SELECT COUNT(*) FROM health h2 WHERE h2.metric = h.metric AND datetime(h2.at) >= datetime('now','-30 days')) AS n30,
-              (SELECT value FROM health h2 WHERE h2.metric = h.metric AND datetime(h2.at) >= datetime('now','-30 days') ORDER BY h2.at LIMIT 1) AS first30
-       FROM health h GROUP BY metric ORDER BY at DESC LIMIT 8`).all();
+              (SELECT COUNT(*) FROM health h2 WHERE h2.user_id = ? AND h2.metric = h.metric AND datetime(h2.at) >= datetime('now','-30 days')) AS n30,
+              (SELECT value FROM health h2 WHERE h2.user_id = ? AND h2.metric = h.metric AND datetime(h2.at) >= datetime('now','-30 days') ORDER BY h2.at LIMIT 1) AS first30
+       FROM health h WHERE h.user_id = ? GROUP BY metric ORDER BY at DESC LIMIT 8`).bind(uid(env), uid(env), uid(env)).all();
     for (const r of h) nums.push(trendLine(r));
     const { results: m } = await env.DB.prepare(
       `SELECT name, value, unit, MAX(at) AS at,
-              (SELECT COUNT(*) FROM metrics m2 WHERE m2.name = m.name AND datetime(m2.at) >= datetime('now','-30 days')) AS n30,
-              (SELECT value FROM metrics m2 WHERE m2.name = m.name AND datetime(m2.at) >= datetime('now','-30 days') ORDER BY m2.at LIMIT 1) AS first30
-       FROM metrics m GROUP BY name ORDER BY at DESC LIMIT 8`).all();
+              (SELECT COUNT(*) FROM metrics m2 WHERE m2.user_id = ? AND m2.name = m.name AND datetime(m2.at) >= datetime('now','-30 days')) AS n30,
+              (SELECT value FROM metrics m2 WHERE m2.user_id = ? AND m2.name = m.name AND datetime(m2.at) >= datetime('now','-30 days') ORDER BY m2.at LIMIT 1) AS first30
+       FROM metrics m WHERE m.user_id = ? GROUP BY name ORDER BY at DESC LIMIT 8`).bind(uid(env), uid(env), uid(env)).all();
     for (const r of m) nums.push(trendLine(r));
     if (!nums.length) return "";
     return "Latest measured numbers (their real current state, with 30-day trend):\n" + nums.join("\n");
@@ -1154,7 +1156,7 @@ async function goalContext(env, goal) {
     const tokens = [goal.title, goal.target].filter(Boolean).join(" ").toLowerCase().match(/[a-z]{4,}/g) || [];
     if (tokens.length) {
       const { results: res } = await env.DB.prepare(
-        "SELECT question, report_md FROM research WHERE status = 'done' ORDER BY id DESC LIMIT 10").all();
+        "SELECT question, report_md FROM research WHERE user_id = ? AND status = 'done' ORDER BY id DESC LIMIT 10").bind(uid(env)).all();
       const rel = res.filter(r => {
         const q = String(r.question || "").toLowerCase();
         return tokens.some(t => q.includes(t));
@@ -1176,8 +1178,8 @@ async function goalContext(env, goal) {
   // plus what's still pending, so the planner never re-asks an open question.
   try {
     const { results: qs } = await env.DB.prepare(
-      "SELECT question, status, answer FROM plan_questions WHERE goal_id = ? ORDER BY id DESC LIMIT 12")
-      .bind(goal.id).all();
+      "SELECT question, status, answer FROM plan_questions WHERE user_id = ? AND goal_id = ? ORDER BY id DESC LIMIT 12")
+      .bind(uid(env), goal.id).all();
     const answered = qs.filter(q => q.status === "answered");
     const open = qs.filter(q => q.status === "open");
     if (answered.length) out += "\n\nAnswers the owner gave to your planning questions:\n" +
@@ -1233,7 +1235,7 @@ Return ONLY JSON:
 
 async function generateDailyQuests(env) {
   const { results: goals } = await env.DB.prepare(
-    "SELECT * FROM goals WHERE status = 'active' ORDER BY id").all();
+    "SELECT * FROM goals WHERE user_id = ? AND status = 'active' ORDER BY id").bind(uid(env)).all();
   if (!goals.length) return { none: true, created: [] };
 
   // Ensure every active goal has a roadmap, then aim quests at each one's active milestone.
@@ -1256,7 +1258,7 @@ async function generateDailyQuests(env) {
   // every past quest text as "done" and never re-issued a failed step. 30 rows ≈ a few
   // days of history across all goals, so cleared steps stay out of rotation longer.
   const { results: recent } = await env.DB.prepare(
-    "SELECT text, status FROM quests ORDER BY id DESC LIMIT 30").all();
+    "SELECT text, status FROM quests WHERE user_id = ? ORDER BY id DESC LIMIT 30").bind(uid(env)).all();
   const mark = { done: "✓", failed: "✗ FAILED", skipped: "·", issued: "·", doing: "·" };
 
   const persona = await getPersona(env);
@@ -1283,12 +1285,12 @@ export async function issueDaily(env, tg, { force = false } = {}) {
   const t = ist();
   if (!force && await getState(env, "system_last_issue") === t.date) return { skipped: "already issued today" };
 
-  const active = await env.DB.prepare("SELECT COUNT(*) AS n FROM goals WHERE status = 'active'").first();
+  const active = await env.DB.prepare("SELECT COUNT(*) AS n FROM goals WHERE user_id = ? AND status = 'active'").bind(uid(env)).first();
   if (!active.n) {
     // The Awakening: without a goal there is nothing to drive toward. Demand one.
     await setState(env, "system_last_issue", t.date);
     await tg(env, "sendMessage", {
-      chat_id: env.TELEGRAM_CHAT_ID, parse_mode: "HTML",
+      chat_id: ownerChat(env), parse_mode: "HTML",
       text: `⚔️ <b>The System has no goals for you.</b>\n\nA hunter without a goal is prey. ` +
             `Tell me what you are trying to become — the role, the number, the deadline — and I will hold you to it.\n\n` +
             `Just say it, or use <code>/goals</code>.`,
@@ -1307,13 +1309,13 @@ export async function issueDaily(env, tg, { force = false } = {}) {
     detail: created.map(c => `• ${c.text}`).join("\n"),
   });
   await tg(env, "sendMessage", {
-    chat_id: env.TELEGRAM_CHAT_ID, parse_mode: "HTML",
+    chat_id: ownerChat(env), parse_mode: "HTML",
     text: `⚔️ <b>DAILY QUESTS — ${t.date}</b>\nClear them before the day ends. Failure has a cost.`,
   });
   for (const q of created) {
-    const row = await env.DB.prepare("SELECT id, text, kind, xp FROM quests WHERE id = ?").bind(q.id).first();
+    const row = await env.DB.prepare("SELECT id, text, kind, xp FROM quests WHERE user_id = ? AND id = ?").bind(uid(env), q.id).first();
     const sent = await tg(env, "sendMessage", {
-      chat_id: env.TELEGRAM_CHAT_ID, parse_mode: "HTML",
+      chat_id: ownerChat(env), parse_mode: "HTML",
       text: `▫️ <b>${esc(row.text)}</b>\n<i>${row.kind} · +${row.xp} XP</i>`,
       reply_markup: { inline_keyboard: [[
         { text: "✅ Done", callback_data: `q:${row.id}:done` },
@@ -1322,8 +1324,8 @@ export async function issueDaily(env, tg, { force = false } = {}) {
       ]]},
     });
     if (sent.ok) {
-      await env.DB.prepare("UPDATE quests SET tg_message_id = ? WHERE id = ?")
-        .bind(sent.result.message_id, row.id).run();
+      await env.DB.prepare("UPDATE quests SET tg_message_id = ? WHERE user_id = ? AND id = ?")
+        .bind(sent.result.message_id, uid(env), row.id).run();
     }
   }
   // Morning is when overnight questions go out (quiet hours held them back) and when
@@ -1348,7 +1350,7 @@ export async function debrief(env, tg, { force = false } = {}) {
   if (!force && await getState(env, "system_last_debrief") === t.date) return { skipped: "already done today" };
 
   const { results: today } = await env.DB.prepare(
-    "SELECT id, text, kind, status, goal_id FROM quests WHERE date(issued_at, '+330 minutes') = date('now', '+330 minutes')").all();
+    "SELECT id, text, kind, status, goal_id FROM quests WHERE user_id = ? AND date(issued_at, '+330 minutes') = date('now', '+330 minutes')").bind(uid(env)).all();
   await setState(env, "system_last_debrief", t.date);
   if (!today.length) return { skipped: "no quests today" };
 
@@ -1356,8 +1358,8 @@ export async function debrief(env, tg, { force = false } = {}) {
   let autoFailed = 0;
   for (const q of today) {
     if (q.status === "issued" || q.status === "doing") {
-      await env.DB.prepare("UPDATE quests SET status = 'failed', resolved_at = ? WHERE id = ?")
-        .bind(new Date().toISOString(), q.id).run();
+      await env.DB.prepare("UPDATE quests SET status = 'failed', resolved_at = ? WHERE user_id = ? AND id = ?")
+        .bind(new Date().toISOString(), uid(env), q.id).run();
       await addXp(env, -FAIL_PENALTY);
       q.status = "failed"; autoFailed++;
     }
@@ -1377,7 +1379,7 @@ export async function debrief(env, tg, { force = false } = {}) {
   if (streak > Number(await getState(env, "streak_best") || 0)) await setState(env, "streak_best", streak);
 
   // Roll progress + milestones forward for every active goal after tonight's resolutions.
-  const activeGoals = (await env.DB.prepare("SELECT * FROM goals WHERE status = 'active'").all()).results;
+  const activeGoals = (await env.DB.prepare("SELECT * FROM goals WHERE user_id = ? AND status = 'active'").bind(uid(env)).all()).results;
   for (const g of activeGoals) {
     await computeProgress(env, g.id);
     await advanceMilestones(env, g.id);
@@ -1394,11 +1396,11 @@ export async function debrief(env, tg, { force = false } = {}) {
       const last = await getState(env, `adapt_last_${g.id}`);
       if (last && Date.now() - new Date(last).getTime() < 6 * 3600000) continue;
       const failedToday = today.some(q => q.goal_id === g.id && q.status === "failed");
-      const fresh = await env.DB.prepare("SELECT progress, deadline, created_at FROM goals WHERE id = ?").bind(g.id).first();
+      const fresh = await env.DB.prepare("SELECT progress, deadline, created_at FROM goals WHERE user_id = ? AND id = ?").bind(uid(env), g.id).first();
       const p = paceOf(fresh);
       const hit = (await env.DB.prepare(
-        "SELECT COUNT(*) AS n FROM milestones WHERE goal_id = ? AND status = 'done' AND date(done_at,'+330 minutes') = date('now','+330 minutes')")
-        .bind(g.id).first()).n;
+        "SELECT COUNT(*) AS n FROM milestones WHERE user_id = ? AND goal_id = ? AND status = 'done' AND date(done_at,'+330 minutes') = date('now','+330 minutes')")
+        .bind(uid(env), g.id).first()).n;
       if (failedToday || p.pace === "behind" || p.pace === "at-risk" || hit) {
         if ((await adaptPlan(env, g.id)).ok) adapts++;
       }
@@ -1428,12 +1430,12 @@ export async function debrief(env, tg, { force = false } = {}) {
     : `${done}/${today.length} done, ${failed} failed. Streak: ${streak} ${streak ? "🔥" : "— broken"}. Level ${st.level}.`;
 
   const r = await tg(env, "sendMessage", {
-    chat_id: env.TELEGRAM_CHAT_ID, parse_mode: "HTML",
+    chat_id: ownerChat(env), parse_mode: "HTML",
     text: `🌑 <b>Reckoning — ${t.date}</b>\n\n${body}`, disable_web_page_preview: true,
   });
   if (!r.ok) {
     await tg(env, "sendMessage", {
-      chat_id: env.TELEGRAM_CHAT_ID, text: `🌑 Reckoning — ${t.date}\n\n${body.replace(/<[^>]+>/g, "")}`,
+      chat_id: ownerChat(env), text: `🌑 Reckoning — ${t.date}\n\n${body.replace(/<[^>]+>/g, "")}`,
     });
   }
   return { done, failed, streak, level: st.level };
@@ -1497,7 +1499,7 @@ export async function autonomyTick(env, tg, { force = false, spawn = null } = {}
   if (budget.left <= 0) { await setState(env, "autonomy_last", t.date); return { skipped: "budget spent" }; }
 
   const { results: goals } = await env.DB.prepare(
-    "SELECT * FROM goals WHERE status = 'active' ORDER BY id").all();
+    "SELECT * FROM goals WHERE user_id = ? AND status = 'active' ORDER BY id").bind(uid(env)).all();
   if (!goals.length) { await setState(env, "autonomy_last", t.date); return { skipped: "no active goals" }; }
 
   const clock = await clockContext(env, null);
@@ -1509,9 +1511,9 @@ export async function autonomyTick(env, tg, { force = false, spawn = null } = {}
       `${g.deadline ? ` · ${p.days_left}d left` : ""}${m ? ` · milestone: ${m.title}` : ""}`);
   }
   const recentAct = (await env.DB.prepare(
-    "SELECT kind, summary FROM activity ORDER BY id DESC LIMIT 12").all()).results;
+    "SELECT kind, summary FROM activity WHERE user_id = ? ORDER BY id DESC LIMIT 12").bind(uid(env)).all()).results;
   const recentRes = (await env.DB.prepare(
-    "SELECT question FROM research ORDER BY id DESC LIMIT 8").all()).results;
+    "SELECT question FROM research WHERE user_id = ? ORDER BY id DESC LIMIT 8").bind(uid(env)).all()).results;
 
   const { text, salvaged } = await llm(env, PONDER_PROMPT(
     await getPersona(env), clock, mode, goalLines.join("\n"),
@@ -1534,7 +1536,7 @@ export async function autonomyTick(env, tg, { force = false, spawn = null } = {}
       else outcome = await spawn(env, { question: q, depth: "normal" });
     } else if (action === "nudge" && v.message && !quiet) {
       await tg(env, "sendMessage", {
-        chat_id: env.TELEGRAM_CHAT_ID, parse_mode: "HTML", disable_web_page_preview: true,
+        chat_id: ownerChat(env), parse_mode: "HTML", disable_web_page_preview: true,
         text: `⚡ <b>The System</b>\n\n${String(v.message).slice(0, 700)}`,
       });
       outcome = { nudged: true };

@@ -1,6 +1,35 @@
 -- Grabber D1 schema. Apply with:
 --   wrangler d1 execute grabber --file=schema.sql --remote
 
+-- The tenant layer (migration 011). The System is federated multi-tenant: one `users`
+-- row per onboarded person, each with their OWN BotFather bot token; one Worker
+-- multiplexes every bot via /tg/<webhook_id>. bot_token / google_refresh_token are
+-- stored encrypted. See worker/src/tenant.js and docs/09-multi-tenant.md.
+CREATE TABLE IF NOT EXISTS users (
+  id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+  bot_token            TEXT,                                  -- BYO BotFather token (encrypted)
+  bot_username         TEXT,
+  bot_id               INTEGER,
+  webhook_id           TEXT UNIQUE,                           -- opaque path: /tg/<webhook_id>
+  webhook_secret       TEXT,                                  -- per-bot webhook secret header
+  owner_chat_id        TEXT,                                  -- captured on first /start
+  timezone             TEXT NOT NULL DEFAULT 'Asia/Kolkata',  -- IANA; drives per-tenant cron gates
+  dashboard_token      TEXT UNIQUE,                           -- gates this tenant's /api/*
+  notify_secret        TEXT UNIQUE,                           -- gates this tenant's /ingest/notification
+  google_refresh_token TEXT,                                  -- per-user Gmail+Calendar OAuth (encrypted)
+  gmail_address        TEXT,
+  gmail_app_password   TEXT,
+  status               TEXT NOT NULL DEFAULT 'active',        -- active | paused | revoked
+  created_at           TEXT NOT NULL
+);
+
+-- Beta invite gating: a code is claimed by exactly one signup.
+CREATE TABLE IF NOT EXISTS invites (
+  code       TEXT PRIMARY KEY,
+  used_by    INTEGER,
+  created_at TEXT NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS postings (
   id          TEXT PRIMARY KEY,          -- sha1(source:external_id)[:12]
   source      TEXT NOT NULL,             -- devfolio | unstop | hn | rss:<feed> | tg:<channel>
@@ -25,9 +54,11 @@ CREATE TABLE IF NOT EXISTS idf (
 
 -- Profile corpus lives here, never in the public repo (resume, past essays, skills yaml).
 CREATE TABLE IF NOT EXISTS profile (
-  key        TEXT PRIMARY KEY,           -- resume | essay:<name> | skills | bio
+  user_id    INTEGER NOT NULL DEFAULT 1,
+  key        TEXT NOT NULL,              -- resume | essay:<name> | skills | bio | conversation_summary
   content    TEXT NOT NULL,
-  updated_at TEXT NOT NULL
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (user_id, key)             -- migration 013: was PK(key)
 );
 
 -- Every alert is a logged prediction (point 4).
@@ -78,7 +109,8 @@ CREATE TABLE IF NOT EXISTS memories (
   updated_at TEXT,
   embedding  TEXT,                     -- base64 Float32, normalised — recall is a dot product
   source     TEXT DEFAULT 'chat',      -- chat (agent chose to) | auto (post-reply sweep) | backfill
-  context    TEXT                      -- the exchange it was learned from, for provenance
+  context    TEXT,                     -- the exchange it was learned from, for provenance
+  user_id    INTEGER NOT NULL DEFAULT 1 -- tenant (migration 012)
 );
 
 -- Old chat beyond the active window is folded into a rolling summary
@@ -87,7 +119,8 @@ CREATE TABLE IF NOT EXISTS chat_history (
   id      INTEGER PRIMARY KEY AUTOINCREMENT,
   role    TEXT NOT NULL,               -- user | assistant
   content TEXT NOT NULL,
-  at      TEXT NOT NULL
+  at      TEXT NOT NULL,
+  user_id INTEGER NOT NULL DEFAULT 1   -- tenant (migration 012)
 );
 
 -- General-agent reminders ("remind me Thursday to follow up"), fired by the hourly cron.
@@ -97,7 +130,8 @@ CREATE TABLE IF NOT EXISTS reminders (
   due_at     TEXT NOT NULL,            -- UTC ISO
   created_at TEXT NOT NULL,
   notified   INTEGER NOT NULL DEFAULT 0,
-  done       INTEGER NOT NULL DEFAULT 0
+  done       INTEGER NOT NULL DEFAULT 0,
+  user_id    INTEGER NOT NULL DEFAULT 1  -- tenant (migration 012)
 );
 
 CREATE INDEX IF NOT EXISTS idx_postings_ingested ON postings(ingested_at);
@@ -114,11 +148,13 @@ CREATE INDEX IF NOT EXISTS idx_outcomes_alert ON outcomes(alert_id);
 -- ---------------------------------------------------------------------------
 
 CREATE TABLE IF NOT EXISTS accounts (
-  name       TEXT PRIMARY KEY,          -- "HDFC savings", "Zerodha"
+  user_id    INTEGER NOT NULL DEFAULT 1,
+  name       TEXT NOT NULL,             -- "HDFC savings", "Zerodha"
   kind       TEXT NOT NULL,             -- bank | wallet | investment | card
   balance    REAL,
   currency   TEXT NOT NULL DEFAULT 'INR',
-  updated_at TEXT NOT NULL
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (user_id, name)           -- migration 013: was PK(name)
 );
 
 CREATE TABLE IF NOT EXISTS applications (
@@ -133,7 +169,8 @@ CREATE TABLE IF NOT EXISTS applications (
   status      TEXT NOT NULL DEFAULT 'ready',  -- ready|applied|responded|interview|offer|rejected|dropped
   created_at  TEXT NOT NULL,
   applied_at  TEXT,
-  updated_at  TEXT
+  updated_at  TEXT,
+  user_id     INTEGER NOT NULL DEFAULT 1  -- tenant (migration 012)
 );
 
 CREATE TABLE IF NOT EXISTS emails (
@@ -144,7 +181,8 @@ CREATE TABLE IF NOT EXISTS emails (
   snippet     TEXT,
   received_at TEXT,
   kind        TEXT,                    -- recruiter | opportunity | statement | other
-  surfaced    INTEGER NOT NULL DEFAULT 0
+  surfaced    INTEGER NOT NULL DEFAULT 0,
+  user_id     INTEGER NOT NULL DEFAULT 1  -- tenant (migration 012)
 );
 
 CREATE TABLE IF NOT EXISTS events (
@@ -156,7 +194,8 @@ CREATE TABLE IF NOT EXISTS events (
   link       TEXT,
   attendees  TEXT,
   updated_at TEXT NOT NULL,
-  reminded   INTEGER NOT NULL DEFAULT 0
+  reminded   INTEGER NOT NULL DEFAULT 0,
+  user_id    INTEGER NOT NULL DEFAULT 1  -- tenant (migration 012)
 );
 
 CREATE TABLE IF NOT EXISTS health (
@@ -165,7 +204,8 @@ CREATE TABLE IF NOT EXISTS health (
   value  REAL,
   unit   TEXT,
   note   TEXT,
-  at     TEXT NOT NULL
+  at     TEXT NOT NULL,
+  user_id INTEGER NOT NULL DEFAULT 1   -- tenant (migration 012)
 );
 
 -- Calorie tracking (migration 009). A meal keeps kcal + macros together in one row
@@ -179,31 +219,37 @@ CREATE TABLE IF NOT EXISTS meals (
   carbs_g   REAL,                        -- the owner doesn't state them
   fat_g     REAL,
   note      TEXT,
-  at        TEXT NOT NULL                -- UTC ISO; the dashboard buckets by IST day
+  at        TEXT NOT NULL,               -- UTC ISO; the dashboard buckets by IST day
+  user_id   INTEGER NOT NULL DEFAULT 1   -- tenant (migration 012)
 );
 
 CREATE INDEX IF NOT EXISTS idx_meals_at ON meals(at);
 
 CREATE TABLE IF NOT EXISTS holdings (
-  name       TEXT PRIMARY KEY,
+  user_id    INTEGER NOT NULL DEFAULT 1,
+  name       TEXT NOT NULL,
   kind       TEXT NOT NULL,             -- asset | liability
   category   TEXT,                      -- investment | property | vehicle | loan | card_debt | other
   value      REAL NOT NULL,
   note       TEXT,
-  updated_at TEXT NOT NULL
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (user_id, name)           -- migration 013: was PK(name)
 );
 
 CREATE TABLE IF NOT EXISTS interactions (
   id        INTEGER PRIMARY KEY AUTOINCREMENT,
   person_id INTEGER NOT NULL REFERENCES people(id),
   what      TEXT NOT NULL,
-  at        TEXT NOT NULL
+  at        TEXT NOT NULL,
+  user_id   INTEGER NOT NULL DEFAULT 1   -- tenant (migration 012)
 );
 
 CREATE TABLE IF NOT EXISTS merchant_category (
-  pattern    TEXT PRIMARY KEY,          -- lowercase counterparty fragment
+  user_id    INTEGER NOT NULL DEFAULT 1,
+  pattern    TEXT NOT NULL,             -- lowercase counterparty fragment
   category   TEXT NOT NULL,
-  created_at TEXT NOT NULL
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (user_id, pattern)        -- migration 013: was PK(pattern)
 );
 
 CREATE TABLE IF NOT EXISTS notifications (
@@ -217,25 +263,30 @@ CREATE TABLE IF NOT EXISTS notifications (
   counterparty TEXT,
   posted_at   TEXT,
   received_at TEXT NOT NULL,
-  surfaced    INTEGER NOT NULL DEFAULT 0
+  surfaced    INTEGER NOT NULL DEFAULT 0,
+  user_id     INTEGER NOT NULL DEFAULT 1  -- tenant (migration 012)
 );
 
 CREATE TABLE IF NOT EXISTS notify_allow (
-  pattern    TEXT PRIMARY KEY,         -- lowercase substring matched against app + title
+  user_id    INTEGER NOT NULL DEFAULT 1,
+  pattern    TEXT NOT NULL,            -- lowercase substring matched against app + title
   kind       TEXT NOT NULL,            -- what it usually is
-  created_at TEXT NOT NULL
+  created_at TEXT NOT NULL,
+  PRIMARY KEY (user_id, pattern)       -- migration 013: was PK(pattern)
 );
 
 CREATE TABLE IF NOT EXISTS people (
   id           INTEGER PRIMARY KEY AUTOINCREMENT,
-  name         TEXT NOT NULL UNIQUE,
+  user_id      INTEGER NOT NULL DEFAULT 1,
+  name         TEXT NOT NULL,
   relation     TEXT,                    -- friend | family | recruiter | founder | mentor | colleague | dating
   how_met      TEXT,
   status       TEXT DEFAULT 'active',   -- active | cold | closed
   notes        TEXT,
   next_step    TEXT,
   last_contact TEXT,
-  created_at   TEXT NOT NULL
+  created_at   TEXT NOT NULL,
+  UNIQUE(user_id, name)                 -- migration 013: was UNIQUE(name)
 );
 
 CREATE TABLE IF NOT EXISTS research (
@@ -249,13 +300,16 @@ CREATE TABLE IF NOT EXISTS research (
   created_at  TEXT NOT NULL,
   started_at  TEXT,
   finished_at TEXT,
-  error       TEXT
+  error       TEXT,
+  user_id     INTEGER NOT NULL DEFAULT 1  -- tenant (migration 012)
 );
 
 CREATE TABLE IF NOT EXISTS state (
-  key        TEXT PRIMARY KEY,
+  user_id    INTEGER NOT NULL DEFAULT 1,
+  key        TEXT NOT NULL,
   value      TEXT,
-  updated_at TEXT NOT NULL
+  updated_at TEXT NOT NULL,
+  PRIMARY KEY (user_id, key)            -- migration 013: was PK(key)
 );
 
 CREATE TABLE IF NOT EXISTS transactions (
@@ -268,7 +322,8 @@ CREATE TABLE IF NOT EXISTS transactions (
   note       TEXT,
   at         TEXT NOT NULL,
   source     TEXT NOT NULL,             -- notification | manual | email
-  notification_id INTEGER
+  notification_id INTEGER,
+  user_id    INTEGER NOT NULL DEFAULT 1  -- tenant (migration 012)
 );
 
 CREATE TABLE IF NOT EXISTS watchers (
@@ -301,7 +356,8 @@ CREATE TABLE IF NOT EXISTS goals (
   status     TEXT NOT NULL DEFAULT 'active',-- active | achieved | dropped
   progress   REAL NOT NULL DEFAULT 0,       -- cached 0..1, recomputed on quest/milestone change
   created_at TEXT NOT NULL,
-  updated_at TEXT NOT NULL
+  updated_at TEXT NOT NULL,
+  user_id    INTEGER NOT NULL DEFAULT 1     -- tenant (migration 012)
 );
 
 -- The persistent roadmap: a goal decomposes into ordered milestones (the planner writes
@@ -316,7 +372,8 @@ CREATE TABLE IF NOT EXISTS milestones (
   target_date TEXT,                           -- ISO date, spaced across the runway
   status      TEXT NOT NULL DEFAULT 'pending',-- pending | active | done | skipped
   created_at  TEXT NOT NULL,
-  done_at     TEXT
+  done_at     TEXT,
+  user_id     INTEGER NOT NULL DEFAULT 1      -- tenant (migration 012)
 );
 
 CREATE INDEX IF NOT EXISTS idx_milestones_goal ON milestones(goal_id);
@@ -334,7 +391,8 @@ CREATE TABLE IF NOT EXISTS quests (
   due_at        TEXT,                           -- UTC ISO; default end of the owner's today
   issued_at     TEXT NOT NULL,
   resolved_at   TEXT,
-  tg_message_id INTEGER
+  tg_message_id INTEGER,
+  user_id       INTEGER NOT NULL DEFAULT 1    -- tenant (migration 012)
 );
 
 CREATE INDEX IF NOT EXISTS idx_quests_issued ON quests(issued_at);
@@ -352,7 +410,8 @@ CREATE TABLE IF NOT EXISTS activity (
   detail   TEXT,            -- optional longer body
   reasoning TEXT,           -- for autonomous moves: why it did this
   goal_id  INTEGER,
-  quest_id INTEGER
+  quest_id INTEGER,
+  user_id  INTEGER NOT NULL DEFAULT 1        -- tenant (migration 012)
 );
 
 CREATE INDEX IF NOT EXISTS idx_activity_at ON activity(at);
@@ -366,7 +425,8 @@ CREATE TABLE IF NOT EXISTS metrics (
   unit    TEXT,
   note    TEXT,
   goal_id INTEGER,             -- optional link to a goal
-  at      TEXT NOT NULL
+  at      TEXT NOT NULL,
+  user_id INTEGER NOT NULL DEFAULT 1        -- tenant (migration 012)
 );
 
 CREATE INDEX IF NOT EXISTS idx_metrics_name ON metrics(name, at);
@@ -376,7 +436,8 @@ CREATE INDEX IF NOT EXISTS idx_metrics_name ON metrics(name, at);
 -- measured change). `key` UNIQUE + INSERT OR IGNORE make every grant idempotent.
 CREATE TABLE IF NOT EXISTS awards (
   id         INTEGER PRIMARY KEY AUTOINCREMENT,
-  key        TEXT NOT NULL UNIQUE,             -- e.g. streak_30, rank_C, transform30_1
+  user_id    INTEGER NOT NULL DEFAULT 1,
+  key        TEXT NOT NULL,                    -- e.g. streak_30, rank_C, transform30_1
   title      TEXT NOT NULL,
   icon       TEXT,                             -- emoji badge
   detail     TEXT,                             -- what earned it, with the numbers
@@ -384,7 +445,8 @@ CREATE TABLE IF NOT EXISTS awards (
   xp         INTEGER NOT NULL DEFAULT 25,      -- bonus XP granted with the award
   awarded_at TEXT NOT NULL,
   reward     TEXT,                             -- tangible real-world treat, from memories, scaled to the win
-  reward_claimed_at TEXT                       -- when the owner marked the treat redeemed (NULL = still owed)
+  reward_claimed_at TEXT,                      -- when the owner marked the treat redeemed (NULL = still owed)
+  UNIQUE(user_id, key)                         -- migration 013: was UNIQUE(key)
 );
 
 -- The planner's questions back to the owner: facts it needs to plan better (waist size,
@@ -397,10 +459,27 @@ CREATE TABLE IF NOT EXISTS plan_questions (
   answer      TEXT,
   announced   INTEGER NOT NULL DEFAULT 0,     -- sent to Telegram yet?
   asked_at    TEXT NOT NULL,
-  answered_at TEXT
+  answered_at TEXT,
+  user_id     INTEGER NOT NULL DEFAULT 1      -- tenant (migration 012)
 );
 
 CREATE INDEX IF NOT EXISTS idx_plan_questions_goal ON plan_questions(goal_id, status);
 
--- XP / level / streak live as rows in `state`:
+-- XP / level / streak live as rows in `state`, now keyed (user_id, key):
 --   xp, level, streak, streak_best, system_last_issue, system_last_debrief
+
+-- Composite indexes on the hot per-tenant read paths (migration 012). (user_id, id) is
+-- valid on every table below (id is a string PK on emails/events, int elsewhere).
+CREATE INDEX IF NOT EXISTS idx_memories_user      ON memories(user_id, id);
+CREATE INDEX IF NOT EXISTS idx_chat_history_user  ON chat_history(user_id, id);
+CREATE INDEX IF NOT EXISTS idx_reminders_user     ON reminders(user_id, id);
+CREATE INDEX IF NOT EXISTS idx_goals_user         ON goals(user_id, id);
+CREATE INDEX IF NOT EXISTS idx_milestones_user    ON milestones(user_id, goal_id);
+CREATE INDEX IF NOT EXISTS idx_quests_user        ON quests(user_id, issued_at);
+CREATE INDEX IF NOT EXISTS idx_activity_user      ON activity(user_id, id);
+CREATE INDEX IF NOT EXISTS idx_metrics_user       ON metrics(user_id, id);
+CREATE INDEX IF NOT EXISTS idx_research_user      ON research(user_id, id);
+CREATE INDEX IF NOT EXISTS idx_transactions_user  ON transactions(user_id, id);
+CREATE INDEX IF NOT EXISTS idx_notifications_user ON notifications(user_id, id);
+CREATE INDEX IF NOT EXISTS idx_emails_user        ON emails(user_id, id);
+CREATE INDEX IF NOT EXISTS idx_events_user        ON events(user_id, id);
