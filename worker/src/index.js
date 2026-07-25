@@ -9,7 +9,7 @@ import { classifyInbox, googleConnected, ingestNotification, pollCalendar, remin
 import { processBankNotifications } from "./life.js";
 import { generatePerception, getPerception } from "./perception.js";
 import { scopeEnv, syntheticOwner, resolveTenant, uid, ownerChat, botToken, webhookSecret, encryptSecret, hexToken, hashPassword, verifyPassword, entitled, trialDaysLeft } from "./tenant.js";
-import { createSubscription, verifyWebhook, applyWebhookEvent, billingConfigured, PLAN_LABEL, PRICE_INR } from "./billing.js";
+import { createSubscription, verifyWebhook, applyWebhookEvent, billingConfigured, PLAN_LABEL, PRICE_INR, TRIAL_DAYS } from "./billing.js";
 
 const TG = (env, method) => `https://api.telegram.org/bot${botToken(env)}/${method}`;
 
@@ -552,7 +552,19 @@ async function runReminders(env) {
 
 async function handleApi(url, env, request, ctx) {
   // The tenant is already resolved + authenticated by the dispatcher (resolveTenant), so no
-  // token re-check here — that would reject non-owner dashboard tokens.
+  // blanket token re-check here — that would reject non-owner dashboard tokens.
+  // BUT the debug/maintenance endpoints must stay owner-only: /api/tool runs ANY agent tool
+  // (including owner-only research, and writes that would dodge the paywall) and /api/cron
+  // forces quest issuance/debriefs on the shared AI budget. Before multi-tenancy the blanket
+  // DASH_TOKEN check covered these; now they need their own gate. (The research runner calls
+  // /api/tool with the owner's DASH_TOKEN, so it keeps working.)
+  const OWNER_ONLY_PATHS = new Set([
+    "/api/tool", "/api/cron", "/api/embed-backfill", "/api/vector-backfill",
+    "/api/memory-backfill", "/api/memory-reconcile",
+  ]);
+  if (OWNER_ONLY_PATHS.has(url.pathname) && url.searchParams.get("t") !== env.DASH_TOKEN) {
+    return Response.json({ error: "not found" }, { status: 404 });
+  }
   // Soft paywall: once the trial/subscription lapses, the dashboard is read-only.
   const isWrite = request.method === "POST" || request.method === "DELETE";
   if (isWrite && !entitled(env) && url.pathname !== "/api/checkout") {
@@ -1069,15 +1081,20 @@ async function handleRegister(request, env) {
   const webhook_id = hexToken(16), webhook_secret = hexToken(24);
   const dashboard_token = hexToken(24), notify_secret = hexToken(18);
   const host = new URL(request.url).host;
+  // Stamp the free trial at signup — without this the row's trial_ends_at is NULL and
+  // entitled() locks the account out on day one.
+  const now = new Date();
+  const trialEnds = new Date(now.getTime() + TRIAL_DAYS * 86400000).toISOString();
   const ins = await env.DB.prepare(
     `INSERT INTO users (bot_token, bot_username, bot_id, webhook_id, webhook_secret, timezone,
-                        dashboard_token, notify_secret, email, password_hash, status, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?) RETURNING id`)
+                        dashboard_token, notify_secret, email, password_hash, status, created_at,
+                        plan, trial_ends_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?, 'trial', ?) RETURNING id`)
     .bind(await encryptSecret(env, token), botUsername, botId, webhook_id,
           await encryptSecret(env, webhook_secret),
           String(body.timezone || "Asia/Kolkata"), dashboard_token, notify_secret,
           email, await hashPassword(password),
-          new Date().toISOString()).first();
+          now.toISOString(), trialEnds).first();
 
   // Point the bot's webhook at this Worker's per-bot path.
   let sw;
