@@ -22,7 +22,11 @@ CREATE TABLE IF NOT EXISTS users (
   status               TEXT NOT NULL DEFAULT 'active',        -- active | paused | revoked
   created_at           TEXT NOT NULL,
   email                TEXT,                                  -- account login (migration 015)
-  password_hash        TEXT                                   -- pbkdf2$<iters>$<salt>$<hash>
+  password_hash        TEXT,                                  -- pbkdf2$<iters>$<salt>$<hash>
+  plan                 TEXT NOT NULL DEFAULT 'trial',         -- trial | pro (migration 016)
+  trial_ends_at        TEXT,                                  -- 14-day free trial end (ISO)
+  plan_expires_at      TEXT,                                  -- pro period end, renewed by Razorpay webhook
+  rzp_sub_id           TEXT                                   -- Razorpay subscription id
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email ON users(email) WHERE email IS NOT NULL;
 

@@ -8,7 +8,8 @@ import { adaptPlan, addGoalContext, announceOpenQuestions, answerPlanQuestion, a
 import { classifyInbox, googleConnected, ingestNotification, pollCalendar, remindEvents } from "./senses.js";
 import { processBankNotifications } from "./life.js";
 import { generatePerception, getPerception } from "./perception.js";
-import { scopeEnv, syntheticOwner, resolveTenant, uid, ownerChat, botToken, webhookSecret, encryptSecret, hexToken, hashPassword, verifyPassword } from "./tenant.js";
+import { scopeEnv, syntheticOwner, resolveTenant, uid, ownerChat, botToken, webhookSecret, encryptSecret, hexToken, hashPassword, verifyPassword, entitled, trialDaysLeft } from "./tenant.js";
+import { createSubscription, verifyWebhook, applyWebhookEvent, billingConfigured, PLAN_LABEL, PRICE_INR } from "./billing.js";
 
 const TG = (env, method) => `https://api.telegram.org/bot${botToken(env)}/${method}`;
 
@@ -38,6 +39,7 @@ Commands:
 /rank — your level, XP and streak
 /research — recent deep dives
 /memories — what I know about you
+/upgrade — keep your System after the free trial
 /help — this message`;
 
 const esc = s => String(s ?? "").replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
@@ -100,6 +102,18 @@ async function cmdResearch(env) {
   return `🔍 <b>Research</b>\n\n${lines.join("\n")}\n\nSay "show me research #id" for the full report.`;
 }
 
+async function cmdUpgrade(env) {
+  if (env._tenant.plan === "pro" && entitled(env)) return "You're on <b>AXIS Pro</b> — you're all set. ⚔️";
+  const days = trialDaysLeft(env);
+  const sub = await createSubscription(env, env._tenant);
+  if (sub.error || !sub.url) return `Upgrades aren't switched on yet — hang tight. 🙏`;
+  if (sub.id) await env.DB.prepare("UPDATE users SET rzp_sub_id = ? WHERE id = ?").bind(sub.id, uid(env)).run();
+  const head = days > 0
+    ? `You have <b>${days} day${days === 1 ? "" : "s"}</b> of free access left.`
+    : `Your free trial has ended.`;
+  return `${head}\n\nKeep your full System — daily quests, the nightly reckoning, your dashboard — for <b>₹${PRICE_INR}/month</b>.\n\n▶ <a href="${sub.url}">Upgrade now</a>`;
+}
+
 function isOwner(chatId, env) {
   return String(chatId) === String(ownerChat(env));
 }
@@ -127,6 +141,7 @@ async function handleCommand(text, chatId, env) {
   else if (cmd === "/rank") reply = await cmdRank(env);
   else if (cmd === "/memories") reply = await cmdMemories(env);
   else if (cmd === "/research") reply = await cmdResearch(env);
+  else if (cmd === "/upgrade") reply = await cmdUpgrade(env);
   else reply = `Unknown command.\n\n${HELP}`;
   await tg(env, "sendMessage", {
     chat_id: chatId, text: reply, parse_mode: "HTML", disable_web_page_preview: true,
@@ -535,8 +550,27 @@ async function runReminders(env) {
 // ---------- Dashboard API ----------
 
 async function handleApi(url, env, request, ctx) {
-  if (url.searchParams.get("t") !== env.DASH_TOKEN) {
-    return Response.json({ error: "bad token" }, { status: 403 });
+  // The tenant is already resolved + authenticated by the dispatcher (resolveTenant), so no
+  // token re-check here — that would reject non-owner dashboard tokens.
+  // Soft paywall: once the trial/subscription lapses, the dashboard is read-only.
+  const isWrite = request.method === "POST" || request.method === "DELETE";
+  if (isWrite && !entitled(env) && url.pathname !== "/api/checkout") {
+    return Response.json({ error: "trial_ended",
+      message: "Your free trial has ended — upgrade to keep The System running." }, { status: 402 });
+  }
+  // Billing status for the dashboard banner.
+  if (url.pathname === "/api/billing") {
+    return Response.json({
+      plan: env._tenant.plan, entitled: entitled(env), trial_days_left: trialDaysLeft(env),
+      price_inr: PRICE_INR, label: PLAN_LABEL, payable: billingConfigured(env) || !!env.RZP_PAYMENT_LINK,
+    });
+  }
+  // Start an upgrade: create a Razorpay subscription, remember its id for the webhook.
+  if (url.pathname === "/api/checkout" && request.method === "POST") {
+    const sub = await createSubscription(env, env._tenant);
+    if (sub.error) return Response.json({ error: sub.error }, { status: 503 });
+    if (sub.id) await env.DB.prepare("UPDATE users SET rzp_sub_id = ? WHERE id = ?").bind(sub.id, uid(env)).run();
+    return Response.json({ url: sub.url });
   }
   if (url.pathname === "/api/alerts") {
     const { results } = await env.DB.prepare(`
@@ -1112,6 +1146,16 @@ export default {
     // Onboarding + login (no tenant yet): email + password (+ bot token on register).
     if (url.pathname === "/api/register" && request.method === "POST") return handleRegister(request, env);
     if (url.pathname === "/api/login" && request.method === "POST") return handleLogin(request, env);
+    // Razorpay webhook (no tenant token — verified by HMAC over the raw body).
+    if (url.pathname === "/api/razorpay/webhook" && request.method === "POST") {
+      const raw = await request.text();
+      if (!(await verifyWebhook(env, raw, request.headers.get("X-Razorpay-Signature")))) {
+        return new Response("bad signature", { status: 401 });
+      }
+      try { console.log("rzp webhook:", JSON.stringify(await applyWebhookEvent(env, JSON.parse(raw))).slice(0, 160)); }
+      catch (e) { console.log("rzp webhook err:", String(e).slice(0, 160)); }
+      return Response.json({ ok: true });   // always 200 so Razorpay doesn't retry-storm
+    }
     // Phone bridge: resolve the tenant by its own NOTIFY secret (tenant #1 = env.NOTIFY_SECRET).
     if (url.pathname === "/ingest/notification" && request.method === "POST") {
       const senv = await resolveTenant(env, { notifySecret: request.headers.get("X-Intelly-Secret") });
@@ -1174,6 +1218,9 @@ export default {
       if (!senv) continue;
       try { await runReminders(senv); }
       catch (e) { console.log(`t${t.id} reminders failed:`, String(e).slice(0, 160)); }
+      // Soft paywall: a lapsed trial/subscription pauses the System + senses (saves the
+      // shared AI budget); their explicit reminders above still fire.
+      if (!entitled(senv)) continue;
       // One job failing must never stop the others.
       for (const [name, fn] of [
         ["senses", runSenses],

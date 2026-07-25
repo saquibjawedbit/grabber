@@ -112,6 +112,12 @@ wrangler d1 execute grabber --remote --command \
 neuron budget. Add rate-limiting / email verification / a per-tenant daily cap before wide
 promotion (tracked in `docs/09-multi-tenant.md`).
 
+**Paywall:** each tenant gets a **14-day free trial**, then a soft lock (dashboard read-only,
+quests paused, bot nags) until they upgrade to **₹149/month**. Wire real charging by setting
+the Razorpay secrets (`RZP_KEY_ID`, `RZP_KEY_SECRET`, `RZP_PLAN_ID`, `RZP_WEBHOOK_SECRET` — see
+`wrangler.toml`) and pointing a Razorpay webhook at `<WORKER_URL>/api/razorpay/webhook`.
+Without them the trial + lock still work; `/upgrade` just reports charging isn't switched on.
+
 ### 4. LLM providers
 **None needed by default** — the Worker uses Cloudflare Workers AI
 (`@cf/openai/gpt-oss-120b`, ~10k free neurons/day, plus Whisper for voice and Mistral for

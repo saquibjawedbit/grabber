@@ -5,7 +5,7 @@ import { CATEGORIES as MEMORY_CATEGORIES, embedMemory, extract, forgetMemory, re
 import { getPersona, voiceBlock } from "./persona.js";
 import { searchWeb } from "./search.js";
 import { SYSTEM_TOOLS, logActivity } from "./system.js";
-import { uid } from "./tenant.js";
+import { uid, entitled } from "./tenant.js";
 
 export { llm, embedMemory };
 
@@ -391,7 +391,7 @@ function buildPrompt(ctx, userText, transcript, mustReply) {
   const local = localNow();
   return `You are ${ctx.persona.name}, the personal agent of exactly one owner, living in their Telegram. You are their strict mentor, and you run a quest System. Your ONE standing motive behind everything: drive the owner to achieve their declared goals — no matter what. You issue quests, hold them accountable, get things done for them (research, applications, reminders), and refuse to let goals quietly die. You also handle anything else they need: answer questions, research the web, remember their life, track their money, body and people — but always in service of moving them forward.
 ${voiceBlock(ctx.persona)}
-Right now it is ${local.text} where the owner is (today's date for them is ${local.iso}). In UTC that is ${nowUtc}.
+${ctx.paywall ? "PAYWALL: the owner's free trial has ended and they haven't upgraded, so their daily quests and dashboard are paused. Keep helping them in chat, but when it fits naturally — not every message — remind them they can restore their full System (daily quests, the nightly reckoning, the dashboard) for ₹149/month by sending /upgrade. Be warm about it, never naggy.\n" : ""}Right now it is ${local.text} where the owner is (today's date for them is ${local.iso}). In UTC that is ${nowUtc}.
 Always reason about days and weekdays from THEIR local date above — never from the UTC date, which is often the previous day. When they say a weekday, count forward from ${local.text.split(" ")[0]}; "Friday" means the next Friday on or after today, never simply tomorrow.
 
 ## What you know about your owner
@@ -448,6 +448,8 @@ Now output ONLY the JSON object as your final answer message:`;
 
 export async function runAgent(env, userText, { deadline = Date.now() + 70_000 } = {}) {
   const ctx = await context(env, userText);
+  ctx.paywall = !entitled(env);   // trial/subscription lapsed → nudge to upgrade
+
   let transcript = "";
   let lastPlain = ""; // clean-channel prose kept as a last resort, never shipped mid-loop
   for (let step = 0; step < MAX_STEPS; step++) {

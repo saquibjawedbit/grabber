@@ -95,6 +95,29 @@ timing doesn't leak existence) → returns the tenant's `dashboard_token` → th
 Both landing and signup carry a demo-video placeholder — drop a recording at
 `worker/public/onboarding.mp4` and it plays (no code change).
 
+## Paywall (14-day trial → ₹149/month, soft lock)
+
+Entitlement lives in `tenant.js`: `entitled(env)` = owner (tenant #1) **or** `plan='pro'`
+with an unexpired `plan_expires_at` **or** an unexpired `trial_ends_at`. `trialDaysLeft(env)`
+drives the dashboard banner. Signup stamps `trial_ends_at = now + 14 days` (migration 016
+adds `plan`/`trial_ends_at`/`plan_expires_at`/`rzp_sub_id`).
+
+**Soft lock** (once entitlement lapses):
+- **Cron** (`scheduled()`): reminders still fire, but `runSenses`/`money`/`runSystem` are
+  skipped — no new quests/reckoning, and the shared AI budget isn't spent on non-payers.
+- **Dashboard** (`handleApi`): reads (GET) work; writes (POST/DELETE) return **402** except
+  `/api/checkout`. `index.html` shows a trial/paywall banner (from `GET /api/billing`) with an
+  Upgrade button, and `api()` surfaces 402s.
+- **Bot**: still answers chat; the agent prompt gets a gentle upgrade nudge (`agent.js`,
+  `ctx.paywall`). `/upgrade` returns a checkout link.
+
+**Payments (`billing.js`, Razorpay):** `POST /api/checkout` creates a Razorpay **subscription**
+(`RZP_PLAN_ID`) and stores `rzp_sub_id`; the user opens the returned `short_url` to authorize
+the mandate + pay. Razorpay then POSTs `POST /api/razorpay/webhook`, verified by
+**HMAC-SHA256 over the raw body** against `RZP_WEBHOOK_SECRET`; `subscription.charged`/
+`.activated` set `plan='pro'` + `plan_expires_at` (found by `rzp_sub_id`). Absent RZP secrets,
+checkout reports "not configured" and the app runs on trials only — the whole lock still works.
+
 ## Verified
 
 - Tenant-1 read equivalence: `/api/brain` (55KB) and `/api/system` (61KB) byte-identical

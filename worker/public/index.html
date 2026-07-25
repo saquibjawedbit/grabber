@@ -739,6 +739,17 @@
   @media (max-width: 420px) {
     .metric-grid, .award-grid { grid-template-columns: 1fr; }
   }
+  /* Paywall / trial banner */
+  .bill { display:flex; align-items:center; gap:12px; flex-wrap:wrap; margin:0 0 18px;
+    padding:12px 16px; border:1px solid var(--border); border-radius:10px;
+    background: color-mix(in srgb, var(--seq) 8%, transparent); font-size:0.9rem; }
+  .bill.warn { border-color: color-mix(in srgb, var(--gold) 55%, transparent); background: color-mix(in srgb, var(--gold) 10%, transparent); }
+  .bill.lock { border-color: color-mix(in srgb, var(--critical) 55%, transparent); background: color-mix(in srgb, var(--critical) 12%, transparent); }
+  .bill b { color: var(--fg); }
+  .bill .grow { flex:1 1 auto; }
+  .bill button { padding:9px 16px; border:0; border-radius:8px; background:var(--seq); color:#05060d;
+    font-family:var(--font-mono); font-weight:700; letter-spacing:.04em; cursor:pointer; white-space:nowrap; }
+  .bill button:disabled { opacity:.6; cursor:default; }
 </style>
 
 <main id="app" hidden>
@@ -749,6 +760,8 @@
     </div>
     <span class="online" id="online">ONLINE</span>
   </header>
+
+  <div id="bill" class="bill" hidden></div>
 
   <div class="tiles" id="tiles"></div>
 
@@ -1048,11 +1061,35 @@ async function api(path, { method = "GET", body } = {}) {
     body: body ? JSON.stringify(body) : undefined,
   });
   if (r.status === 403) throw new Error("token");
+  if (r.status === 402) { renderBilling().catch(() => {}); throw new Error("paywall"); }
   return r.json();
 }
 
 // No token / expired session → send them to log in (email + password).
 function gate() { location.href = "/login"; }
+
+// Trial / paywall banner (soft lock): shows days left or the upgrade prompt.
+async function renderBilling() {
+  let b; try { b = await fetch(`/api/billing?t=${encodeURIComponent(token)}`).then(r => r.json()); } catch { return; }
+  const el = $("bill"); if (!el) return;
+  const btn = b.payable ? `<button id="upg">Upgrade · ₹${b.price_inr}/mo</button>` : "";
+  if (b.plan === "pro" && b.entitled) { el.hidden = true; return; }
+  if (b.entitled && b.trial_days_left != null) {
+    el.hidden = false; el.className = b.trial_days_left <= 3 ? "bill warn" : "bill";
+    el.innerHTML = `<span class="grow"><b>${b.trial_days_left} day${b.trial_days_left === 1 ? "" : "s"} left</b> in your free trial.</span>${btn}`;
+  } else {
+    el.hidden = false; el.className = "bill lock";
+    el.innerHTML = `<span class="grow"><b>Your free trial has ended.</b> The dashboard is read-only and quests are paused.</span>${btn}`;
+  }
+  const up = $("upg");
+  if (up) up.onclick = async () => {
+    up.disabled = true; up.textContent = "Opening…";
+    try {
+      const r = await api("/api/checkout", { method: "POST" });
+      if (r.url) location.href = r.url; else throw 0;
+    } catch { up.disabled = false; up.textContent = `Upgrade · ₹${b.price_inr}/mo`; alert("Upgrade isn't available just yet — try again shortly."); }
+  };
+}
 
 // ---------- tooltip ----------
 function tipShow(html, x, y) {
@@ -2696,6 +2733,7 @@ async function boot() {
     renderPersona(brain.persona);
     renderDocs(brain.documents);
     wireTeach();
+    renderBilling().catch(() => {});
     $("signout").onclick = () => { localStorage.removeItem("dash_token"); location.href = "/"; };
     const start = (location.hash || "").slice(1);
     showTab(["system", "plans", "brain", "life", "research", "senses", "settings"].includes(start) ? start : "system");

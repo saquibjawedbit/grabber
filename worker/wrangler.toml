@@ -65,3 +65,10 @@ enabled = true
 #   GOOGLE_CLIENT_ID     — } read-only Gmail + Calendar. Get all three by running
 #   GOOGLE_CLIENT_SECRET — } pipeline/scripts/google_auth.py
 #   GOOGLE_REFRESH_TOKEN — }   (tenant #1's Google account; per-tenant OAuth is Phase 7)
+# Paywall (Razorpay ₹149/mo — optional; absent = trials only, no charging):
+#   RZP_KEY_ID / RZP_KEY_SECRET — Razorpay API keys
+#   RZP_PLAN_ID          — a ₹149/month Plan created once in the Razorpay dashboard
+#   RZP_WEBHOOK_SECRET   — webhook signing secret (Razorpay dashboard → Webhooks →
+#                          point it at <WORKER_URL>/api/razorpay/webhook, subscribe to
+#                          subscription.charged / .activated / .halted / .cancelled)
+#   RZP_PAYMENT_LINK     — optional static link used only if the API keys are absent

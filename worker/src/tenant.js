@@ -61,6 +61,26 @@ export const ownerChat = (env) => env._tenant.owner_chat_id;
 export const botToken = (env) => env._tenant.bot_token;
 export const webhookSecret = (env) => env._tenant.webhook_secret;
 
+// ---------- Entitlement (paywall: 14-day trial, then Razorpay ₹149/mo) ----------
+// `entitled` gates the System's active work (quest issuance, dashboard writes). The owner
+// (tenant #1) is always entitled. See worker/src/billing.js and docs/09-multi-tenant.md.
+export function entitled(env) {
+  const t = env._tenant;
+  if (t.id === 1) return true;
+  const now = Date.now();
+  if (t.plan === "pro" && (!t.plan_expires_at || Date.parse(t.plan_expires_at) > now)) return true;
+  if (t.trial_ends_at && Date.parse(t.trial_ends_at) > now) return true;
+  return false;
+}
+
+// Days left in the free trial — null once they're pro (or the owner), 0 once it's expired.
+export function trialDaysLeft(env) {
+  const t = env._tenant;
+  if (t.id === 1 || t.plan === "pro") return null;
+  if (!t.trial_ends_at) return 0;
+  return Math.max(0, Math.ceil((Date.parse(t.trial_ends_at) - Date.now()) / 86400000));
+}
+
 // ---------- Secret encryption at rest (AES-GCM via env.MASTER_KEY) ----------
 // A bot token / Google refresh token is full account control, so a leaked D1 dump must
 // not hand them over. MASTER_KEY is base64 of 32 random bytes (a Worker secret).
@@ -152,6 +172,9 @@ export function syntheticOwner(env) {
     google_refresh_token: env.GOOGLE_REFRESH_TOKEN,
     gmail_address: null,
     status: "active",
+    plan: "pro",              // the owner never hits the paywall
+    trial_ends_at: null,
+    plan_expires_at: null,
   };
 }
 
