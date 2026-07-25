@@ -1,154 +1,162 @@
-# grabber
+# grabber — The System
 
-> ⚠️ **Direction change (2026-07-18): grabber is now _The System_.**
-> It is being reshaped from a passive opportunity-finder into a **strict mentor** (in the
-> *Solo Leveling* sense) whose one motive is to drive the owner to their declared **goals**
-> — issuing daily **quests**, holding a nightly reckoning, penalising failure, and leveling
-> them up. The job-board "opportunity engine" (watchers, IDF ranking, board alerts,
-> calibration, the nightly pipeline) has been **removed**. The current, accurate
-> architecture lives in **[`docs/`](./docs/)** — start with
-> [`docs/05-the-system.md`](./docs/05-the-system.md). **The product story below is legacy
-> and pending rewrite.**
+A **zero-cost personal agent** on Telegram: a strict mentor (in the *Solo Leveling* sense)
+whose one motive is to drive you to your declared **goals** — issuing daily **quests**,
+holding a nightly **reckoning**, penalising failure and **leveling you up** — while doubling
+as a general life agent (money, calendar, mail, people, memory, deep research).
+
+It runs entirely on **free tiers** — Cloudflare Workers/D1/Workers AI, GitHub Actions,
+Telegram — and is now **federated multi-tenant**: anyone can bring their own bot and get
+their own isolated System.
+
+> Live: **https://grabber.saquibjawed.workers.dev** · Architecture reference: **[`docs/`](./docs/)**
+> (start with [`docs/05-the-system.md`](./docs/05-the-system.md) and
+> [`docs/09-multi-tenant.md`](./docs/09-multi-tenant.md)).
 
 ---
 
-An agent that measures itself in **applications submitted**, not opportunities found.
-It scrapes obscure channels, measures rarity instead of asserting it, has an LLM read
-the survivors, arrives with the essay already drafted — and logs every prediction and
-outcome so after a month it *knows* your hit rates instead of guessing.
+## How it works
 
-**Total infrastructure cost: $0.** GitHub Actions (pipeline) + Cloudflare Workers/D1
-(webhook, nags, dashboard) + Telegram (alerts + one-tap labels) + Gemini free tier (ranking, drafting).
+Declare a goal — what you want to become, the target, the deadline. The System plans a
+roadmap of measurable milestones, then every morning issues **quests** (done-tonight tasks)
+toward the current milestone. You tap ✅ / ⏳ / ❌. Every night is a **reckoning**: unfinished
+quests fail, failure costs XP and your streak, and the plan re-tunes. Clear quests to gain
+XP, rank up **E → S**, and unlock real-world rewards you set for yourself.
+
+Alongside the mentor it quietly runs your life: logs spending from bank notifications,
+tracks calories/health/metrics, watches your calendar and mail, remembers durable facts
+about you, and can dispatch a browsing agent to dig for ~10 minutes and write a cited report.
+
+## Two runtimes, one database
+
+I/O-bound always-on work lives in a Cloudflare Worker; CPU-heavy work lives in GitHub
+Actions. Both share one D1 (SQLite) database.
 
 ```
-GitHub Actions (every 4h)                    Cloudflare Worker (always on)
-┌──────────────────────────────┐             ┌─────────────────────────────┐
-│ ingest: devfolio unstop hn   │             │ /telegram  taps -> outcomes │
-│         rss tg-relays        │──> D1 <────│ /api + dashboard            │
-│ recall (IDF edge, top-50)    │  (SQLite)   │ cron: escalating deadline   │
-│ rank   (Gemini reads them)   │             │       nags                  │
-│ prep   (essay + resume cut)  │             └─────────────────────────────┘
-│ notify (Telegram, max 2/day) │                          ▲
-└──────────────────────────────┘                    your taps:
-   nightly: IDF + calibration              Applied / Skip / Won / Rejected
+GitHub Actions (Python)                     Cloudflare Worker (always on)
+┌──────────────────────────────┐            ┌──────────────────────────────┐
+│ research.yml  Playwright dig  │            │ /tg/<id>  per-bot webhooks   │
+│   (dispatched, ~10 min)       │──> D1 <───│ /telegram owner (tenant #1)  │
+│ email.yml     Gmail IMAP poll │  (SQLite)  │ /signup + /api/register      │
+└──────────────────────────────┘            │ /api + dashboard             │
+        ▲                                    │ hourly cron: reminders,      │
+   borrows the Worker's IP for               │   senses, money, The System  │
+   web search (CI IPs get blocked)           └──────────────────────────────┘
 ```
 
-## Setup (~30 min, once)
+Every per-owner D1 table carries a `user_id`; a scoped-`env` seam
+([`worker/src/tenant.js`](worker/src/tenant.js)) + a fail-loud DB guard keep tenants
+isolated. See [`docs/09-multi-tenant.md`](docs/09-multi-tenant.md).
 
-### 1. Cloudflare (D1 + Worker)
-```bash
-npm i -g wrangler && wrangler login
-wrangler d1 create grabber                  # note database_id
-# put database_id into worker/wrangler.toml
-wrangler d1 execute grabber --file=schema.sql --remote
-wrangler vectorize create grabber-memories --dimensions=384 --metric=cosine   # memory search index
-cd worker
-wrangler secret put TELEGRAM_BOT_TOKEN
-wrangler secret put TELEGRAM_CHAT_ID
-wrangler secret put TG_WEBHOOK_SECRET       # any random string
-wrangler secret put DASH_TOKEN              # any random string
-wrangler deploy                             # note the workers.dev URL
-```
+## Get your own System (onboarding)
 
-### 2. Telegram bot
-1. Message **@BotFather** → `/newbot` → copy the token.
-2. Point the webhook at the worker and register the command menu:
-   ```bash
-   curl "https://api.telegram.org/bot<TOKEN>/setWebhook?url=<WORKER_URL>/telegram&secret_token=<TG_WEBHOOK_SECRET>"
-   curl "https://api.telegram.org/bot<TOKEN>/setMyCommands" -H 'Content-Type: application/json' -d '{"commands":[
-     {"command":"stats","description":"applications, win rates, corpus size"},
-     {"command":"pending","description":"alerted but not applied, by deadline"},
-     {"command":"applied","description":"application tracker with status"},
-     {"command":"help","description":"list commands"}]}'
-   ```
-3. Message your bot `/start` — it replies with your `TELEGRAM_CHAT_ID`.
+1. In Telegram, open **@BotFather** → `/newbot` → copy your bot token.
+2. Go to **`/signup`**, paste the token + your **invite code**. It validates the bot,
+   provisions your tenant (token encrypted at rest), and points the bot's webhook here.
+3. Open your bot and send **`/start`** — it binds to your chat. You're running your own
+   isolated System, with a private dashboard link.
 
-The bot is a two-way tracker, not just a firehose:
 | Command | What you get |
 |---|---|
-| `/stats` | total/30-day application count, wins, rejections, awaiting-result, win rate overall and per category |
-| `/pending` | everything you were alerted about but haven't applied to or skipped, sorted by days-to-deadline |
-| `/applied` | your application log — each with 🏆 won / ❌ rejected / ⏳ waiting |
-| Alert buttons | ✅ Applied / 🙅 Skip / 💤 Snooze, then 🏆 Won / ❌ Rejected — each tap is a tracked label |
+| `/goals` | your goals and progress |
+| `/quests` | today's quests (tap ✅ / ⏳ / ❌) |
+| `/rank` | your level, XP and streak |
+| `/research` | recent deep dives |
+| `/memories` | what it knows about you |
+| `/help` | command list |
 
-### 3. LLM
-**None needed by default.** The primary provider is Cloudflare Workers AI
-(`@cf/openai/gpt-oss-120b`, 10,000 free neurons/day ≈ 60–70 rankings + drafts),
-authenticated with the same `CF_API_TOKEN`/`CF_ACCOUNT_ID` you already set for D1.
+Send text, a voice note, a video, a screenshot, or a text file — it reads them all.
 
-Optional fallbacks for heavy days (tried in this order when Cloudflare errors or
-runs out of free neurons):
-- `NVIDIA_API_KEY` — [build.nvidia.com](https://build.nvidia.com) (`nvapi-...`)
-- `GEMINI_API_KEY` — [aistudio.google.com](https://aistudio.google.com)
-- `GROQ_API_KEY` — console.groq.com
+## Deploy your own (owner setup)
 
-### 4. Profile corpus (private — see `profile/README.md`)
-Drop `resume.md`, `bio.md`, `skills.yaml`, and every past essay into `profile/`, then:
+You (the deployer) are **tenant #1**, running off env secrets; everyone else self-registers.
+
+### 1. Cloudflare (D1 + Vectorize + Worker)
+```bash
+npm i -g wrangler && wrangler login
+wrangler d1 create grabber                 # put database_id into worker/wrangler.toml
+wrangler vectorize create grabber-memories --dimensions=384 --metric=cosine
+wrangler d1 execute grabber --file=schema.sql --remote          # full schema (multi-tenant)
+cd worker && wrangler deploy
+```
+
+### 2. Secrets (`wrangler secret put <NAME>`)
+| Secret | Purpose |
+|---|---|
+| `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` | the owner's bot + chat (tenant #1) |
+| `TG_WEBHOOK_SECRET` | owner webhook secret (random string) |
+| `DASH_TOKEN` | gates `/api/*` and the dashboard (random string) |
+| `NOTIFY_SECRET` | the owner's phone-notification bridge |
+| `MASTER_KEY` | AES-GCM key encrypting every tenant's bot/OAuth secrets at rest — `python3 -c "import os,base64;print(base64.b64encode(os.urandom(32)).decode())"` |
+| `GH_TOKEN` | PAT so `spawn_research` can dispatch the research workflow |
+| `GOOGLE_CLIENT_ID` / `GOOGLE_CLIENT_SECRET` / `GOOGLE_REFRESH_TOKEN` | read-only Gmail + Calendar (owner) — run `pipeline/scripts/google_auth.py` |
+| `SERPER_API_KEY`, `GOOGLE_CSE_KEY` | optional web-search providers (fail soft to DuckDuckGo → Wikipedia) |
+
+Point the owner bot's webhook at the legacy path:
+```bash
+curl "https://api.telegram.org/bot<TOKEN>/setWebhook?url=<WORKER_URL>/telegram&secret_token=<TG_WEBHOOK_SECRET>"
+```
+
+### 3. Invites (gate the beta)
+```bash
+wrangler d1 execute grabber --remote --command \
+ "INSERT INTO invites (code, created_at) VALUES ('AX-7f3a91', datetime('now'));"
+# see who claimed what:
+wrangler d1 execute grabber --remote --command \
+ "SELECT i.code, i.used_by, u.bot_username FROM invites i LEFT JOIN users u ON u.id=i.used_by;"
+```
+Each code is single-use and consumed only on a successful signup. Hand out **random** codes.
+
+### 4. LLM providers
+**None needed by default** — the Worker uses Cloudflare Workers AI
+(`@cf/openai/gpt-oss-120b`, ~10k free neurons/day, plus Whisper for voice and Mistral for
+image OCR). The pipeline adds NVIDIA → Gemini → Groq fallbacks (`NVIDIA_API_KEY`,
+`GEMINI_API_KEY`, `GROQ_API_KEY`) tried in order on error/rate-limit.
+
+### 5. Profile corpus (private)
+Drop `resume.md`, `bio.md`, `skills.yaml`, and past essays into `profile/` (gitignored;
+lives only in D1), then seed it:
 ```bash
 export CF_ACCOUNT_ID=... CF_API_TOKEN=... D1_DB_ID=...
 pip install -r pipeline/requirements.txt
 python pipeline/scripts/seed_profile.py
 ```
-The repo is public; `profile/` is gitignored and lives only in D1.
 
-### 5. GitHub secrets
+### 6. GitHub Actions pipeline (research + mail)
 Repo → Settings → Secrets and variables → Actions.
-**Secrets:** `CF_ACCOUNT_ID`, `CF_API_TOKEN` (D1 edit permission), `D1_DB_ID`,
-`TELEGRAM_BOT_TOKEN`, `TELEGRAM_CHAT_ID`, `GEMINI_API_KEY`,
-optional `GROQ_API_KEY`, `TELETHON_API_ID`, `TELETHON_API_HASH`, `TELETHON_SESSION`.
-**Variables:** `DASH_URL` (worker URL), optional `TG_RELAY_CHANNELS` (e.g. `@devfolio_updates,@oppfinder`).
+**Secrets:** `CF_ACCOUNT_ID`, `CF_API_TOKEN` (D1 edit), `D1_DB_ID`, `TELEGRAM_BOT_TOKEN`,
+`TELEGRAM_CHAT_ID`, LLM fallback keys, `GMAIL_APP_PASSWORD`, `DASH_TOKEN`.
+**Variables:** `GMAIL_ADDRESS`, `DASH_URL` (worker URL), `GOOGLE_CSE_ID`.
+`email.yml` polls Gmail every 20 min; `research.yml` runs a browsing agent on dispatch.
 
-### 6. First run
-Actions tab → *grabber pipeline* → Run workflow (`ingest` first to build the corpus,
-then `nightly` for IDF, then `run`).
+## Design principles
 
-### X + LinkedIn finding engine
-Neither platform has a free API (X reads: $200/mo; LinkedIn: none), so grabber uses
-three zero-cost, zero-account-risk paths — tune all of them in `pipeline/searches.yaml`:
+1. **A strict mentor with one motive** — everything is judged against your declared goals;
+   the tone pushes, penalises inaction, and rewards follow-through. Not a cheerleader.
+2. **Zero infrastructure cost** — free tiers only. If it can't run at $0, it isn't built.
+3. **Everything fails soft, independently** — a broken parser, a down index, or a dead
+   provider degrades to a fallback; it never kills a run.
+4. **D1 is the single source of truth** — facts *and* vectors. The Vectorize index is
+   disposable and rebuildable (`/api/vector-backfill`).
+5. **Never claim a write that didn't happen** — tools report the real result.
+6. **Tenant isolation is enforced, not trusted** — every per-owner query carries `user_id`;
+   a missed scope trips a fail-loud DB guard rather than leaking across tenants.
+7. **Silence over noise** — quiet hours, budgets, and one nightly reckoning instead of a
+   firehose.
 
-| Path | What it finds | Needs |
-|---|---|---|
-| **Google CSE** | Fresh X posts *and* LinkedIn posts matching your queries, via Google's index of both sites | Free key (below) |
-| **Nitter RSS** | Full timelines of specific X accounts you watch | Nothing (instances are flaky; fails soft) |
-| **LinkedIn guest jobs API** | Real job listings by keyword+location, past 3 days | Nothing |
-
-Google CSE setup (5 min, free, 100 queries/day — grabber uses ~24):
-1. [programmablesearchengine.google.com](https://programmablesearchengine.google.com) → create engine → enable **Search the entire web** → copy the engine ID → `GOOGLE_CSE_ID`.
-2. [Custom Search JSON API](https://developers.google.com/custom-search/v1/overview) → get an API key → `GOOGLE_CSE_KEY`.
-
-Serper (recommended — primary web search for the chat agent *and* the planner's
-one-search-per-plan): [serper.dev](https://serper.dev) → free API key (2,500 credits) →
-`wrangler secret put SERPER_API_KEY`. Falls back to CSE → DuckDuckGo → Wikipedia when
-unset or exhausted (`worker/src/search.js`).
-
-### Optional: Telegram relay channels (poor-man's Twitter firehose)
-API creds from [my.telegram.org](https://my.telegram.org), then
-`python pipeline/scripts/make_session.py` → `TELETHON_SESSION` secret.
-
-## Design decisions (why it's built this way)
-
-1. **Applying is the bottleneck** — every alert ships with an essay draft in your voice
-   (from your past essays), a resume re-cut, and a form checklist (`prep/drafts.py`).
-2. **Popularity is a penalty** — source obscurity weights in `config.SOURCE_WEIGHTS`
-   and per-feed weights in `feeds.yaml`; relay channels outrank job boards.
-3. **Rarity is measured, not asserted** — nightly IDF over the whole ingested corpus
-   (`rank/idf.py`); edge = Σ proficiency × idf(term). No hardcoded RARE dict to go stale.
-4. **Guess for a month, then know** — every alert stores predicted P(win); every tap
-   stores an outcome; `rank/calibrate.py` blends measured category hit rates into
-   future predictions as labels accumulate.
-5. **Two-stage ranking** — cheap IDF recall cuts thousands to `RECALL_TOP_K=50`,
-   then the LLM actually reads the survivors (`rank/rank2.py`).
-6. **Most losses are inaction** — the worker cron sends escalating nags at 7/3/1 days
-   before every deadline you haven't acted on.
-7. **Silence is the product** — hard `MAX_ALERTS_PER_DAY=2` budget plus `MIN_FIT_TO_ALERT=70`.
-   An alert that fires daily is an alert you mute.
+## Docs
+`docs/01-architecture` · `02-data-model` · `03-agent` · `04-memory` · `05-the-system` ·
+`06-research-agent` · `07-senses-life-initiative` · `08-api-and-ops` · **`09-multi-tenant`**.
+`CLAUDE.md` covers how to work in the code.
 
 ## Honest limitations
-- Devfolio/Unstop endpoints are unofficial — expect to touch their parsers occasionally
-  (each source fails independently; a broken one never kills a run).
-- No free Twitter firehose exists; relay channels + RSS are the zero-cost approximation.
-  The source interface is pluggable if you ever pay for one.
-- Form auto-fill is a browser-extension problem — v2. Today the agent gets you to
-  "everything drafted, form checklist in hand," which is most of the three hours.
-- GitHub Actions cron drifts 5–15 min and pauses on 60 days of repo inactivity
-  (any commit resets it). The worker (nags, taps, dashboard) has real uptime.
+- **`spawn_research` is owner-only** until the Python runner is made tenant-aware — it
+  currently reads the owner's profile and replies via the owner's bot.
+- **Per-tenant timezones**: quest/reckoning hours fire on the owner's IST clock for all
+  tenants (each `users` row stores a `timezone`; localizing the gates is pending).
+- **Per-user Gmail/Calendar** uses one Google account (the owner's); per-tenant OAuth is
+  pending.
+- **Free-tier ceilings**: the hourly cron runs all tenants in one invocation — past a
+  handful of active users, fan out to per-tenant sub-invocations.
+- The old job-board "opportunity engine" (watchers, IDF, board alerts, calibration, the
+  nightly pipeline) was **removed** in favour of The System; its tables are inert.
