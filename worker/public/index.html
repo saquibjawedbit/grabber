@@ -770,8 +770,6 @@
     <button data-tab="plans">Plans</button>
     <button data-tab="brain">Brain</button>
     <button data-tab="life">Life</button>
-    <button data-tab="research">Research</button>
-    <button data-tab="senses">Senses</button>
     <button data-tab="settings">Settings</button>
   </nav>
 
@@ -849,7 +847,7 @@
 
   <!-- LIFE -->
   <section data-panel="life" hidden>
-    <div class="card"><h2>Money, body &amp; people</h2><div id="life-body"></div></div>
+    <div class="card"><h2>Body &amp; people</h2><div id="life-body"></div></div>
     <div class="card" id="cal-card" hidden>
       <h2>Calories <span class="sub">daily intake, last 14 days — macros stacked</span></h2>
       <div id="calories"></div>
@@ -858,10 +856,7 @@
       <h2>Trends over time <span class="sub">how your life is moving, from the log</span></h2>
       <div id="life-trends"></div>
     </div>
-    <div class="cols">
-      <div><div class="card"><h2>People</h2><div id="people"></div></div></div>
-      <div><div class="card"><h2>Recent transactions</h2><div id="transactions"></div></div></div>
-    </div>
+    <div class="card"><h2>People</h2><div id="people"></div></div>
   </section>
 
   <!-- SYSTEM — overview, top→bottom: status · momentum · today's action · tracking · recognition · reflection · levers -->
@@ -956,23 +951,6 @@
   </section>
 
   <!-- RESEARCH -->
-  <section data-panel="research" hidden>
-    <div class="card"><h2>Deep dives</h2><div id="research-list"></div></div>
-  </section>
-
-  <!-- SENSES -->
-  <section data-panel="senses" hidden>
-    <div class="card">
-      <h2>What it can sense</h2>
-      <div id="senses-status"></div>
-      <div id="senses-list"></div>
-    </div>
-    <div class="cols">
-      <div><div class="card"><h2>Allowed apps</h2><div id="allowlist"></div></div></div>
-      <div><div class="card"><h2>Learned merchants</h2><div id="merchants"></div></div></div>
-    </div>
-  </section>
-
   <!-- SETTINGS -->
   <section data-panel="settings" hidden>
     <div class="card">
@@ -1113,7 +1091,6 @@ function renderTiles(sys, t) {
     [active.length, "active goals", active.length ? `${onTrack} on track` : "none set"],
     [q.length ? `${doneToday}/${q.length}` : "0", "quests today", "cleared"],
     [t.memories, "memories", "facts"],
-    [t.research, "deep dives", "run"],
   ];
   $("tiles").innerHTML = tiles.map(([v, k, s]) =>
     `<div class="tile"><div class="k">${k}</div><div class="v">${v ?? 0}</div><div class="s">${esc(s || "")}</div></div>`).join("");
@@ -1404,53 +1381,29 @@ function sparkline(points, w = 300, h = 54) {
   </svg>`;
 }
 
+// Money (accounts/holdings/spending) is intentionally NOT rendered: it depends on the phone
+// notification bridge, which tenants don't have. Body + people only.
 function renderLife(l) {
   if (!l) return;
-  const cash = l.accounts.filter(a => a.kind !== "card").reduce((s, a) => s + (a.balance || 0), 0);
-  const cardDebt = l.accounts.filter(a => a.kind === "card").reduce((s, a) => s + Math.abs(a.balance || 0), 0);
-  const assets = l.holdings.filter(h => h.kind === "asset").reduce((s, h) => s + h.value, 0);
-  const owed = cardDebt + l.holdings.filter(h => h.kind === "liability").reduce((s, h) => s + h.value, 0);
-  const net = cash + assets - owed;
-  const nothing = !l.accounts.length && !l.holdings.length && !l.tx_count && !l.weight.length && !l.cold_threads.length;
+  const nothing = !l.weight.length && !l.cold_threads.length;
   if (nothing) {
-    $("life-body").innerHTML = `<div class="empty">Nothing on file yet. Tell the bot what you have — "my HDFC account has 96400", "71.2 today", "met Ankit, he's a recruiter at Rippling" — and it shows up here.</div>`;
+    $("life-body").innerHTML = `<div class="empty">Nothing on file yet. Tell the bot about your day — "71.2 today", "ran 3km", "met Ankit, he's a recruiter at Rippling" — and it shows up here.</div>`;
     return;
   }
 
-  const spendTotal = l.spend_30d.reduce((s, c) => s + c.total, 0);
-  const maxCat = Math.max(1, ...l.spend_30d.map(c => c.total));
   const weightPts = l.weight.map(w => ({ value: w.value, at: w.at }));
   const wDelta = weightPts.length > 1
     ? Math.round((weightPts[weightPts.length - 1].value - weightPts[0].value) * 10) / 10 : null;
 
   $("life-body").innerHTML = `
     <div class="tiles" style="margin-bottom:1rem">
-      <div class="tile"><div class="v">${(l.accounts.length || l.holdings.length) ? money(net) : "—"}</div>
-        <div class="k">Net worth</div></div>
-      <div class="tile"><div class="v">${spendTotal ? money(spendTotal) : "—"}</div>
-        <div class="k">Spent · 30 days</div></div>
       <div class="tile"><div class="v">${weightPts.length ? weightPts[weightPts.length - 1].value : "—"}${weightPts.length ? '<span style="font-size:.75rem"> kg</span>' : ""}</div>
         <div class="k">Weight${wDelta != null ? ` · ${wDelta > 0 ? "▲" : "▼"} ${Math.abs(wDelta)}` : ""}</div></div>
       <div class="tile"><div class="v">${l.cold_threads.length || "—"}</div>
         <div class="k">Cold threads</div></div>
     </div>
-    <div class="cols">
-      <div>
-        ${l.spend_30d.length ? `<div class="meta">Where it went · 30 days</div>` + l.spend_30d.map(c => {
-          const pct = Math.max(2, (c.total / maxCat) * 80);
-          return `<div class="bar-row"><span class="lbl">${esc(c.category || "other")}</span>
-            <span class="bar-wrap"><span class="bar" style="width:${pct}%"></span>
-            <span class="bar-v" style="left:calc(${pct}% + 7px)">${money(c.total)}</span></span></div>`;
-        }).join("") : `<div class="empty">No spending recorded yet.</div>`}
-      </div>
-      <div>
-        ${(l.accounts.length || l.holdings.length) ? `<div class="meta">Position</div>` +
-          [...l.accounts.map(a => `<div class="lil">${esc(a.name)} <span>${money(a.balance)}</span></div>`),
-           ...l.holdings.map(h => `<div class="lil">${esc(h.name)} <span style="color:${h.kind === "liability" ? "var(--critical)" : "inherit"}">${h.kind === "liability" ? "−" : ""}${money(h.value)}</span></div>`)].join("") : ""}
-        ${l.cold_threads.length ? `<div class="meta" style="margin-top:.9rem">Going cold</div>` +
-          l.cold_threads.map(p => `<div class="lil">${esc(p.name)}${p.next_step ? ` — <i>${esc(p.next_step)}</i>` : ""} <span>${p.days_quiet}d</span></div>`).join("") : ""}
-      </div>
-    </div>`;
+    ${l.cold_threads.length ? `<div class="meta">Going cold</div>` +
+      l.cold_threads.map(p => `<div class="lil">${esc(p.name)}${p.next_step ? ` — <i>${esc(p.next_step)}</i>` : ""} <span>${p.days_quiet}d</span></div>`).join("") : ""}`;
 }
 
 function renderSenses(s) {
@@ -2722,12 +2675,8 @@ async function boot() {
     renderCalories(brain.life?.meals);
     renderLifeTrends(brain.life?.health);
     renderPeople(brain.life?.people);
-    renderTransactions(brain.life?.transactions);
-    // Senses + Research tabs
-    renderSenses(brain.senses);
-    renderAllowlist(brain.senses?.allowlist);
-    renderMerchants(brain.merchants);
-    renderResearch(brain.research);
+    // Money, Senses and Research are hidden — not supported per-tenant (phone bridge,
+    // single Google account, owner-only research runner). See docs/09-multi-tenant.md.
     // Settings tab
     renderSettings(sys.settings);
     renderPersona(brain.persona);
@@ -2736,7 +2685,7 @@ async function boot() {
     renderBilling().catch(() => {});
     $("signout").onclick = () => { localStorage.removeItem("dash_token"); location.href = "/"; };
     const start = (location.hash || "").slice(1);
-    showTab(["system", "plans", "brain", "life", "research", "senses", "settings"].includes(start) ? start : "system");
+    showTab(["system", "plans", "brain", "life", "settings"].includes(start) ? start : "system");
   } catch (e) {
     // A bad/expired token means the session is gone — clear it and send them to log in.
     if (e.message === "token") { localStorage.removeItem("dash_token"); gate(); return; }

@@ -28,7 +28,7 @@ const HELP = `I'm your System — a strict mentor with one motive: get you to yo
 
 • <b>Declare a goal</b> — tell me what you're trying to become, the target, the deadline. Everything I do runs off your goals.
 • <b>Daily quests</b> — every morning I issue quests toward your goals. Tap ✅/⏳/❌. Every night is a reckoning: unfinished = failed, and failure costs XP and your streak.
-• <b>I get things done for you</b> — paste a job/role and I'll draft the whole application. Ask me to dig ("what does Zepto ask in SDE interviews? go deep") and I put a research agent on a real machine for ~10 min.
+• <b>I get things done for you</b> — paste a job/role and I'll draft the whole application. Ask me anything and I'll search the web for a real answer.
 • <b>Remember you</b> — tell me anything; I recall what's relevant when it matters.
 • <b>Reminders</b> — "remind me Friday 6pm to follow up with Ankit".
 • Send any text/markdown file, a voice note, a video, or a screenshot — I read it and use it.
@@ -37,7 +37,6 @@ Commands:
 /goals — your goals and progress
 /quests — today's quests
 /rank — your level, XP and streak
-/research — recent deep dives
 /memories — what I know about you
 /upgrade — keep your System after the free trial
 /help — this message`;
@@ -91,6 +90,8 @@ async function cmdMemories(env) {
 }
 
 async function cmdResearch(env) {
+  // Research runs on the owner's pipeline (reads the owner's profile) — tenants don't get it.
+  if (uid(env) !== 1) return "Deep research isn't available on your account yet. 🔒";
   const { results } = await env.DB.prepare(
     "SELECT id, question, status, created_at, finished_at FROM research WHERE user_id = ? ORDER BY id DESC LIMIT 8").bind(uid(env)).all();
   if (!results.length) {

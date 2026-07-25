@@ -326,9 +326,15 @@ function argSig(schema) {
   return ` [checked args: ${parts.join(", ")}]`;
 }
 
-function toolList() {
+// Tools that only work for the owner (tenant #1). The research runner reads the OWNER's
+// profile/memories from D1 and replies via the owner's bot, so exposing it to a tenant would
+// leak the owner's data into their chat — see docs/09-multi-tenant.md.
+const OWNER_ONLY_TOOLS = new Set(["spawn_research", "get_research"]);
+
+function toolList(ownerOnly = true) {
   const groups = {};
   for (const [name, t] of Object.entries(TOOLS)) {
+    if (!ownerOnly && OWNER_ONLY_TOOLS.has(name)) continue;
     const g = t.group || TOOL_GROUPS[name] || "Other";
     (groups[g] ||= []).push(`- ${name}: ${t.desc}${t.args ? argSig(t.args) : ""}`);
   }
@@ -386,7 +392,7 @@ function localNow() {
 }
 
 function buildPrompt(ctx, userText, transcript, mustReply) {
-  const tools = toolList();
+  const tools = toolList(ctx.isOwner);
   const nowUtc = new Date().toISOString().slice(0, 16) + "Z";
   const local = localNow();
   return `You are ${ctx.persona.name}, the personal agent of exactly one owner, living in their Telegram. You are their strict mentor, and you run a quest System. Your ONE standing motive behind everything: drive the owner to achieve their declared goals — no matter what. You issue quests, hold them accountable, get things done for them (research, applications, reminders), and refuse to let goals quietly die. You also handle anything else they need: answer questions, research the web, remember their life, track their money, body and people — but always in service of moving them forward.
@@ -449,6 +455,7 @@ Now output ONLY the JSON object as your final answer message:`;
 export async function runAgent(env, userText, { deadline = Date.now() + 70_000 } = {}) {
   const ctx = await context(env, userText);
   ctx.paywall = !entitled(env);   // trial/subscription lapsed → nudge to upgrade
+  ctx.isOwner = uid(env) === 1;   // owner-only tools (research) stay hidden from tenants
 
   let transcript = "";
   let lastPlain = ""; // clean-channel prose kept as a last resort, never shipped mid-loop
@@ -476,6 +483,9 @@ export async function runAgent(env, userText, { deadline = Date.now() + 70_000 }
     let result;
     if (!tool) {
       result = { error: `unknown tool '${action.tool}'` };
+    } else if (!ctx.isOwner && OWNER_ONLY_TOOLS.has(action.tool)) {
+      // Belt and braces: the tool is hidden from the list, but never let a tenant run it.
+      result = { error: `'${action.tool}' isn't available on this account` };
     } else {
       action.args ||= {};
       // Validate at the boundary; a bad arg becomes a tool-error the model can fix
