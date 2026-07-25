@@ -113,21 +113,21 @@ async function handleCommand(text, chatId, env) {
     if (!ownerChat(env)) {
       await env.DB.prepare("UPDATE users SET owner_chat_id = ? WHERE id = ? AND owner_chat_id IS NULL")
         .bind(String(chatId), uid(env)).run();
-      reply = `✅ You're connected — I'm your System now.\n\n${esc(HELP)}`;
+      reply = `✅ You're connected — I'm your System now.\n\n${HELP}`;
     } else if (!isOwner(chatId, env)) {
       reply = "This bot is already bound to its owner. 🙂";
     } else {
-      reply = esc(HELP);
+      reply = HELP;
     }
   }
   else if (!isOwner(chatId, env)) reply = "I'm a personal agent working for one person, and it isn't you. 🙂";
-  else if (cmd === "/help") reply = esc(HELP);
+  else if (cmd === "/help") reply = HELP;
   else if (cmd === "/goals") reply = await cmdGoals(env);
   else if (cmd === "/quests") reply = await cmdQuests(env);
   else if (cmd === "/rank") reply = await cmdRank(env);
   else if (cmd === "/memories") reply = await cmdMemories(env);
   else if (cmd === "/research") reply = await cmdResearch(env);
-  else reply = `Unknown command.\n\n${esc(HELP)}`;
+  else reply = `Unknown command.\n\n${HELP}`;
   await tg(env, "sendMessage", {
     chat_id: chatId, text: reply, parse_mode: "HTML", disable_web_page_preview: true,
   });
