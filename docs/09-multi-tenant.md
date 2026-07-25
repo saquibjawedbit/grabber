@@ -42,11 +42,13 @@ keys: `profile/state (user_id,key)`, `accounts/holdings (user_id,name)`,
 `emails`/`events` keep their global string PK (gmail/gcal ids don't collide) and just carry a
 `user_id` column. `schema.sql` mirrors the final shape.
 
-Key `users` columns: `bot_token`, `bot_username`, `bot_id`, `webhook_id` (the `/tg/<id>`
-path), `webhook_secret`, `owner_chat_id`, `timezone`, `dashboard_token`, `notify_secret`,
-`google_refresh_token`, `status`. `bot_token`/`webhook_secret`/`google_refresh_token` are
-**encrypted at rest** (AES-GCM via `env.MASTER_KEY`; `encryptSecret`/`decryptSecret`), stored
-as `enc:<base64(iv||ct)>`.
+Key `users` columns: `email` + `password_hash` (account login, migration 015), `bot_token`,
+`bot_username`, `bot_id`, `webhook_id` (the `/tg/<id>` path), `webhook_secret`,
+`owner_chat_id`, `timezone`, `dashboard_token`, `notify_secret`, `google_refresh_token`,
+`status`. `bot_token`/`webhook_secret`/`google_refresh_token` are **encrypted at rest**
+(AES-GCM via `env.MASTER_KEY`; `encryptSecret`/`decryptSecret`), stored as
+`enc:<base64(iv||ct)>`. `password_hash` is `pbkdf2$<iters>$<salt>$<hash>`
+(`hashPassword`/`verifyPassword`) — **iterations capped at 100000, the Workers PBKDF2 limit**.
 
 ## Request routing (`worker/src/index.js` `fetch`)
 
@@ -66,18 +68,32 @@ Outbound is automatic: `tg()`/`TG()`/`download()` read `botToken(env)`; proactiv
 (`memory.js`), with the D1 fallback scans also `user_id`-scoped so isolation holds even when
 the index is down.
 
-## Onboarding (`/signup` + `POST /api/register`)
+## Onboarding & login (email + password, no invite)
 
+Signup is open — **email + password + a BYO bot token** (the beta invite gate was removed in
+migration 015). The dashboard "session" is still the tenant's `dashboard_token`; login just
+hands it back.
+
+**Signup** (`/signup` → `POST /api/register`, `worker/public/signup.html` — a 2-step wizard
+with a demo-video placeholder):
 1. User runs `/newbot` in @BotFather → gets a token.
-2. Pastes token + invite code on **`/signup`** (`worker/public/signup.html`).
-3. `handleRegister` (invite-gated): `getMe` validates the token and captures `{id, username}`
-   → generates `webhook_id`/`webhook_secret`/`dashboard_token`/`notify_secret` → `INSERT users`
-   (secrets encrypted) → `setWebhook` at `https://<host>/tg/<webhook_id>` with the per-bot
-   `secret_token` → consumes the invite → returns the dashboard link + notify secret. Rolls
-   back the row if `setWebhook` fails.
-4. User opens their bot and sends `/start`; `handleCommand` binds `owner_chat_id` to that chat.
+2. On `/signup`: pastes the token (step 1), then email + password (step 2).
+3. `handleRegister`: validates email/password/token → `getMe` captures `{id, username}` →
+   checks the email isn't taken → generates `webhook_id`/`webhook_secret`/`dashboard_token`/
+   `notify_secret` → `INSERT users` (bot secrets encrypted, password PBKDF2-hashed) →
+   `setWebhook` at `https://<host>/tg/<webhook_id>` with the per-bot `secret_token` → returns
+   the dashboard token + link. Rolls back the row if `setWebhook` fails.
+4. User opens their bot and sends `/start`; `handleCommand` binds `owner_chat_id` to that chat
+   and issues the first quest.
 
-Seed an invite: `INSERT INTO invites (code, created_at) VALUES ('<code>', datetime('now'));`
+**Login** (`/login` → `POST /api/login`, `worker/public/login.html`): email + password →
+`verifyPassword` (constant-time; runs against a dummy hash even when the account is missing so
+timing doesn't leak existence) → returns the tenant's `dashboard_token` → the page redirects to
+`/?t=<token>`.
+
+**Public pages:** `/` serves the landing page (`landing.html`); `/?t=<token>` the dashboard.
+Both landing and signup carry a demo-video placeholder — drop a recording at
+`worker/public/onboarding.mp4` and it plays (no code change).
 
 ## Verified
 
@@ -99,6 +115,11 @@ Seed an invite: `INSERT INTO invites (code, created_at) VALUES ('<code>', dateti
   read the owner's profile and DM the owner. Until the runner is made tenant-aware (read
   `user_id` with the job, scope its queries, reply via that tenant's bot), treat `spawn_research`
   as owner-only.
+- **Open signup + shared quota**: anyone can register, and every tenant's chat turns run on
+  the owner's shared **Workers AI** neuron budget (their bot, our neurons). No rate-limiting or
+  email verification yet — add both, plus a per-tenant daily cap, before wide promotion.
+- **Session hardening**: login returns the `dashboard_token` as a bearer-in-URL (stored in
+  `localStorage`), matching the existing model — no httpOnly cookie, expiry, or rotation yet.
 - **Guard to `strict`** in production once broader path coverage is confirmed (currently `warn`).
 - **Free-tier ceiling**: the cron loop runs all tenants in one invocation; past ~5 active
   tenants, fan out to per-tenant sub-invocations (self-fetch) to stay under the subrequest/CPU cap.

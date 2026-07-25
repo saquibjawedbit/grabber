@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Log in — AXIS</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Chakra+Petch:wght@400;500;600;700&family=Space+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
+<style>
+  :root{ --accent:#4c8dff; --bg:#05060d; --ink:#eaf0ff; --mut:#8994b8; --line:color-mix(in srgb,var(--accent) 26%, transparent); --err:#e5546b; }
+  *{ box-sizing:border-box; }
+  body{ margin:0; min-height:100vh; display:grid; place-items:start center; background:
+      radial-gradient(900px 600px at 50% -10%, color-mix(in srgb,var(--accent) 16%, transparent), transparent 70%), var(--bg);
+    color:var(--ink); font-family:"Space Grotesk",system-ui,sans-serif; -webkit-font-smoothing:antialiased; }
+  a{ color:var(--accent); text-decoration:none; } a:hover{ color:#fff; }
+  .mono{ font-family:'Chakra Petch',monospace; }
+  .wrap{ width:100%; max-width:400px; padding:64px 20px; }
+  .brand{ display:flex; align-items:center; gap:10px; justify-content:center; margin-bottom:28px; }
+  .brand .m{ width:24px; height:24px; border:1.5px solid var(--accent); display:grid; place-items:center; box-shadow:0 0 16px -4px var(--accent); }
+  .brand .m i{ width:8px; height:8px; background:var(--accent); box-shadow:0 0 10px var(--accent); display:block; }
+  .brand span{ font-family:'Chakra Petch',monospace; font-weight:700; letter-spacing:.3em; font-size:14px; }
+  h1{ font-family:'Chakra Petch',monospace; font-weight:700; font-size:26px; margin:0 0 4px; text-align:center; }
+  .lead{ color:var(--mut); text-align:center; margin:0 0 24px; }
+  label{ display:block; font-family:'Chakra Petch',monospace; font-size:12px; letter-spacing:.12em; color:var(--mut); margin:16px 0 7px; }
+  input{ width:100%; padding:13px 14px; border:1px solid var(--line); background:rgba(0,0,0,.35); color:var(--ink); font-size:16px; }
+  input:focus{ outline:none; border-color:var(--accent); box-shadow:0 0 0 3px color-mix(in srgb,var(--accent) 18%, transparent); }
+  .btn{ width:100%; margin-top:22px; padding:15px; border:0; background:var(--accent); color:#05060d; font-family:'Chakra Petch',monospace; font-weight:700; letter-spacing:.06em; font-size:15px; cursor:pointer; box-shadow:0 0 30px -8px var(--accent); }
+  .btn:disabled{ opacity:.55; cursor:default; }
+  .err{ color:var(--err); font-size:13.5px; margin-top:12px; min-height:1em; text-align:center; }
+  .foot{ text-align:center; margin-top:22px; font-size:14px; color:var(--mut); }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="brand"><div class="m"><i></i></div><span>AXIS</span></div>
+  <h1>Welcome back</h1>
+  <p class="lead">Log in to your System.</p>
+  <form id="f">
+    <label for="email">Email</label>
+    <input id="email" type="email" autocomplete="email" placeholder="you@example.com" required>
+    <label for="password">Password</label>
+    <input id="password" type="password" autocomplete="current-password" placeholder="your password" required>
+    <button class="btn" id="go" type="submit">Log in →</button>
+    <div class="err" id="err"></div>
+  </form>
+  <div class="foot">New here? <a href="/signup">Create your System</a>.</div>
+</div>
+<script>
+  const f = document.getElementById("f"), go = document.getElementById("go"), err = document.getElementById("err");
+  f.addEventListener("submit", async (e) => {
+    e.preventDefault(); err.textContent = ""; go.disabled = true; go.textContent = "Checking…";
+    try {
+      const r = await fetch("/api/login", {
+        method: "POST", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email: document.getElementById("email").value.trim(), password: document.getElementById("password").value }),
+      });
+      const d = await r.json();
+      if (!r.ok) throw new Error(d.error || "login failed");
+      try { if (d.dashboard_token) localStorage.setItem("dash_token", d.dashboard_token); } catch (e) {}
+      window.location.href = d.dashboard_url || ("/?t=" + (d.dashboard_token || ""));
+    } catch (e) {
+      err.textContent = "⚠️ " + e.message; go.disabled = false; go.textContent = "Log in →";
+    }
+  });
+</script>
+</body>
+</html>

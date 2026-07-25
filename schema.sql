@@ -20,10 +20,14 @@ CREATE TABLE IF NOT EXISTS users (
   gmail_address        TEXT,
   gmail_app_password   TEXT,
   status               TEXT NOT NULL DEFAULT 'active',        -- active | paused | revoked
-  created_at           TEXT NOT NULL
+  created_at           TEXT NOT NULL,
+  email                TEXT,                                  -- account login (migration 015)
+  password_hash        TEXT                                   -- pbkdf2$<iters>$<salt>$<hash>
 );
+CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email ON users(email) WHERE email IS NOT NULL;
 
--- Beta invite gating: a code is claimed by exactly one signup.
+-- Legacy beta invite table (migration 011). Superseded by email/password signup (015);
+-- kept inert so old rows/queries don't break.
 CREATE TABLE IF NOT EXISTS invites (
   code       TEXT PRIMARY KEY,
   used_by    INTEGER,

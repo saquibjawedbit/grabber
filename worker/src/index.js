@@ -8,7 +8,7 @@ import { adaptPlan, addGoalContext, announceOpenQuestions, answerPlanQuestion, a
 import { classifyInbox, googleConnected, ingestNotification, pollCalendar, remindEvents } from "./senses.js";
 import { processBankNotifications } from "./life.js";
 import { generatePerception, getPerception } from "./perception.js";
-import { scopeEnv, syntheticOwner, resolveTenant, uid, ownerChat, botToken, webhookSecret, encryptSecret, hexToken } from "./tenant.js";
+import { scopeEnv, syntheticOwner, resolveTenant, uid, ownerChat, botToken, webhookSecret, encryptSecret, hexToken, hashPassword, verifyPassword } from "./tenant.js";
 
 const TG = (env, method) => `https://api.telegram.org/bot${botToken(env)}/${method}`;
 
@@ -1002,24 +1002,23 @@ async function handleApi(url, env, request, ctx) {
   return Response.json({ error: "not found" }, { status: 404 });
 }
 
-// ---------- Onboarding: turn a BYO BotFather token into a live tenant ----------
-// Invite-gated. Validates the token via getMe, provisions a `users` row (secrets encrypted
-// at rest), points the bot's webhook at /tg/<webhook_id>, then hands back the dashboard
-// link + phone-bridge secret. The owner sends /start to bind their chat (handleCommand).
+// ---------- Onboarding: email + password + a BYO BotFather token -> a live tenant ----------
+// No invite gate. Validates the token via getMe, creates an account (password PBKDF2-hashed,
+// bot secrets encrypted at rest), points the bot's webhook at /tg/<webhook_id>, and hands back
+// the dashboard token. The owner sends /start to bind their chat (handleCommand).
 async function handleRegister(request, env) {
   let body;
   try { body = await request.json(); }
   catch { return Response.json({ error: "expected json" }, { status: 400 }); }
+  const email = String(body.email || "").trim().toLowerCase();
+  const password = String(body.password || "");
   const token = String(body.token || "").trim();
-  const invite = String(body.invite || "").trim();
-  if (!/^\d{5,}:[\w-]{20,}$/.test(token)) {
-    return Response.json({ error: "that doesn't look like a BotFather token" }, { status: 400 });
-  }
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) return Response.json({ error: "enter a valid email" }, { status: 400 });
+  if (password.length < 8) return Response.json({ error: "use a password of at least 8 characters" }, { status: 400 });
+  if (!/^\d{5,}:[\w-]{20,}$/.test(token)) return Response.json({ error: "that doesn't look like a BotFather token" }, { status: 400 });
 
-  // Invite gate (beta): one code, one signup.
-  const inv = await env.DB.prepare("SELECT code, used_by FROM invites WHERE code = ?").bind(invite).first();
-  if (!inv) return Response.json({ error: "invalid invite code" }, { status: 403 });
-  if (inv.used_by) return Response.json({ error: "that invite has already been used" }, { status: 403 });
+  const emailDup = await env.DB.prepare("SELECT id FROM users WHERE email = ?").bind(email).first();
+  if (emailDup) return Response.json({ error: "an account with that email already exists — log in instead" }, { status: 409 });
 
   // Prove the token is real and capture the bot's identity.
   let me;
@@ -1029,19 +1028,20 @@ async function handleRegister(request, env) {
   const botId = me.result.id, botUsername = me.result.username || null;
 
   const dup = await env.DB.prepare("SELECT id FROM users WHERE bot_id = ?").bind(botId).first();
-  if (dup) return Response.json({ error: "that bot is already connected" }, { status: 409 });
+  if (dup) return Response.json({ error: "that bot is already connected to another account" }, { status: 409 });
 
-  // Provision the tenant — bot_token and webhook_secret encrypted at rest.
+  // Provision the tenant — bot_token/webhook_secret encrypted, password PBKDF2-hashed.
   const webhook_id = hexToken(16), webhook_secret = hexToken(24);
   const dashboard_token = hexToken(24), notify_secret = hexToken(18);
   const host = new URL(request.url).host;
   const ins = await env.DB.prepare(
     `INSERT INTO users (bot_token, bot_username, bot_id, webhook_id, webhook_secret, timezone,
-                        dashboard_token, notify_secret, status, created_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'active', ?) RETURNING id`)
+                        dashboard_token, notify_secret, email, password_hash, status, created_at)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'active', ?) RETURNING id`)
     .bind(await encryptSecret(env, token), botUsername, botId, webhook_id,
           await encryptSecret(env, webhook_secret),
           String(body.timezone || "Asia/Kolkata"), dashboard_token, notify_secret,
+          email, await hashPassword(password),
           new Date().toISOString()).first();
 
   // Point the bot's webhook at this Worker's per-bot path.
@@ -1057,18 +1057,40 @@ async function handleRegister(request, env) {
     })).json();
   } catch { sw = { ok: false, description: "network error" }; }
   if (!sw.ok) {
-    // Roll back so a failed webhook never strands a half-provisioned tenant.
+    // Roll back so a failed webhook never strands a half-provisioned account.
     await env.DB.prepare("DELETE FROM users WHERE id = ?").bind(ins.id).run();
     return Response.json({ error: "couldn't set the webhook: " + (sw.description || "") }, { status: 502 });
   }
 
-  await env.DB.prepare("UPDATE invites SET used_by = ? WHERE code = ?").bind(ins.id, invite).run();
   return Response.json({
     ok: true,
     bot_username: botUsername,
+    dashboard_token,
     dashboard_url: `https://${host}/?t=${dashboard_token}`,
     notify_secret,
-    next: botUsername ? `Open https://t.me/${botUsername} and send /start to finish.` : "Send /start to your bot to finish.",
+    next: botUsername ? `Open https://t.me/${botUsername} and send /start to get your first quest.` : "Send /start to your bot to get your first quest.",
+  });
+}
+
+// ---------- Login: email + password -> the tenant's dashboard token ----------
+async function handleLogin(request, env) {
+  let body;
+  try { body = await request.json(); }
+  catch { return Response.json({ error: "expected json" }, { status: 400 }); }
+  const email = String(body.email || "").trim().toLowerCase();
+  const password = String(body.password || "");
+  const row = await env.DB.prepare(
+    "SELECT password_hash, dashboard_token, bot_username FROM users WHERE email = ? AND status = 'active'")
+    .bind(email).first();
+  // Verify even when the account is missing, against a dummy hash (same 100k iters so it
+  // actually runs the KDF), so response timing doesn't reveal whether the email exists.
+  const ok = await verifyPassword(password, row?.password_hash || "pbkdf2$100000$AAAAAAAAAAAAAAAAAAAAAA==$AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=");
+  if (!row || !row.password_hash || !ok) return Response.json({ error: "wrong email or password" }, { status: 401 });
+  return Response.json({
+    ok: true,
+    dashboard_token: row.dashboard_token,
+    dashboard_url: `https://${new URL(request.url).host}/?t=${row.dashboard_token}`,
+    bot_username: row.bot_username,
   });
 }
 
@@ -1087,8 +1109,9 @@ export default {
         return Response.json({ error: String(e) });
       }
     }
-    // Onboarding: invite-gated, no tenant yet — provisions a tenant from a BYO bot token.
+    // Onboarding + login (no tenant yet): email + password (+ bot token on register).
     if (url.pathname === "/api/register" && request.method === "POST") return handleRegister(request, env);
+    if (url.pathname === "/api/login" && request.method === "POST") return handleLogin(request, env);
     // Phone bridge: resolve the tenant by its own NOTIFY secret (tenant #1 = env.NOTIFY_SECRET).
     if (url.pathname === "/ingest/notification" && request.method === "POST") {
       const senv = await resolveTenant(env, { notifySecret: request.headers.get("X-Intelly-Secret") });

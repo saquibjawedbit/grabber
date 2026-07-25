@@ -51,10 +51,14 @@ isolated. See [`docs/09-multi-tenant.md`](docs/09-multi-tenant.md).
 ## Get your own System (onboarding)
 
 1. In Telegram, open **@BotFather** → `/newbot` → copy your bot token.
-2. Go to **`/signup`**, paste the token + your **invite code**. It validates the bot,
-   provisions your tenant (token encrypted at rest), and points the bot's webhook here.
-3. Open your bot and send **`/start`** — it binds to your chat. You're running your own
-   isolated System, with a private dashboard link.
+2. Go to **`/signup`**: paste the token, then set an **email + password**. It validates the
+   bot, provisions your tenant (token encrypted at rest, password PBKDF2-hashed), and points
+   the bot's webhook here. Log back in anytime at **`/login`**.
+3. Open your bot and send **`/start`** — it binds to your chat and hands you your first quest.
+   You're running your own isolated System, with a private dashboard link.
+
+Target: link → first quest in under 4 minutes. A 90-second walkthrough plays on the landing
+and signup pages (drop a recording at `worker/public/onboarding.mp4`).
 
 | Command | What you get |
 |---|---|
@@ -97,15 +101,16 @@ Point the owner bot's webhook at the legacy path:
 curl "https://api.telegram.org/bot<TOKEN>/setWebhook?url=<WORKER_URL>/telegram&secret_token=<TG_WEBHOOK_SECRET>"
 ```
 
-### 3. Invites (gate the beta)
+### 3. Accounts & signup
+Signup is **open** — email + password + a BYO bot token at `/signup`; `/login` returns the
+tenant's dashboard. No invite gate. See who's signed up:
 ```bash
 wrangler d1 execute grabber --remote --command \
- "INSERT INTO invites (code, created_at) VALUES ('AX-7f3a91', datetime('now'));"
-# see who claimed what:
-wrangler d1 execute grabber --remote --command \
- "SELECT i.code, i.used_by, u.bot_username FROM invites i LEFT JOIN users u ON u.id=i.used_by;"
+ "SELECT id, email, bot_username, created_at FROM users WHERE id > 1 ORDER BY id;"
 ```
-Each code is single-use and consumed only on a successful signup. Hand out **random** codes.
+⚠️ Open signup means every tenant's chat turns run on your shared Workers AI free-tier
+neuron budget. Add rate-limiting / email verification / a per-tenant daily cap before wide
+promotion (tracked in `docs/09-multi-tenant.md`).
 
 ### 4. LLM providers
 **None needed by default** — the Worker uses Cloudflare Workers AI

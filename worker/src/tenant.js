@@ -100,6 +100,40 @@ export function hexToken(nbytes = 16) {
   return [...b].map((x) => x.toString(16).padStart(2, "0")).join("");
 }
 
+// ---------- Password hashing (PBKDF2-HMAC-SHA256 via WebCrypto) ----------
+// No bcrypt on Workers; PBKDF2 with a per-password salt is the standard fit. Stored as
+// pbkdf2$<iterations>$<saltB64>$<hashB64>. Verify is constant-time.
+const PBKDF2_ITERS = 100000;   // Workers caps PBKDF2 at 100k iterations (higher throws NotSupportedError)
+const b64e = (u8) => { let s = ""; for (const b of u8) s += String.fromCharCode(b); return btoa(s); };
+const b64d = (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0));
+
+async function pbkdf2(password, salt, iters) {
+  const key = await crypto.subtle.importKey(
+    "raw", new TextEncoder().encode(password), "PBKDF2", false, ["deriveBits"]);
+  const bits = await crypto.subtle.deriveBits(
+    { name: "PBKDF2", salt, iterations: iters, hash: "SHA-256" }, key, 256);
+  return new Uint8Array(bits);
+}
+
+export async function hashPassword(password) {
+  const salt = crypto.getRandomValues(new Uint8Array(16));
+  const hash = await pbkdf2(password, salt, PBKDF2_ITERS);
+  return `pbkdf2$${PBKDF2_ITERS}$${b64e(salt)}$${b64e(hash)}`;
+}
+
+export async function verifyPassword(password, stored) {
+  try {
+    const [algo, iterS, saltB64, hashB64] = String(stored).split("$");
+    if (algo !== "pbkdf2") return false;
+    const expected = b64d(hashB64);
+    const hash = await pbkdf2(password, b64d(saltB64), Number(iterS));
+    if (hash.length !== expected.length) return false;
+    let diff = 0;
+    for (let i = 0; i < hash.length; i++) diff |= hash[i] ^ expected[i];   // constant-time
+    return diff === 0;
+  } catch { return false; }
+}
+
 // Tenant #1 fabricated from the legacy env secrets. Lets the owner keep working before
 // (and after) the `users` row is populated — migration 011 seeds a matching id=1 row so
 // DB-backed lookups and this synthetic view agree.
