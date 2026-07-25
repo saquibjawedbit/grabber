@@ -1019,23 +1019,11 @@
     </div>
     <div class="card">
       <h2>Session</h2>
-      <p class="teach-hint">This dashboard is unlocked with your <code>DASH_TOKEN</code>, stored only in this browser.</p>
-      <button id="signout" class="ghost-btn">Sign out of this browser</button>
+      <p class="teach-hint">You're logged in. Your session lives only in this browser.</p>
+      <button id="signout" class="ghost-btn">Sign out</button>
     </div>
   </section>
 </main>
-
-<div id="gate" hidden>
-  <div class="gate-panel">
-    <div class="gate-glyph">◈</div>
-    <h1>The System</h1>
-    <p class="gate-hint">Enter access token</p>
-    <input id="tok" type="password" autocomplete="off" placeholder="············">
-    <button id="go">Authenticate</button>
-    <p class="gate-foot">Token is stored only in this browser</p>
-    <p class="sub" id="gate-err"></p>
-  </div>
-</div>
 
 <div id="tip"></div>
 
@@ -1048,7 +1036,10 @@ const catColor = c => getComputedStyle(document.documentElement)
   .getPropertyValue(CATS.includes(c) ? `--cat-${c}` : "--cat-doc").trim();
 const IST = new Intl.DateTimeFormat("en-IN", { timeZone: "Asia/Kolkata", dateStyle: "medium", timeStyle: "short" });
 
-let token = localStorage.getItem("dash_token") || "";
+// Session comes from the login redirect (?t=…) or this browser's saved token.
+const urlTok = new URLSearchParams(location.search).get("t");
+if (urlTok) localStorage.setItem("dash_token", urlTok);
+let token = urlTok || localStorage.getItem("dash_token") || "";
 
 async function api(path, { method = "GET", body } = {}) {
   const r = await fetch(`${path}${path.includes("?") ? "&" : "?"}t=${encodeURIComponent(token)}`, {
@@ -1060,12 +1051,8 @@ async function api(path, { method = "GET", body } = {}) {
   return r.json();
 }
 
-function gate(msg) {
-  $("app").hidden = true; $("gate").hidden = false;
-  $("gate-err").textContent = msg || "";
-  $("go").onclick = () => { token = $("tok").value.trim(); localStorage.setItem("dash_token", token); boot(); };
-  $("tok").onkeydown = e => { if (e.key === "Enter") $("go").onclick(); };
-}
+// No token / expired session → send them to log in (email + password).
+function gate() { location.href = "/login"; }
 
 // ---------- tooltip ----------
 function tipShow(html, x, y) {
@@ -2671,7 +2658,7 @@ async function boot() {
   try {
     const [brain, sys] = await Promise.all([api("/api/brain"), api("/api/system")]);
     window.__brain = brain;
-    $("gate").hidden = true; $("app").hidden = false;
+    $("app").hidden = false;
     $("asof").textContent = "as of " + IST.format(new Date());
     renderTiles(sys, brain.totals);
     // System tab
@@ -2709,12 +2696,13 @@ async function boot() {
     renderPersona(brain.persona);
     renderDocs(brain.documents);
     wireTeach();
-    $("signout").onclick = () => { localStorage.removeItem("dash_token"); location.reload(); };
+    $("signout").onclick = () => { localStorage.removeItem("dash_token"); location.href = "/"; };
     const start = (location.hash || "").slice(1);
     showTab(["system", "plans", "brain", "life", "research", "senses", "settings"].includes(start) ? start : "system");
   } catch (e) {
-    localStorage.removeItem("dash_token");
-    gate(e.message === "token" && token ? "Wrong token — try again." : "");
+    // A bad/expired token means the session is gone — clear it and send them to log in.
+    if (e.message === "token") { localStorage.removeItem("dash_token"); gate(); return; }
+    console.error(e);
   }
 }
 token ? boot() : gate();
