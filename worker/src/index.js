@@ -1089,9 +1089,6 @@ export default {
     }
     // Onboarding: invite-gated, no tenant yet — provisions a tenant from a BYO bot token.
     if (url.pathname === "/api/register" && request.method === "POST") return handleRegister(request, env);
-    if (url.pathname === "/signup") {
-      return env.ASSETS.fetch(new Request(new URL("/signup.html", url), request));
-    }
     // Phone bridge: resolve the tenant by its own NOTIFY secret (tenant #1 = env.NOTIFY_SECRET).
     if (url.pathname === "/ingest/notification" && request.method === "POST") {
       const senv = await resolveTenant(env, { notifySecret: request.headers.get("X-Intelly-Secret") });
@@ -1124,6 +1121,12 @@ export default {
       const senv = await resolveTenant(env, { dashToken: url.searchParams.get("t") });
       if (!senv) return Response.json({ error: "unauthorized" }, { status: 401 });
       return handleApi(url, senv, request, ctx);
+    }
+    // Public landing page at the root for visitors without a dashboard token. The
+    // dashboard itself stays at /?t=<token> (falls through to the asset below), and
+    // /signup is the onboarding form.
+    if (url.pathname === "/" && !url.searchParams.get("t")) {
+      return env.ASSETS.fetch(new Request(new URL("/landing", url), request));
     }
     // The dashboard is one HTML file that changes every deploy — never let a browser
     // or edge cache serve a stale copy, or a UI fix looks broken until a hard reload.

@@ -5,6 +5,10 @@ compatibility_date = "2026-01-01"
 [assets]
 directory = "public"
 binding = "ASSETS"
+# Run the Worker BEFORE static assets so the root route can serve the public landing
+# page to visitors (no ?t=) while /?t=<token> falls through to the dashboard asset.
+# The Worker's fallback still serves every other asset via env.ASSETS.fetch().
+run_worker_first = true
 
 [vars]
 # Google Programmable Search engine id (public). Pair with `wrangler secret put
