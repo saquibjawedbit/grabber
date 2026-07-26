@@ -23,11 +23,15 @@ export const PLAN_LABEL = "AXIS Pro · ₹149/month";
 const RZP_KEY_ID_DEFAULT     = "rzp_test_TIF2EdNh5EZnLa";
 const RZP_KEY_SECRET_DEFAULT = "97LRyGCAALK6MyXbZgxsbvmj";
 const RZP_PLAN_ID_DEFAULT    = "plan_TIF4QkMvI34H2D";   // AXIS Pro · Monthly
+// Webhook signing secret: paste this SAME value into the Razorpay dashboard webhook's
+// "Secret" field (Settings → Webhooks). verifyWebhook() HMACs the raw body against it.
+const RZP_WEBHOOK_SECRET_DEFAULT = "e848206d97aec8109111c62241fb8d8ed358d64bb7788846";
 
 // Resolve each credential: env secret first, hardcoded test default second.
-const rzpKeyId     = (env) => env.RZP_KEY_ID     || RZP_KEY_ID_DEFAULT;
-const rzpKeySecret = (env) => env.RZP_KEY_SECRET || RZP_KEY_SECRET_DEFAULT;
-const rzpPlanId    = (env) => env.RZP_PLAN_ID    || RZP_PLAN_ID_DEFAULT;
+const rzpKeyId        = (env) => env.RZP_KEY_ID        || RZP_KEY_ID_DEFAULT;
+const rzpKeySecret    = (env) => env.RZP_KEY_SECRET    || RZP_KEY_SECRET_DEFAULT;
+const rzpPlanId       = (env) => env.RZP_PLAN_ID       || RZP_PLAN_ID_DEFAULT;
+const rzpWebhookSecret = (env) => env.RZP_WEBHOOK_SECRET || RZP_WEBHOOK_SECRET_DEFAULT;
 
 export function billingConfigured(env) {
   return !!(rzpKeyId(env) && rzpKeySecret(env) && rzpPlanId(env));
@@ -69,8 +73,9 @@ async function hmacHex(secret, message) {
 
 // Verify the X-Razorpay-Signature header against the raw request body.
 export async function verifyWebhook(env, rawBody, signature) {
-  if (!env.RZP_WEBHOOK_SECRET || !signature) return false;
-  const expected = await hmacHex(env.RZP_WEBHOOK_SECRET, rawBody);
+  const secret = rzpWebhookSecret(env);
+  if (!secret || !signature) return false;
+  const expected = await hmacHex(secret, rawBody);
   if (expected.length !== signature.length) return false;
   let diff = 0;                                             // constant-time compare
   for (let i = 0; i < expected.length; i++) diff |= expected.charCodeAt(i) ^ signature.charCodeAt(i);
