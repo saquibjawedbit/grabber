@@ -1,0 +1,19 @@
+# YOLO dataset descriptor. Paths are relative to this file's directory
+# (or absolute). `split_dataset.py` creates the train/val/test folders below.
+#
+# EDIT the `names` list to your real classes, in the exact order your label
+# files use (class id 0 = first name, 1 = second, ...).
+
+path: .              # dataset root (this data/ folder)
+train: images/train  # relative to `path`
+val: images/val
+test: images/test    # optional; used by validate.py --split test
+
+# --- classes ---------------------------------------------------------------
+# Replace these with your actual classes. The count is inferred from the list.
+names:
+  0: person
+  1: car
+  2: obstacle
+  3: cone
+# 4: ...

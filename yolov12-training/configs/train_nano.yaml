@@ -1,0 +1,38 @@
+# Training hyperparameters for the edge-buggy nano model (~4k images).
+# Pass with:  python scripts/train.py --cfg configs/train_nano.yaml
+# Any CLI flag on train.py overrides the matching key here.
+#
+# These are Ultralytics train() args. Full reference:
+# https://docs.ultralytics.com/modes/train/#train-settings
+
+model: yolo12n.pt      # nano — the edge/realtime default (see README)
+data: data/data.yaml
+epochs: 150            # 4k imgs is small; early-stopping usually ends sooner
+patience: 30           # stop if val mAP hasn't improved in 30 epochs
+imgsz: 640             # train at 640; export smaller for more FPS on the buggy
+batch: -1             # -1 = auto-batch (~60% VRAM); set 16 on a small GPU
+device: 0             # GPU index; "cpu" to force CPU (slow — training only)
+workers: 8
+seed: 0               # reproducible splits/init
+cache: false          # set true (or "ram"/"disk") to speed epochs if RAM allows
+optimizer: auto
+cos_lr: true          # cosine LR decay — smoother convergence on small data
+close_mosaic: 10      # disable mosaic for the last 10 epochs (realistic framing)
+amp: true             # mixed precision — faster, lower memory
+
+# --- augmentation (defaults are sane for a road/ground buggy scene) ---------
+hsv_h: 0.015
+hsv_s: 0.7
+hsv_v: 0.4
+fliplr: 0.5           # horizontal flip
+flipud: 0.0           # keep 0 unless your objects are truly orientation-agnostic
+degrees: 0.0          # small rotation (e.g. 5.0) if the camera tilts
+translate: 0.1
+scale: 0.5
+mosaic: 1.0
+mixup: 0.0
+
+# --- bookkeeping ------------------------------------------------------------
+project: runs/detect
+name: train
+exist_ok: false

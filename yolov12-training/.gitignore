@@ -1,0 +1,27 @@
+# Datasets & weights — never commit these (thousands of images, big binaries)
+data/images/
+data/labels/
+*.pt
+*.onnx
+*.engine
+*.tflite
+*.ncnn*
+*.torchscript
+*.pb
+
+# Training outputs
+runs/
+wandb/
+*.log
+
+# Python
+.venv/
+venv/
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+
+# OS / editor
+.DS_Store
+.idea/
+.vscode/
