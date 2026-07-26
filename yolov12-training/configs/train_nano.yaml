@@ -49,6 +49,7 @@ copy_paste: 0.0
 # by pointing direction. When unsure, leave it at 0.0.
 
 # --- bookkeeping -----------------------------------------------------------
-project: runs/detect
-name: nxpcup_n_512
+# No `project:` here on purpose — Ultralytics already writes under runs/detect/,
+# and adding a relative `project: runs/detect` doubles it to runs/detect/runs/detect/.
+name: nxpcup_n_512     # → weights land in runs/detect/nxpcup_n_512/weights/best.pt
 exist_ok: false
