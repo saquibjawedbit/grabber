@@ -3,15 +3,16 @@
 
 Jetson (TensorRT engine, FP16 — the usual buggy target):
     python scripts/export.py --weights runs/detect/train/weights/best.pt \
-                             --format engine --half --imgsz 640
+                             --format engine --half --imgsz 512
 
 CPU / Raspberry Pi (ONNX or NCNN, INT8 for speed):
-    python scripts/export.py --weights .../best.pt --format onnx --int8 --imgsz 416
-    python scripts/export.py --weights .../best.pt --format ncnn --imgsz 320
+    python scripts/export.py --weights .../best.pt --format onnx --int8 --imgsz 512
+    python scripts/export.py --weights .../best.pt --format ncnn --imgsz 512
 
-Tip: export at the resolution you will actually run on the buggy (e.g. 416/320),
-not necessarily the 640 you trained at — lower input size is the biggest realtime
-speed win. Re-run validate.py at that imgsz to see the accuracy trade-off.
+⚠️ Tiny objects: this dataset's signs are ~15 px. Normally you'd shrink the
+input size for FPS, but here that erases the objects — keep --imgsz 512 (native).
+If you MUST go faster, drop to 448 and re-validate; do NOT go to 320/416 blindly.
+Always re-run validate.py --imgsz <same size> to see the accuracy you're trading.
 """
 import argparse
 
@@ -23,7 +24,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--weights", required=True)
     ap.add_argument("--format", default="onnx", choices=VALID)
-    ap.add_argument("--imgsz", type=int, default=640, help="export input size (try 416/320 for FPS)")
+    ap.add_argument("--imgsz", type=int, default=512, help="export input size — keep 512 (tiny objects)")
     ap.add_argument("--half", action="store_true", help="FP16 (Jetson/GPU)")
     ap.add_argument("--int8", action="store_true", help="INT8 quantization (needs calibration data)")
     ap.add_argument("--data", default=None, help="data.yaml for INT8 calibration")

@@ -1,19 +1,27 @@
-# YOLO dataset descriptor. Paths are relative to this file's directory
-# (or absolute). `split_dataset.py` creates the train/val/test folders below.
+# YOLO dataset descriptor for the NXP Cup 2026 dataset (Roboflow YOLOv12 export).
 #
-# EDIT the `names` list to your real classes, in the exact order your label
-# files use (class id 0 = first name, 1 = second, ...).
+# The scripts (train.py / validate.py) resolve `path` relative to THIS yaml file
+# and rewrite it to an absolute path at runtime, so the relative path below works
+# from anywhere. If you move the dataset, just fix `path`.
+#
+# Dataset facts (verified): 2167 imgs @ 512x512, splits already made, 9 classes,
+# objects are TINY (median ~18x15 px) — keep the training/inference size high.
 
-path: .              # dataset root (this data/ folder)
-train: images/train  # relative to `path`
-val: images/val
-test: images/test    # optional; used by validate.py --split test
+path: ../dataset/NXPCUP_2026.v2-v1_a.yolov12   # dataset root, relative to this file
+train: train/images
+val: valid/images
+test: test/images
 
-# --- classes ---------------------------------------------------------------
-# Replace these with your actual classes. The count is inferred from the list.
+# --- classes (output size = 9) ---------------------------------------------
+# Order MUST match the label class ids (0..8). Do not reorder.
+nc: 9
 names:
-  0: person
-  1: car
-  2: obstacle
-  3: cone
-# 4: ...
+  0: A
+  1: B
+  2: C
+  3: Left
+  4: Right
+  5: Straight
+  6: X
+  7: Y
+  8: Z

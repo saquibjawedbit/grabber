@@ -55,6 +55,12 @@ def main():
         if cand.exists():
             cfg["data"] = str(cand)
 
+    # Make the data.yaml `path` absolute (Ultralytics won't resolve it relative
+    # to the yaml). See scripts/_dataset.py.
+    if "data" in cfg:
+        from _dataset import resolve_data_yaml
+        cfg["data"] = resolve_data_yaml(cfg["data"])
+
     model_name = cfg.pop("model", "yolo12n.pt")
 
     # Import here so --help works without torch installed.

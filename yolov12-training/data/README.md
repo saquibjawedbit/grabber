@@ -35,10 +35,16 @@ data/
     └── test/    *.txt
 ```
 
-## Getting there from a flat folder
+## This project: already split
 
-If your 4k images + `.txt` labels are all in one directory (or in parallel
-`images/`+`labels/` dirs), run:
+The NXP Cup dataset ships pre-split (train/valid/test), unzipped at
+`../dataset/NXPCUP_2026.v2-v1_a.yolov12/`, and `data.yaml` points straight at it.
+**You do not need to split anything** — go run `scripts/train.py`.
+
+## Splitting a *different* flat folder (for reuse elsewhere)
+
+If some *other* dataset has its images + `.txt` labels in one directory (or in
+parallel `images/`+`labels/` dirs), run:
 
 ```bash
 python scripts/split_dataset.py --src /path/to/all_data --out data --val 0.15 --test 0.05

@@ -18,7 +18,7 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--weights", required=True)
     ap.add_argument("--source", default="0", help="0=cam, a video file, image, or folder")
-    ap.add_argument("--imgsz", type=int, default=640)
+    ap.add_argument("--imgsz", type=int, default=512)  # match training/native size
     ap.add_argument("--conf", type=float, default=0.25)
     ap.add_argument("--iou", type=float, default=0.45)
     ap.add_argument("--device", default=None)

@@ -18,17 +18,19 @@ def main():
     ap = argparse.ArgumentParser(description=__doc__)
     ap.add_argument("--weights", required=True, help="path to best.pt")
     ap.add_argument("--data", default=str(ROOT / "data" / "data.yaml"))
-    ap.add_argument("--imgsz", type=int, default=640)
+    ap.add_argument("--imgsz", type=int, default=512)
     ap.add_argument("--split", default="val", choices=["train", "val", "test"])
     ap.add_argument("--device", default=None)
     ap.add_argument("--conf", type=float, default=0.001, help="low conf for metric calc")
     ap.add_argument("--iou", type=float, default=0.6)
     args = ap.parse_args()
 
+    from _dataset import resolve_data_yaml
     from ultralytics import YOLO
 
+    data = resolve_data_yaml(args.data)
     model = YOLO(args.weights)
-    m = model.val(data=args.data, imgsz=args.imgsz, split=args.split,
+    m = model.val(data=data, imgsz=args.imgsz, split=args.split,
                   device=args.device, conf=args.conf, iou=args.iou, plots=True)
 
     box = m.box

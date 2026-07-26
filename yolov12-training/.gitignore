@@ -1,6 +1,10 @@
 # Datasets & weights — never commit these (thousands of images, big binaries)
 data/images/
 data/labels/
+# the unzipped NXP Cup dataset (2167 imgs) lives here, untracked
+dataset/
+# runtime-generated absolute-path copies of data.yaml
+*.resolved.yaml
 *.pt
 *.onnx
 *.engine
