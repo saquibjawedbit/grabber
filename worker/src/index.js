@@ -9,7 +9,7 @@ import { classifyInbox, googleConnected, ingestNotification, pollCalendar, remin
 import { processBankNotifications } from "./life.js";
 import { generatePerception, getPerception } from "./perception.js";
 import { scopeEnv, syntheticOwner, resolveTenant, uid, ownerChat, botToken, webhookSecret, encryptSecret, hexToken, hashPassword, verifyPassword, entitled, trialDaysLeft } from "./tenant.js";
-import { createSubscription, verifyWebhook, applyWebhookEvent, billingConfigured, PLAN_LABEL, PRICE_INR, TRIAL_DAYS } from "./billing.js";
+import { createSubscription, cancelSubscription, verifyWebhook, applyWebhookEvent, billingConfigured, PLAN_LABEL, PRICE_INR, TRIAL_DAYS } from "./billing.js";
 
 const TG = (env, method) => `https://api.telegram.org/bot${botToken(env)}/${method}`;
 
@@ -567,7 +567,8 @@ async function handleApi(url, env, request, ctx) {
   }
   // Soft paywall: once the trial/subscription lapses, the dashboard is read-only.
   const isWrite = request.method === "POST" || request.method === "DELETE";
-  if (isWrite && !entitled(env) && url.pathname !== "/api/checkout") {
+  const BILLING_WRITE_PATHS = new Set(["/api/checkout", "/api/subscription/cancel"]);
+  if (isWrite && !entitled(env) && !BILLING_WRITE_PATHS.has(url.pathname)) {
     return Response.json({ error: "trial_ended",
       message: "Your free trial has ended — upgrade to keep The System running." }, { status: 402 });
   }
@@ -575,6 +576,8 @@ async function handleApi(url, env, request, ctx) {
   if (url.pathname === "/api/billing") {
     return Response.json({
       plan: env._tenant.plan, entitled: entitled(env), trial_days_left: trialDaysLeft(env),
+      plan_expires_at: env._tenant.plan_expires_at || null,
+      has_subscription: !!env._tenant.rzp_sub_id, trial_days: TRIAL_DAYS,
       price_inr: PRICE_INR, label: PLAN_LABEL, payable: billingConfigured(env) || !!env.RZP_PAYMENT_LINK,
     });
   }
@@ -584,6 +587,13 @@ async function handleApi(url, env, request, ctx) {
     if (sub.error) return Response.json({ error: sub.error }, { status: 503 });
     if (sub.id) await env.DB.prepare("UPDATE users SET rzp_sub_id = ? WHERE id = ?").bind(sub.id, uid(env)).run();
     return Response.json({ url: sub.url });
+  }
+  // Cancel the subscription at cycle end. Access stays until plan_expires_at (the
+  // subscription.cancelled webhook is a no-op; entitled() lapses at period end).
+  if (url.pathname === "/api/subscription/cancel" && request.method === "POST") {
+    const res = await cancelSubscription(env, env._tenant);
+    if (res.error) return Response.json({ error: res.error }, { status: 503 });
+    return Response.json({ ok: true, status: res.status, ends: res.ends });
   }
   if (url.pathname === "/api/alerts") {
     const { results } = await env.DB.prepare(`

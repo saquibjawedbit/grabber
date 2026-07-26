@@ -770,6 +770,7 @@
     <button data-tab="plans">Plans</button>
     <button data-tab="brain">Brain</button>
     <button data-tab="life">Life</button>
+    <button data-tab="billing">Subscription</button>
     <button data-tab="settings">Settings</button>
   </nav>
 
@@ -952,6 +953,14 @@
 
   <!-- RESEARCH -->
   <!-- SETTINGS -->
+  <section data-panel="billing" hidden>
+    <div class="card">
+      <div class="card-head"><h2>Subscription <span class="sub" id="sub-state"></span></h2></div>
+      <p class="teach-hint">Manage your AXIS plan — your free trial, upgrading to Pro, and cancelling any time. Payments are handled securely by Razorpay; we never see your card details.</p>
+      <div id="sub-body" style="margin-top:.4rem">Loading…</div>
+    </div>
+  </section>
+
   <section data-panel="settings" hidden>
     <div class="card">
       <h2>Autonomy <span class="sub" id="autonomy-sub"></span></h2>
@@ -1066,6 +1075,68 @@ async function renderBilling() {
       const r = await api("/api/checkout", { method: "POST" });
       if (r.url) location.href = r.url; else throw 0;
     } catch { up.disabled = false; up.textContent = `Upgrade · ₹${b.price_inr}/mo`; alert("Upgrade isn't available just yet — try again shortly."); }
+  };
+}
+
+// Full subscription-management page (the Subscription tab). Shows plan/trial/renewal state
+// and the upgrade or cancel action. Reads the same /api/billing status the banner uses.
+function subRow(k, v) {
+  return `<div style="display:flex;justify-content:space-between;gap:1rem;padding:.6rem .1rem;border-bottom:1px solid rgba(255,255,255,.07)">
+    <span style="color:var(--mut)">${k}</span><span style="font-weight:600;text-align:right">${v}</span></div>`;
+}
+async function renderSubscription() {
+  const body = $("sub-body"), state = $("sub-state");
+  if (!body) return;
+  let b;
+  try { b = await fetch(`/api/billing?t=${encodeURIComponent(token)}`).then(r => r.json()); }
+  catch { body.textContent = "Couldn't load your subscription — try again shortly."; return; }
+  const price = `₹${b.price_inr}/mo`;
+  const fmt = (iso) => { try { return new Date(iso).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" }); } catch { return iso; } };
+  const isPro = b.plan === "pro" && b.entitled;
+  const rows = [];
+  let badge, color;
+  if (isPro) {
+    badge = "Pro · Active"; color = "var(--seq)";
+    rows.push(subRow("Plan", b.label || `AXIS Pro · ${price}`));
+    if (b.plan_expires_at) rows.push(subRow("Renews on", fmt(b.plan_expires_at)));
+    rows.push(subRow("Amount", price));
+  } else if (b.entitled && b.trial_days_left != null) {
+    badge = "Free trial"; color = b.trial_days_left <= 3 ? "#e6a23c" : "var(--seq)";
+    rows.push(subRow("Plan", "Free trial"));
+    rows.push(subRow("Trial ends in", `${b.trial_days_left} day${b.trial_days_left === 1 ? "" : "s"}`));
+    rows.push(subRow("Then", `${b.label || "AXIS Pro"} — ${price}`));
+  } else {
+    badge = "Expired"; color = "#e06c6c";
+    rows.push(subRow("Plan", "Trial ended"));
+    rows.push(subRow("Status", "Read-only — upgrade to resume quests"));
+    rows.push(subRow("Price", price));
+  }
+  if (state) { state.textContent = badge; state.style.color = color; }
+  let actions = "";
+  if (!isPro && b.payable) actions += `<button id="sub-upg" class="ghost-btn primary">Upgrade · ${price}</button>`;
+  if (isPro && b.has_subscription) actions += `<button id="sub-cancel" class="ghost-btn">Cancel subscription</button>`;
+  body.innerHTML =
+    `<div style="margin:.3rem 0 .2rem">${rows.join("")}</div>` +
+    (actions ? `<div style="display:flex;gap:.6rem;flex-wrap:wrap;margin-top:.9rem">${actions}</div>` : "") +
+    `<p class="teach-hint" style="margin-top:.8rem">${isPro
+      ? "Cancelling keeps your Pro access until the end of the current billing period, then reverts to read-only."
+      : "Upgrading starts your monthly plan through Razorpay's secure checkout."}</p>`;
+  const upg = $("sub-upg");
+  if (upg) upg.onclick = async () => {
+    upg.disabled = true; upg.textContent = "Opening…";
+    try { const r = await api("/api/checkout", { method: "POST" }); if (r.url) location.href = r.url; else throw 0; }
+    catch { upg.disabled = false; upg.textContent = `Upgrade · ${price}`; alert("Upgrade isn't available just yet — try again shortly."); }
+  };
+  const cancel = $("sub-cancel");
+  if (cancel) cancel.onclick = async () => {
+    if (!confirm("Cancel your subscription? You'll keep Pro access until the end of the current billing period.")) return;
+    cancel.disabled = true; cancel.textContent = "Cancelling…";
+    try {
+      const r = await api("/api/subscription/cancel", { method: "POST" });
+      if (r.error) throw 0;
+      alert("Done — your subscription will end after the current billing period.");
+      renderSubscription(); renderBilling().catch(() => {});
+    } catch { cancel.disabled = false; cancel.textContent = "Cancel subscription"; alert("Couldn't cancel right now — try again shortly."); }
   };
 }
 
@@ -2683,9 +2754,10 @@ async function boot() {
     renderDocs(brain.documents);
     wireTeach();
     renderBilling().catch(() => {});
+    renderSubscription().catch(() => {});
     $("signout").onclick = () => { localStorage.removeItem("dash_token"); location.href = "/"; };
     const start = (location.hash || "").slice(1);
-    showTab(["system", "plans", "brain", "life", "settings"].includes(start) ? start : "system");
+    showTab(["system", "plans", "brain", "life", "billing", "settings"].includes(start) ? start : "system");
   } catch (e) {
     // A bad/expired token means the session is gone — clear it and send them to log in.
     if (e.message === "token") { localStorage.removeItem("dash_token"); gate(); return; }

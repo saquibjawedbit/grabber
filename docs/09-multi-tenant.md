@@ -106,8 +106,10 @@ adds `plan`/`trial_ends_at`/`plan_expires_at`/`rzp_sub_id`).
 - **Cron** (`scheduled()`): reminders still fire, but `runSenses`/`money`/`runSystem` are
   skipped — no new quests/reckoning, and the shared AI budget isn't spent on non-payers.
 - **Dashboard** (`handleApi`): reads (GET) work; writes (POST/DELETE) return **402** except
-  `/api/checkout`. `index.html` shows a trial/paywall banner (from `GET /api/billing`) with an
-  Upgrade button, and `api()` surfaces 402s.
+  the billing writes `/api/checkout` and `/api/subscription/cancel`. `index.html` shows a
+  trial/paywall banner (from `GET /api/billing`) with an Upgrade button, and `api()` surfaces
+  402s. A dedicated **Subscription tab** (`renderSubscription()`) shows plan/trial/renewal
+  state with Upgrade and **Cancel subscription** actions.
 - **Bot**: still answers chat; the agent prompt gets a gentle upgrade nudge (`agent.js`,
   `ctx.paywall`). `/upgrade` returns a checkout link.
 
@@ -115,8 +117,11 @@ adds `plan`/`trial_ends_at`/`plan_expires_at`/`rzp_sub_id`).
 (`RZP_PLAN_ID`) and stores `rzp_sub_id`; the user opens the returned `short_url` to authorize
 the mandate + pay. Razorpay then POSTs `POST /api/razorpay/webhook`, verified by
 **HMAC-SHA256 over the raw body** against `RZP_WEBHOOK_SECRET`; `subscription.charged`/
-`.activated` set `plan='pro'` + `plan_expires_at` (found by `rzp_sub_id`). Absent RZP secrets,
-checkout reports "not configured" and the app runs on trials only — the whole lock still works.
+`.activated` set `plan='pro'` + `plan_expires_at` (found by `rzp_sub_id`). `POST
+/api/subscription/cancel` calls `cancelSubscription()` (Razorpay `subscriptions/{id}/cancel`
+with `cancel_at_cycle_end:1`), so access stays until `plan_expires_at` and then lapses via
+`entitled()`. Absent RZP secrets, checkout reports "not configured" and the app runs on
+trials only — the whole lock still works.
 
 ## Verified
 

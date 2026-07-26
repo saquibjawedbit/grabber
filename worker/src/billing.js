@@ -63,6 +63,29 @@ export async function createSubscription(env, tenant) {
   }
 }
 
+// Cancel this tenant's Razorpay subscription at the end of the current billing cycle, so
+// the user keeps Pro access until `plan_expires_at` and then lapses naturally (matches
+// applyWebhookEvent, which leaves plan_expires_at on subscription.cancelled). Returns
+// { ok, status, ends } or { error }.
+export async function cancelSubscription(env, tenant) {
+  const subId = tenant.rzp_sub_id;
+  if (!subId) return { error: "no active subscription to cancel" };
+  if (!billingConfigured(env)) return { error: "billing not configured" };
+  const auth = "Basic " + btoa(`${rzpKeyId(env)}:${rzpKeySecret(env)}`);
+  try {
+    const r = await fetch(`https://api.razorpay.com/v1/subscriptions/${subId}/cancel`, {
+      method: "POST",
+      headers: { Authorization: auth, "Content-Type": "application/json" },
+      body: JSON.stringify({ cancel_at_cycle_end: 1 }),   // keep access until the period ends
+    });
+    const d = await r.json();
+    if (!r.ok) return { error: d?.error?.description || "razorpay rejected the cancel" };
+    return { ok: true, status: d.status, ends: d.current_end ? new Date(d.current_end * 1000).toISOString() : null };
+  } catch (e) {
+    return { error: String(e).slice(0, 120) };
+  }
+}
+
 // HMAC-SHA256 hex — Razorpay signs webhooks this way (and it's what checkout verify uses).
 async function hmacHex(secret, message) {
   const key = await crypto.subtle.importKey(
