@@ -1,0 +1,41 @@
+name: deploy
+
+# CD for the Cloudflare Worker. Runs `wrangler deploy` from worker/ on every push to the
+# subscription branch (or manual dispatch). Reuses the repo's existing Cloudflare secrets.
+#
+# ⚠️ Requires CF_API_TOKEN to carry the "Workers Scripts: Edit" permission (plus Account
+# settings read + the Worker's D1/Vectorize/AI bindings). The token used by the Python
+# pipeline may only have D1 edit — if the deploy step 403s, widen the token in the
+# Cloudflare dashboard (My Profile → API Tokens) and re-run this workflow.
+#
+# Runtime secrets (TELEGRAM_*, DASH_TOKEN, MASTER_KEY, RZP_WEBHOOK_SECRET, …) are NOT set
+# here — `wrangler deploy` leaves existing Worker secrets untouched. Set them once with
+# `wrangler secret put <NAME>`.
+
+on:
+  push:
+    branches: [claude/subscription-creation-billing-3n5b07]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy
+  cancel-in-progress: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Deploy Worker
+        working-directory: worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+        run: |
+          npx --yes wrangler@latest deploy 2>&1 | tee deploy.log
+          echo "----- deployed URL -----"
+          grep -Eo 'https://[a-z0-9.-]+\.workers\.dev' deploy.log | head -1 || true
