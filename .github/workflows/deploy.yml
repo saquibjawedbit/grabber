@@ -30,6 +30,22 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: "22"          # wrangler 4.x requires Node >= 22
+      - name: Apply pending D1 migration (tolerates already-applied)
+        working-directory: worker
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CF_API_TOKEN }}
+          CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CF_ACCOUNT_ID }}
+        run: |
+          # ALTER TABLE ADD COLUMN isn't "IF NOT EXISTS" in SQLite, so a re-run errors with
+          # "duplicate column" — that's the already-applied case and is fine. Any OTHER error
+          # fails the step so we don't deploy code against a DB missing the column.
+          npx --yes wrangler@latest d1 execute grabber --remote --yes \
+            --file=../migrations/017_sub_cancel.sql 2>&1 | tee mig.log || true
+          if grep -qiE "duplicate column|already exists" mig.log; then
+            echo "migration already applied — ok"
+          elif grep -qiE "error|exception" mig.log && ! grep -qi "Executed" mig.log; then
+            echo "::error::migration failed"; cat mig.log; exit 1
+          fi
       - name: Deploy Worker
         working-directory: worker
         env:

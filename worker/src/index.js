@@ -577,7 +577,8 @@ async function handleApi(url, env, request, ctx) {
     return Response.json({
       plan: env._tenant.plan, entitled: entitled(env), trial_days_left: trialDaysLeft(env),
       plan_expires_at: env._tenant.plan_expires_at || null,
-      has_subscription: !!env._tenant.rzp_sub_id, trial_days: TRIAL_DAYS,
+      has_subscription: !!env._tenant.rzp_sub_id, sub_cancel_at: env._tenant.sub_cancel_at || null,
+      trial_days: TRIAL_DAYS,
       price_inr: PRICE_INR, label: PLAN_LABEL, payable: billingConfigured(env) || !!env.RZP_PAYMENT_LINK,
     });
   }
@@ -593,7 +594,12 @@ async function handleApi(url, env, request, ctx) {
   if (url.pathname === "/api/subscription/cancel" && request.method === "POST") {
     const res = await cancelSubscription(env, env._tenant);
     if (res.error) return Response.json({ error: res.error }, { status: 503 });
-    return Response.json({ ok: true, status: res.status, ends: res.ends });
+    // Record the pending cancel so the dashboard shows "cancelling, access until <date>"
+    // (Razorpay keeps the sub active until period end; subscription.cancelled fires then).
+    const ends = res.ends || env._tenant.plan_expires_at || null;
+    try { await env.DB.prepare("UPDATE users SET sub_cancel_at = ? WHERE id = ?").bind(ends, uid(env)).run(); }
+    catch (e) { console.log("sub_cancel_at update skipped:", String(e).slice(0, 100)); }
+    return Response.json({ ok: true, status: res.status, ends });
   }
   if (url.pathname === "/api/alerts") {
     const { results } = await env.DB.prepare(`

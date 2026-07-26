@@ -1093,9 +1093,15 @@ async function renderSubscription() {
   const price = `₹${b.price_inr}/mo`;
   const fmt = (iso) => { try { return new Date(iso).toLocaleDateString("en-IN", { day: "numeric", month: "short", year: "numeric" }); } catch { return iso; } };
   const isPro = b.plan === "pro" && b.entitled;
+  const cancelScheduled = !!b.sub_cancel_at;
   const rows = [];
   let badge, color;
-  if (isPro) {
+  if (isPro && cancelScheduled) {
+    badge = "Pro · Cancelling"; color = "#e6a23c";
+    rows.push(subRow("Plan", b.label || `AXIS Pro · ${price}`));
+    rows.push(subRow("Access until", fmt(b.sub_cancel_at)));
+    rows.push(subRow("Renewal", "Off — cancels at period end"));
+  } else if (isPro) {
     badge = "Pro · Active"; color = "var(--seq)";
     rows.push(subRow("Plan", b.label || `AXIS Pro · ${price}`));
     if (b.plan_expires_at) rows.push(subRow("Renews on", fmt(b.plan_expires_at)));
@@ -1114,13 +1120,16 @@ async function renderSubscription() {
   if (state) { state.textContent = badge; state.style.color = color; }
   let actions = "";
   if (!isPro && b.payable) actions += `<button id="sub-upg" class="ghost-btn primary">Upgrade · ${price}</button>`;
-  if (isPro && b.has_subscription) actions += `<button id="sub-cancel" class="ghost-btn">Cancel subscription</button>`;
+  if (isPro && b.has_subscription && !cancelScheduled) actions += `<button id="sub-cancel" class="ghost-btn">Cancel subscription</button>`;
+  const note = cancelScheduled
+    ? `Your subscription is set to end on <b>${fmt(b.sub_cancel_at)}</b>. You'll keep Pro until then, then revert to read-only.`
+    : isPro
+      ? "Cancelling keeps your Pro access until the end of the current billing period, then reverts to read-only."
+      : "Upgrading starts your monthly plan through Razorpay's secure checkout.";
   body.innerHTML =
     `<div style="margin:.3rem 0 .2rem">${rows.join("")}</div>` +
     (actions ? `<div style="display:flex;gap:.6rem;flex-wrap:wrap;margin-top:.9rem">${actions}</div>` : "") +
-    `<p class="teach-hint" style="margin-top:.8rem">${isPro
-      ? "Cancelling keeps your Pro access until the end of the current billing period, then reverts to read-only."
-      : "Upgrading starts your monthly plan through Razorpay's secure checkout."}</p>`;
+    `<p class="teach-hint" style="margin-top:.8rem">${note}</p>`;
   const upg = $("sub-upg");
   if (upg) upg.onclick = async () => {
     upg.disabled = true; upg.textContent = "Opening…";

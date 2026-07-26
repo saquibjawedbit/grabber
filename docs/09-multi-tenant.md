@@ -117,9 +117,13 @@ adds `plan`/`trial_ends_at`/`plan_expires_at`/`rzp_sub_id`).
 (`RZP_PLAN_ID`) and stores `rzp_sub_id`; the user opens the returned `short_url` to authorize
 the mandate + pay. Razorpay then POSTs `POST /api/razorpay/webhook`, verified by
 **HMAC-SHA256 over the raw body** against `RZP_WEBHOOK_SECRET`; `subscription.charged`/
-`.activated` set `plan='pro'` + `plan_expires_at` (found by `rzp_sub_id`). `POST
-/api/subscription/cancel` calls `cancelSubscription()` (Razorpay `subscriptions/{id}/cancel`
-with `cancel_at_cycle_end:1`), so access stays until `plan_expires_at` and then lapses via
+`.activated`/`.resumed` set `plan='pro'` + `plan_expires_at` and clear `sub_cancel_at`
+(found by `rzp_sub_id`). `POST /api/subscription/cancel` calls `cancelSubscription()`
+(Razorpay `subscriptions/{id}/cancel` with `cancel_at_cycle_end:1`) and stamps
+`sub_cancel_at` (migration 017) = the period end — so the Subscription tab shows
+"cancelling, access until <date>" and hides the Cancel button while access stays until
+`plan_expires_at`. Razorpay keeps the sub active until then and fires `subscription.cancelled`
+/`.completed` at period end, which clears `rzp_sub_id` + `sub_cancel_at`; access lapses via
 `entitled()`. Absent RZP secrets, checkout reports "not configured" and the app runs on
 trials only — the whole lock still works.
 

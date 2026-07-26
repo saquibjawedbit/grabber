@@ -26,7 +26,8 @@ CREATE TABLE IF NOT EXISTS users (
   plan                 TEXT NOT NULL DEFAULT 'trial',         -- trial | pro (migration 016)
   trial_ends_at        TEXT,                                  -- 14-day free trial end (ISO)
   plan_expires_at      TEXT,                                  -- pro period end, renewed by Razorpay webhook
-  rzp_sub_id           TEXT                                   -- Razorpay subscription id
+  rzp_sub_id           TEXT,                                  -- Razorpay subscription id
+  sub_cancel_at        TEXT                                   -- period-end when a scheduled cancel takes effect; NULL = active (migration 017)
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email ON users(email) WHERE email IS NOT NULL;
 

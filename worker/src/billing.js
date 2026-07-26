@@ -113,10 +113,20 @@ export async function applyWebhookEvent(env, event) {
   const kind = event.event;
   if (["subscription.charged", "subscription.activated", "subscription.resumed"].includes(kind)) {
     const expires = sub.current_end ? new Date(sub.current_end * 1000).toISOString() : null;
-    const r = await env.DB.prepare("UPDATE users SET plan = 'pro', plan_expires_at = ? WHERE rzp_sub_id = ?")
+    // A renewal/resume also clears any pending cancel — the sub is active again.
+    const r = await env.DB.prepare(
+      "UPDATE users SET plan = 'pro', plan_expires_at = ?, sub_cancel_at = NULL WHERE rzp_sub_id = ?")
       .bind(expires, sub.id).run();
     return { applied: kind, rows: r.meta.changes, expires };
   }
-  // halted / cancelled / completed: leave plan_expires_at — access lapses naturally at period end.
+  if (["subscription.cancelled", "subscription.completed"].includes(kind)) {
+    // The sub has actually ended (cancel_at_cycle_end reached the period end). Drop the
+    // Razorpay id and the pending-cancel marker; access lapses via the past plan_expires_at.
+    const r = await env.DB.prepare(
+      "UPDATE users SET rzp_sub_id = NULL, sub_cancel_at = NULL WHERE rzp_sub_id = ?")
+      .bind(sub.id).run();
+    return { ended: kind, rows: r.meta.changes };
+  }
+  // halted / pending: leave plan_expires_at — access lapses naturally at period end.
   return { noted: kind };
 }
