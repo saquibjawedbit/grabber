@@ -37,6 +37,11 @@ def main():
     ap.add_argument("--batch", type=int)
     ap.add_argument("--device", help="GPU index, comma list, or 'cpu'")
     ap.add_argument("--name", help="run name under runs/detect/")
+    ap.add_argument("--time", type=float,
+                    help="max training HOURS (Ultralytics stops early + saves). "
+                         "Used by the GitHub Actions CPU job to fit the 6h limit.")
+    ap.add_argument("--cache", help="'ram' or 'disk' to cache images (speeds epochs)")
+    ap.add_argument("--patience", type=int)
     ap.add_argument("--resume", action="store_true", help="resume last run")
     args = ap.parse_args()
 

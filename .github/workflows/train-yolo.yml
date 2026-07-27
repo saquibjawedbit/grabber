@@ -1,0 +1,133 @@
+# Train the NXP Cup YOLOv12 model on GitHub Actions and download the weights.
+#
+# GitHub-hosted runners are FREE but CPU-only, and each job is capped at 6 hours.
+# This dataset is small and converges fast (mAP50 > 0.95 within a few epochs), so
+# a time-capped CPU run produces a strong model well inside the limit. The
+# `time_hours` input tells Ultralytics to stop + save before the 6h wall.
+#
+# Run it:  Actions tab → "Train YOLOv12 (NXP Cup)" → "Run workflow" → tweak inputs.
+# Get the weights:  when it finishes, download the "yolov12-weights-*" artifact
+#                   from the run's summary page (contains best.pt + best.onnx).
+#
+# Have a GPU runner? Set a repo/org self-hosted runner labeled `gpu`, then pass
+# runner=gpu and device=0 for a ~50x faster full run.
+
+name: Train YOLOv12 (NXP Cup)
+
+on:
+  workflow_dispatch:
+    inputs:
+      model:
+        description: "Base model"
+        type: choice
+        default: yolo12n.pt
+        options: [yolo12n.pt, yolo12s.pt, yolo12m.pt]
+      epochs:
+        description: "Max epochs (time_hours usually stops it first on CPU)"
+        default: "300"
+      time_hours:
+        description: "Hard wall-clock cap in hours (keep < 5.5 for the 6h job limit)"
+        default: "5.0"
+      imgsz:
+        description: "Image size — keep 512 (tiny objects)"
+        default: "512"
+      batch:
+        description: "Batch size (16 is safe on a CPU runner)"
+        default: "16"
+      device:
+        description: "'cpu' for hosted runners, or '0' on a GPU runner"
+        default: cpu
+      runner:
+        description: "Runner label: ubuntu-latest (free CPU) or a self-hosted 'gpu'"
+        default: ubuntu-latest
+
+# One training run at a time; a new dispatch cancels an in-flight one.
+concurrency:
+  group: train-yolo
+  cancel-in-progress: false
+
+jobs:
+  train:
+    runs-on: ${{ inputs.runner }}
+    # GitHub caps a job at 6h; give the training a hair less so export + upload finish.
+    timeout-minutes: 350
+    defaults:
+      run:
+        working-directory: yolov12-training
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          # CPU-only torch keeps the install small on hosted runners. On a GPU
+          # runner, drop the --index-url line so the CUDA build is used instead.
+          if [ "${{ inputs.device }}" = "cpu" ]; then
+            pip install torch torchvision --index-url https://download.pytorch.org/whl/cpu
+          fi
+          pip install ultralytics onnx onnxruntime onnxslim pyyaml
+          python -c "import torch, ultralytics; print('torch', torch.__version__, 'cuda', torch.cuda.is_available()); print('ultralytics', ultralytics.__version__)"
+
+      - name: Unpack dataset
+        run: |
+          unzip -q nxpcup_dataset.zip -d dataset
+          echo "Dataset ready:"
+          for s in train valid test; do
+            n=$(find "dataset/NXPCUP_2026.v2-v1_a.yolov12/$s/images" -type f | wc -l)
+            echo "  $s: $n images"
+          done
+
+      - name: Train
+        run: |
+          python scripts/train.py \
+            --model "${{ inputs.model }}" \
+            --epochs "${{ inputs.epochs }}" \
+            --time "${{ inputs.time_hours }}" \
+            --imgsz "${{ inputs.imgsz }}" \
+            --batch "${{ inputs.batch }}" \
+            --device "${{ inputs.device }}" \
+            --cache ram \
+            --name nxpcup_ci
+
+      - name: Validate on the test split
+        run: |
+          python scripts/validate.py \
+            --weights runs/detect/nxpcup_ci/weights/best.pt \
+            --imgsz "${{ inputs.imgsz }}" \
+            --split test || echo "validation step failed (non-fatal)"
+
+      - name: Export to ONNX
+        run: |
+          python scripts/export.py \
+            --weights runs/detect/nxpcup_ci/weights/best.pt \
+            --format onnx --imgsz "${{ inputs.imgsz }}" --simplify \
+            || echo "export step failed (non-fatal)"
+
+      - name: Collect artifacts
+        if: always()
+        run: |
+          mkdir -p out
+          cp -v runs/detect/nxpcup_ci/weights/best.pt  out/ 2>/dev/null || true
+          cp -v runs/detect/nxpcup_ci/weights/best.onnx out/ 2>/dev/null || true
+          cp -v runs/detect/nxpcup_ci/results.csv       out/ 2>/dev/null || true
+          cp -v runs/detect/nxpcup_ci/results.png       out/ 2>/dev/null || true
+          cp -v runs/detect/nxpcup_ci/confusion_matrix.png out/ 2>/dev/null || true
+          cp -v runs/detect/nxpcup_ci/args.yaml         out/ 2>/dev/null || true
+          ls -lh out
+
+      - name: Upload weights + plots
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: yolov12-weights-${{ inputs.model }}-${{ github.run_number }}
+          path: yolov12-training/out
+          retention-days: 30
+          if-no-files-found: warn

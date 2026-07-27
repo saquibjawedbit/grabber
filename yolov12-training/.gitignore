@@ -1,7 +1,9 @@
 # Datasets & weights — never commit these (thousands of images, big binaries)
 data/images/
 data/labels/
-# the unzipped NXP Cup dataset (2167 imgs) lives here, untracked
+# the unzipped NXP Cup dataset (2167 imgs) lives here, untracked.
+# The zip (nxpcup_dataset.zip) IS committed so GitHub Actions can train — the
+# workflow unzips it into dataset/. Only the unpacked tree is ignored.
 dataset/
 # runtime-generated absolute-path copies of data.yaml
 *.resolved.yaml

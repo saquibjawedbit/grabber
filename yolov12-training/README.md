@@ -95,12 +95,34 @@ python scripts/infer.py --weights runs/detect/nxpcup_n_512/weights/best.pt --sou
 `split_dataset.py` is included for *other* datasets — you don't need it here since
 this one is pre-split.
 
+## Train on GitHub Actions (no local GPU needed)
+
+The repo ships a workflow that trains in the cloud and hands you the weights as a
+downloadable artifact — no setup on your machine.
+
+1. Push this branch, then go to the repo's **Actions** tab.
+2. Pick **"Train YOLOv12 (NXP Cup)"** → **Run workflow**. Defaults are sane
+   (`yolo12n`, imgsz 512, 5-hour cap); tweak if you like.
+3. When it finishes, open the run and download the **`yolov12-weights-*`**
+   artifact — it contains `best.pt`, `best.onnx`, `results.csv`, and the plots.
+
+**Important — it runs on CPU.** GitHub-hosted runners are free but have **no
+GPU**, and a job is capped at **6 hours**. The workflow passes `--time 5.0` so
+Ultralytics stops and saves before that wall. Because this dataset converges
+fast, a 5-hour CPU run still trains many epochs and reaches high mAP — but it is
+*not* the same as a full 200-epoch GPU run. For the best model, run on a GPU
+(Colab/Kaggle free tier, or a self-hosted `gpu` runner — see the workflow header).
+
+The dataset travels with the repo as `nxpcup_dataset.zip` (22 MB); the workflow
+unzips it into `dataset/`.
+
 ## What's here
 
 ```
 yolov12-training/
 ├── README.md              # this file
 ├── requirements.txt       # ultralytics + friends
+├── nxpcup_dataset.zip     # the dataset (committed so Actions can train)
 ├── configs/
 │   └── train_nano.yaml    # tuned for THIS dataset: nano @ 512, tiny-object-safe aug
 ├── data/
@@ -114,6 +136,9 @@ yolov12-training/
     ├── validate.py        # validation + per-class metrics
     ├── export.py          # export best.pt to ONNX / TensorRT / NCNN / TFLite
     └── infer.py           # inference / FPS check on cam, video, or folder
+
+# plus the cloud-training workflow (repo root):
+# .github/workflows/train-yolo.yml
 ```
 
 ## Training notes (tuned for tiny objects)
