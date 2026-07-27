@@ -116,6 +116,21 @@ fast, a 5-hour CPU run still trains many epochs and reaches high mAP — but it 
 The dataset travels with the repo as `nxpcup_dataset.zip` (22 MB); the workflow
 unzips it into `dataset/`.
 
+## Train on a free GPU (Colab) — the fast path
+
+For the full 200-epoch run in minutes instead of hours, use the included
+**`train_colab.ipynb`**:
+
+1. Open [colab.research.google.com](https://colab.research.google.com) → **File →
+   Open notebook → GitHub**, paste your repo URL, and pick `train_colab.ipynb`
+   (or upload the file directly).
+2. **Runtime → Change runtime type → T4 GPU**, then **Runtime → Run all**.
+3. The notebook clones this branch, unzips the dataset, trains on the GPU,
+   validates, exports ONNX, and **auto-downloads** `nxpcup_yolov12_weights.zip`
+   (weights + plots) at the end.
+
+Same `scripts/train.py` and config as everything else — just on a GPU.
+
 ## What's here
 
 ```
@@ -123,6 +138,7 @@ yolov12-training/
 ├── README.md              # this file
 ├── requirements.txt       # ultralytics + friends
 ├── nxpcup_dataset.zip     # the dataset (committed so Actions can train)
+├── train_colab.ipynb      # one-click GPU training on Colab → downloads the weights
 ├── configs/
 │   └── train_nano.yaml    # tuned for THIS dataset: nano @ 512, tiny-object-safe aug
 ├── data/
