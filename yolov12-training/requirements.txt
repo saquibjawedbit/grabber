@@ -1,0 +1,24 @@
+# Core training / inference — Ultralytics ships YOLOv12 (yolo12{n,s,m,l,x}).
+ultralytics>=8.3.0
+
+# PyTorch — install the build that matches your CUDA/edge toolchain.
+# For a normal CUDA GPU the version pulled in by ultralytics is fine; if you need
+# a specific CUDA build, install it first from https://pytorch.org before this file.
+torch>=2.1.0
+torchvision>=0.16.0
+
+# Image / data handling
+opencv-python>=4.8.0
+numpy>=1.24.0
+pyyaml>=6.0
+tqdm>=4.66.0
+
+# Export targets (install only what your edge runtime needs)
+onnx>=1.15.0
+onnxruntime>=1.17.0        # onnxruntime-gpu on Jetson/CUDA if you prefer
+# onnxslim                 # cleaner ONNX graphs (optional; ultralytics uses it)
+# ncnn                     # Raspberry Pi / ARM CPU export
+# tensorflow               # only if exporting TFLite for Coral
+
+# Experiment tracking (optional — comment in if you want it)
+# tensorboard>=2.15.0

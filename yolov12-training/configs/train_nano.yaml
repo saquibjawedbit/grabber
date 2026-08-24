@@ -1,0 +1,55 @@
+# Training hyperparameters for the NXP Cup edge-buggy model.
+# Pass with:  python scripts/train.py --cfg configs/train_nano.yaml
+# Any CLI flag on train.py overrides the matching key here.
+#
+# Tuned for THIS dataset (verified): 2167 imgs @ 512x512, 9 classes, and
+# critically — TINY objects (median box ~18x15 px, 99.8% < 32x32 px). The tiny
+# objects drive the two most important choices here: imgsz stays at the native
+# 512 (never smaller — shrinking erases the signs), and mosaic is kept light.
+#
+# Ultralytics train() args: https://docs.ultralytics.com/modes/train/
+
+model: yolo12n.pt      # nano — the edge/realtime default (see README)
+data: data/data.yaml
+epochs: 200            # small dataset + hard tiny objects → give it room; patience stops early
+patience: 40
+imgsz: 512             # NATIVE size. Do NOT go below this — objects are ~15px already.
+batch: -1             # -1 = auto-batch (~60% VRAM); set 16 on a small GPU
+device: 0             # GPU index; "cpu" to force CPU (training only, slow)
+workers: 8
+seed: 0
+cache: false          # set "ram" if you have the memory — this dataset is only 40 MB
+optimizer: auto
+cos_lr: true
+close_mosaic: 15      # turn mosaic off for the last 15 epochs (realistic single-frame framing)
+amp: true
+
+# --- augmentation ----------------------------------------------------------
+# Roboflow ALREADY baked in crop/shear/brightness/exposure/blur/noise (3 versions
+# per source image), so keep added augmentation modest — and gentle on geometry,
+# because tiny objects are easily distorted into nothing.
+hsv_h: 0.015
+hsv_s: 0.5
+hsv_v: 0.3
+fliplr: 0.0           # OFF by default — 'Left'/'Right' are directional; see WARNING below
+flipud: 0.0
+degrees: 0.0          # no rotation — tiny signs don't survive it well
+translate: 0.05
+scale: 0.3            # modest scale jitter; big zoom-out would shrink 15px signs to nothing
+shear: 0.0            # Roboflow already sheared
+perspective: 0.0
+mosaic: 0.5           # HALF strength — full mosaic shrinks already-tiny objects too much
+mixup: 0.0
+copy_paste: 0.0
+
+# ⚠️ fliplr WARNING: this dataset has directional classes 'Left' and 'Right'.
+# A horizontal flip turns a Left sign into a Right sign WITHOUT swapping the
+# label — poisoning training. So it's OFF (0.0) by default. Only set fliplr: 0.5
+# if Left/Right are distinguished by something flip-invariant (text/shape), not
+# by pointing direction. When unsure, leave it at 0.0.
+
+# --- bookkeeping -----------------------------------------------------------
+# No `project:` here on purpose — Ultralytics already writes under runs/detect/,
+# and adding a relative `project: runs/detect` doubles it to runs/detect/runs/detect/.
+name: nxpcup_n_512     # → weights land in runs/detect/nxpcup_n_512/weights/best.pt
+exist_ok: false
